@@ -33,6 +33,7 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 use global_hotkey::{
@@ -59,10 +60,22 @@ use windows::Win32::{
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::{ActiveEventLoop, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     raw_window_handle::HandleError,
     window::{Window, WindowAttributes, WindowId, WindowLevel},
 };
+
+/// Cursor poll period. winit's default `ControlFlow::Wait` only wakes
+/// the loop on input events targeted at our window, but ours is
+/// `WS_EX_TRANSPARENT` (click-through) so it never receives mouse
+/// events at all — and `Alt+Tab` away takes the cursor focus to
+/// another app, so even keyboard events stop coming. Without an
+/// explicit re-poll deadline the overlay freezes the moment the user
+/// switches focus or clicks, which is exactly what they reported.
+/// `WaitUntil(now + ~16ms)` gives ~60 fps cursor tracking with
+/// negligible CPU cost (each tick is a single `GetCursorPos` + the
+/// memcpy in `repaint`, only when the cursor actually moved).
+const POLL_PERIOD: Duration = Duration::from_millis(16);
 
 use crate::RunError;
 
@@ -609,7 +622,7 @@ impl ApplicationHandler<UserMessage> for OverlayApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // While paused, the overlay renders nothing — but we still
         // poll the cursor and update `last_cursor` so resuming snaps
         // to the user's *current* cursor position rather than the
@@ -620,6 +633,11 @@ impl ApplicationHandler<UserMessage> for OverlayApp {
                 self.repaint();
             }
         }
+        // Schedule the next wakeup so cursor polling continues even
+        // when our click-through window receives no input events
+        // (e.g. user is interacting with a different app via
+        // Alt+Tab / mouse click). See the `POLL_PERIOD` doc comment.
+        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + POLL_PERIOD));
     }
 }
 
