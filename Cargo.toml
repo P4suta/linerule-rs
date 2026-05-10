@@ -1,0 +1,183 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/linerule-core",
+    "crates/linerule-config",
+    "crates/linerule-platform",
+    "crates/linerule",
+    "crates/xtask",
+]
+
+[workspace.package]
+version       = "0.1.0"
+edition       = "2024"
+rust-version  = "1.95.0"
+license       = "Apache-2.0 OR MIT"
+description   = "A digital reading ruler — frameless, transparent, click-through, always-on-top overlay that follows the cursor"
+repository    = "https://github.com/P4suta/linerule"
+homepage      = "https://github.com/P4suta/linerule"
+documentation = "https://docs.rs/linerule"
+authors       = ["linerule contributors"]
+readme        = "README.md"
+keywords      = ["reading", "overlay", "accessibility", "typoscope", "japanese"]
+categories    = ["accessibility", "gui", "visualization"]
+
+# ---------------------------------------------------------------------------
+# Workspace lints — single source of truth (feedback_workspace_lints_single_source_of_truth).
+# Per-crate `[lints.clippy]` overrides are forbidden; per-crate carve-outs go
+# through the strict-code grep gate (`scripts/strict-code.sh`) instead.
+# ---------------------------------------------------------------------------
+
+[workspace.lints.rust]
+unsafe_code      = "forbid"           # individual crates may relax to allow + #[deny(unsafe_op_in_unsafe_fn)]
+non_ascii_idents = "deny"
+
+missing_debug_implementations = "warn"
+missing_copy_implementations  = "warn"
+trivial_casts                 = "warn"
+trivial_numeric_casts         = "warn"
+unused_import_braces          = "warn"
+unused_lifetimes              = "warn"
+unused_qualifications         = "warn"
+
+unreachable_pub                = "warn"
+single_use_lifetimes           = "warn"
+elided_lifetimes_in_paths      = "warn"
+redundant_lifetimes            = "warn"
+explicit_outlives_requirements = "warn"
+
+let_underscore_drop         = "warn"
+keyword_idents_2024         = "warn"
+variant_size_differences    = "warn"
+ambiguous_negative_literals = "warn"
+
+dead_code = "deny"
+
+rust_2024_compatibility = { level = "warn", priority = -1 }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links       = "deny"
+private_intra_doc_links      = "warn"
+invalid_codeblock_attributes = "warn"
+invalid_html_tags            = "warn"
+invalid_rust_codeblocks      = "warn"
+bare_urls                    = "warn"
+redundant_explicit_links     = "warn"
+unescaped_backticks          = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+cargo    = { level = "warn", priority = -1 }
+
+dbg_macro                  = "warn"
+todo                       = "warn"
+unimplemented              = "warn"
+clone_on_ref_ptr           = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc     = "warn"
+missing_assert_message     = "warn"
+
+# Restriction lints — hand-picked per ADR-0006.
+str_to_string                   = "warn"
+absolute_paths                  = "warn"
+allow_attributes_without_reason = "warn"
+empty_structs_with_brackets     = "warn"
+if_then_some_else_none          = "warn"
+let_underscore_must_use         = "warn"
+mixed_read_write_in_expression  = "warn"
+rest_pat_in_fully_bound_structs = "warn"
+same_name_method                = "warn"
+semicolon_outside_block         = "warn"
+try_err                         = "warn"
+unneeded_field_pattern          = "warn"
+verbose_file_reads              = "warn"
+format_push_string              = "warn"
+unnecessary_self_imports        = "warn"
+assertions_on_result_states     = "warn"
+filetype_is_file                = "warn"
+rc_buffer                       = "warn"
+rc_mutex                        = "warn"
+lossy_float_literal             = "warn"
+suspicious_xor_used_as_pow      = "warn"
+
+# Justified carve-outs.
+module_name_repetitions = "allow"  # `linerule_core::CoreError` clearer than fighting it
+multiple_crate_versions = "allow"  # transitive collisions are not our problem
+missing_const_for_fn    = "allow"  # over-eager on builders
+redundant_pub_crate     = "allow"  # we treat `unreachable_pub` as source of truth
+
+# ---------------------------------------------------------------------------
+# Workspace-wide dependency table — single version source.
+# Versions verified against crates.io 2026-05-10.
+# ---------------------------------------------------------------------------
+
+[workspace.dependencies]
+# Internal crates
+linerule-core     = { version = "0.1.0", path = "crates/linerule-core" }
+linerule-config   = { version = "0.1.0", path = "crates/linerule-config" }
+linerule-platform = { version = "0.1.0", path = "crates/linerule-platform" }
+
+# --- pure logic / serde / diagnostics ---
+crossbeam-channel = "0.5"
+smallvec   = { version = "1.13", features = ["const_generics", "const_new", "union"] }
+dirs       = "6"
+serde      = { version = "1", features = ["derive"] }
+toml       = "0.9"
+thiserror  = "2"
+miette     = { version = "7.6", features = ["fancy"] }
+color-eyre = "0.6"
+
+# --- observability / CLI ---
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-error      = "0.2"
+clap = { version = "4.6", features = ["derive", "wrap_help", "env", "color", "cargo"] }
+
+# --- testing ---
+# bolero / insta / pretty_assertions / tempfile are referenced by ADR-0008
+# (test strategy) but only re-enabled here once a test actually consumes
+# them — cargo-shear flags declared-but-unused workspace deps.
+assert_cmd = "2.0"
+predicates = "3.1"
+
+# --- platform impl (re-added in task #11) ---
+# winit, vello, wgpu, peniko, bytemuck, raw-window-handle,
+# global-hotkey, and `windows` land here alongside the real Win32
+# overlay impl in task #11. They are intentionally absent in the
+# v0.1-scaffold state so `cargo shear` does not flag unused deps.
+
+# ---------------------------------------------------------------------------
+# Profiles
+# ---------------------------------------------------------------------------
+
+[profile.release]
+lto           = "thin"
+codegen-units = 1
+strip         = "symbols"
+panic         = "abort"
+opt-level     = 3
+
+[profile.bench]
+inherits = "release"
+strip    = "none"
+debug    = 1
+
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+opt-level = 1
+
+# ---------------------------------------------------------------------------
+# cargo-dist — release pipeline metadata. `cargo dist init` populates the
+# matching .github/workflows/release.yml.
+# ---------------------------------------------------------------------------
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.28.0"  # latest mainstream as of 2026-05; bumped via release-plz/Dependabot
+ci                  = ["github"]
+installers          = ["shell", "powershell"]
+targets             = ["x86_64-pc-windows-msvc"]
+pr-run-mode         = "plan"
+allow-dirty         = ["ci"]

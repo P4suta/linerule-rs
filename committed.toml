@@ -1,0 +1,41 @@
+# Conventional Commits enforcement. Used by lefthook commit-msg hook
+# and CI on PR titles.
+#
+# Schema reference: `committed --dump-config -`.
+
+style = "conventional"
+
+# Subjects: lowercase first char, imperative voice, no trailing
+# punctuation. Matches Conventional Commits convention.
+subject_capitalized    = false
+subject_not_punctuated = true
+imperative_subject     = true
+
+# 50/72 split — Linux-kernel rule for legible `git log --oneline`.
+subject_length   = 50
+line_length      = 72
+hard_line_length = 0
+
+# Reject WIP / fixup commits — they belong on the work-tree, not in
+# the merged history.
+no_fixup = true
+no_wip   = true
+
+# Squash merges look like merges to committed but their subject is the
+# PR title, which we want to lint.
+merge_commit = true
+
+allowed_types = [
+    "feat",
+    "fix",
+    "docs",
+    "style",
+    "refactor",
+    "perf",
+    "test",
+    "build",
+    "ci",
+    "chore",
+    "revert",
+]
+allowed_scopes = []

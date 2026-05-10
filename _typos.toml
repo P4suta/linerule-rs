@@ -1,0 +1,24 @@
+# typos (https://github.com/crate-ci/typos) configuration
+# Named `_typos.toml` so it doesn't shadow Cargo features matching `typos.*`.
+
+[default]
+extend-ignore-identifiers-re = [
+    "[A-Fa-f0-9]{7,}",   # git SHAs in comments
+]
+
+[default.extend-words]
+linerule = "linerule"
+typoscope = "typoscope"
+Wayland = "Wayland"
+wlroots = "wlroots"
+Hyprland = "Hyprland"
+Tategaki = "Tategaki"
+Yasunobu = "Yasunobu"
+
+[files]
+extend-exclude = [
+    "target/",
+    "coverage/",
+    "*.lock",
+    "*.html",
+]

@@ -1,0 +1,37 @@
+[package]
+name          = "linerule-platform"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+description = "Platform abstraction and Windows implementation for linerule (winit + vello + Win32 click-through + global-hotkey)"
+
+[lints]
+workspace = true
+
+[dependencies]
+linerule-core     = { workspace = true }
+thiserror         = { workspace = true }
+crossbeam-channel = { workspace = true }
+# tracing is added back in task #11 alongside the Windows impl spans.
+
+# winit / vello / wgpu / peniko / bytemuck / raw-window-handle /
+# global-hotkey / windows land in task #11 alongside the real Win32
+# overlay impl. They are intentionally absent here so cargo-shear does
+# not flag declared-but-unconsumed deps in the v0.1-scaffold state.
+
+[features]
+default = []
+# Enable in-process mock implementations for testing core via traits without a real OS surface.
+mock = []
+
+[dev-dependencies]
+# Tests instantiate `crossbeam_channel::Sender` directly to bind to
+# `HotkeySink`. bolero / insta / pretty_assertions are added back when
+# the first test consumes them (ADR-0008 test strategy).
+crossbeam-channel = { workspace = true }

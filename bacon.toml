@@ -1,0 +1,51 @@
+# bacon — file-watcher dev loop. Launch with `just watch [JOB]`.
+#
+# Built-in keybindings: `c` clippy / `t` test / `d` doc /
+# `f` failing-only / `q` quit / `esc` previous job / Ctrl-J list jobs.
+#
+# Reference: https://dystroy.org/bacon/config/
+
+default_job = "check"
+
+[jobs.check]
+command = ["cargo", "check", "--workspace", "--all-targets", "--color", "always"]
+need_stdout = false
+watch       = ["crates"]
+on_change_strategy = "kill_then_restart"
+
+[jobs.clippy]
+command = [
+    "cargo", "clippy",
+    "--workspace", "--all-targets", "--all-features",
+    "--color", "always",
+    "--", "-D", "warnings",
+]
+need_stdout = false
+
+[jobs.test]
+command = [
+    "cargo", "nextest", "run",
+    "--workspace", "--all-targets",
+    "--color", "always",
+]
+need_stdout = true
+analyzer    = "nextest"
+
+[jobs.prop]
+command = [
+    "cargo", "nextest", "run",
+    "--workspace",
+    "-E", "test(property_)",
+    "--color", "always",
+]
+need_stdout = true
+analyzer    = "nextest"
+
+[jobs.windows]
+command = [
+    "cargo", "xwin", "build",
+    "--release",
+    "--target", "x86_64-pc-windows-msvc",
+    "--color", "always",
+]
+need_stdout = true

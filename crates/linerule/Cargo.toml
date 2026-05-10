@@ -1,0 +1,34 @@
+[package]
+name          = "linerule"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+description = "Digital reading ruler — frameless click-through always-on-top overlay that follows the cursor"
+default-run = "linerule"
+
+[[bin]]
+name = "linerule"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+linerule-config   = { workspace = true }
+linerule-platform = { workspace = true }
+
+clap               = { workspace = true }
+color-eyre         = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-error      = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }

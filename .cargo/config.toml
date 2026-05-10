@@ -1,0 +1,14 @@
+# Cargo per-target overrides.
+#
+# The Linux build uses `mold` for fast linking (Dockerfile installs it
+# in the dev stage). The Windows cross-compile target relies on
+# `cargo-xwin`'s vendored MSVC SDK — `cargo xwin build` invokes that
+# wrapper, which sets the linker to `lld-link` automatically; we don't
+# repeat that here.
+
+[target.x86_64-unknown-linux-gnu]
+linker     = "clang"
+rustflags  = ["-C", "link-arg=-fuse-ld=mold"]
+
+[net]
+git-fetch-with-cli = true

@@ -1,0 +1,69 @@
+# linerule compose file. Every `just` target runs a command here.
+# Modern filename `compose.yaml` (post-2024 convention) over `docker-compose.yml`.
+
+name: linerule
+
+x-common-env: &common-env
+  CARGO_HOME: /workspace/.cargo
+  CARGO_TARGET_DIR: /workspace/target
+  XWIN_CACHE_DIR: /workspace/.xwin-cache
+  # sccache cannot cache crates compiled with cargo's incremental mode;
+  # disable incremental for the workspace so the cache actually hits on
+  # the crates we touch most often.
+  CARGO_INCREMENTAL: "0"
+  RUSTC_WRAPPER: sccache
+  SCCACHE_DIR: /workspace/.sccache
+  SCCACHE_CACHE_SIZE: "10G"
+  RUST_BACKTRACE: "1"
+  RUST_LOG: ${RUST_LOG:-info}
+  TERM: ${TERM:-xterm-256color}
+  # /workspace is bind-mounted from a non-root host UID; container runs
+  # as root. Whitelist git "dubious ownership" via env config triplet.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: "safe.directory"
+  GIT_CONFIG_VALUE_0: "/workspace"
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    image: linerule-dev:local
+    working_dir: /workspace
+    environment: *common-env
+    volumes:
+      - .:/workspace:cached
+      - cargo-registry:/workspace/.cargo/registry
+      - cargo-git:/workspace/.cargo/git
+      - cargo-target:/workspace/target
+      - xwin-cache:/workspace/.xwin-cache
+      - sccache:/workspace/.sccache
+    init: true
+    tty: true
+    stdin_open: true
+
+  ci:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ci
+    image: linerule-ci:local
+    working_dir: /workspace
+    environment:
+      <<: *common-env
+      CI: "true"
+    volumes:
+      - .:/workspace:cached
+      - cargo-registry:/workspace/.cargo/registry
+      - cargo-git:/workspace/.cargo/git
+      - cargo-target:/workspace/target
+      - xwin-cache:/workspace/.xwin-cache
+      - sccache:/workspace/.sccache
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  cargo-target:
+  xwin-cache:
+  sccache:

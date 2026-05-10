@@ -1,0 +1,100 @@
+# clippy.toml — STRICT thresholds, single-source-of-truth alongside
+# [workspace.lints] in Cargo.toml. Bumping these tightens the gate; do
+# not loosen without a matching ADR.
+
+# ---------------------------------------------------------------------------
+# Complexity caps — tighter than clippy defaults so creeping complexity
+# is rejected at the gate, not in code review.
+# ---------------------------------------------------------------------------
+
+# clippy default: 7. Our project rule: <=4 production fn params. When a
+# call site genuinely needs more, wrap the group into a struct — the
+# struct becomes a self-documenting parameter object.
+too-many-arguments-threshold = 4
+
+# clippy default: 100. We aim for single-screen functions; >80 lines
+# usually hides multiple responsibilities.
+too-many-lines-threshold = 80
+
+# clippy default: 25. A lower cap forces extract-method refactors earlier.
+cognitive-complexity-threshold = 18
+
+# Dozens of nested generics make signatures unreadable.
+type-complexity-threshold = 250
+
+# Boolean-flag fns become hard to read at the call site.
+max-fn-params-bools = 1
+
+# Common-prefix variants belong in a sub-type.
+enum-variant-name-threshold = 2
+enum-variant-size-threshold = 256
+
+# Tighten the public-doc surface bar — production fns must explain what
+# they panic on / return errors for. The `[workspace.lints.clippy]`
+# table promotes pedantic group, which already pulls in
+# `missing_panics_doc` / `missing_errors_doc`; nothing extra to add here.
+
+# ---------------------------------------------------------------------------
+# Industry baselines.
+# ---------------------------------------------------------------------------
+
+# MSRV — clippy uses this to avoid flagging idioms we can't yet use.
+msrv = "1.95.0"
+
+# Tests are expressive about failure. Production code stays strict.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests  = true
+
+# Pre-1.0 — don't hold the API hostage to "avoid breaking exports".
+avoid-breaking-exported-api = false
+
+# Surface fat-struct moves during dev (clippy default 200).
+pass-by-value-size-limit = 128
+
+# ---------------------------------------------------------------------------
+# doc_markdown — domain terms that don't need backticks.
+# ---------------------------------------------------------------------------
+doc-valid-idents = [
+    "..",
+    "CommonMark",
+    "DPI",
+    "DirectX",
+    "DirectX12",
+    "GitHub",
+    "HiDPI",
+    "Linebender",
+    "OpenGL",
+    "RAII",
+    "TOML",
+    "Vulkan",
+    "WSL",
+    "Wayland",
+    "Win32",
+    "WinAPI",
+    "XWayland",
+    "macOS",
+]
+
+# ---------------------------------------------------------------------------
+# disallowed-methods — banned standard-library calls. Each entry has a
+# reason so reviewers can surface the rationale without git-blame.
+# ---------------------------------------------------------------------------
+disallowed-methods = [
+    { path = "std::mem::forget",        reason = "leaks destructors; use `ManuallyDrop` or explicit `drop`" },
+    { path = "std::mem::transmute",     reason = "pointer-bit reinterpret is a bug-source; use bytemuck::cast / safe alternatives" },
+    { path = "std::env::set_var",       reason = "races with other threads; pass via Options instead" },
+    { path = "std::env::remove_var",    reason = "see std::env::set_var" },
+    { path = "std::process::exit",      reason = "bypasses destructors; return ExitCode from main" },
+    { path = "std::thread::sleep",      reason = "poll-loops are wrong primitives; use channels / event loop" },
+    { path = "std::sync::mpsc::channel",reason = "use crossbeam-channel — std mpsc has known correctness issues across versions" },
+]
+
+# ---------------------------------------------------------------------------
+# disallowed-types — banned types with rationale.
+# ---------------------------------------------------------------------------
+disallowed-types = [
+    { path = "std::sync::RwLock",            reason = "use parking_lot::RwLock; std RwLock fairness varies per platform" },
+    { path = "std::sync::mpsc::Sender",      reason = "use crossbeam_channel::Sender" },
+    { path = "std::sync::mpsc::Receiver",    reason = "use crossbeam_channel::Receiver" },
+]

@@ -1,0 +1,78 @@
+# Pre-commit / commit-msg / pre-push hooks. Every command runs through
+# `just`, which itself wraps `docker compose run` (ADR-0005 Docker-only).
+#
+# Install after clone:  `just hooks`
+# Uninstall:            `just hooks-uninstall`
+#
+# Reference: https://lefthook.dev/configuration/
+
+pre-commit:
+  parallel: true
+  skip:
+    - rebase
+    - merge
+  commands:
+    # `just fmt` writes; reformatted files are re-staged automatically so
+    # the commit carries the fix. fmt-check is *not* used here because
+    # fixing-and-restaging beats failing the commit.
+    fmt:
+      glob: "*.rs"
+      run: just fmt
+      stage_fixed: true
+
+    # Workspace clippy with -D warnings — the strictest mode. Pre-commit
+    # is the right gate; not pre-push, because waiting until push to
+    # discover a clippy break wastes the local edit-loop.
+    clippy:
+      glob: "*.{rs,toml}"
+      run: just clippy
+
+    # Cheap lints that catch common drift fast.
+    typos:
+      run: just typos
+
+    # Defensive grep gate — reject `unsafe` outside the platform layer,
+    # `#[allow(...)]` attributes, bare `TODO`, nightly feature gates,
+    # and any other pattern decided to be a bug-source upfront.
+    strict-code:
+      glob: "*.{rs,sh,toml,yml,yaml}"
+      run: just strict-code
+
+    # cargo-shear — find unused workspace.dependencies entries. Cheap
+    # enough to gate on every commit so dead deps never accumulate.
+    shear:
+      glob: "Cargo.toml"
+      run: just shear
+
+commit-msg:
+  commands:
+    # Conventional Commits enforcement via `committed`. {1} is lefthook's
+    # positional reference to the commit-message file path.
+    conventional:
+      run: docker compose run --rm --no-TTY dev committed --commit-file {1}
+
+pre-push:
+  parallel: true
+  skip:
+    - rebase
+  commands:
+    # Run the full nextest suite locally before pushing — catches the
+    # red surfaces a remote-CI run would catch, but without burning a
+    # round-trip.
+    test:
+      run: just test
+
+    # cargo-deny — license / advisory / source restrictions. Cheap and
+    # stable enough to gate on every push.
+    deny:
+      run: just deny
+
+    # cargo-audit — RustSec advisories. Same logic as deny.
+    audit:
+      run: just audit
+
+    # Property-test deep sweep — bolero with a higher case budget than
+    # CI. A regression that needs many cases to surface is caught
+    # locally instead of on a downstream PR.
+    prop:
+      run: just prop

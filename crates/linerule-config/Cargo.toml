@@ -1,0 +1,28 @@
+[package]
+name          = "linerule-config"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+readme.workspace       = true
+keywords.workspace     = true
+categories.workspace   = true
+description = "TOML configuration schema and loader for linerule with miette-powered diagnostics"
+
+[lints]
+workspace = true
+
+[dependencies]
+linerule-core = { workspace = true, features = ["serde"] }
+serde         = { workspace = true }
+toml          = { workspace = true }
+thiserror     = { workspace = true }
+miette        = { workspace = true }
+dirs          = { workspace = true }
+tracing       = { workspace = true }
+
+[dev-dependencies]
+# bolero / insta / pretty_assertions / tempfile are added back when the
+# first test consumes them (ADR-0008 test strategy).

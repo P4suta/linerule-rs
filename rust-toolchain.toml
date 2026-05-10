@@ -1,0 +1,8 @@
+# Pin a stable channel — never nightly / beta. Drift is intentional:
+# the version tracks what `rust:1-slim` ships with, refreshed by
+# Dependabot weekly via the Cargo.toml `rust-version`.
+
+[toolchain]
+channel    = "1.95.0"
+profile    = "default"
+components = ["rustfmt", "clippy", "rust-src", "llvm-tools-preview"]

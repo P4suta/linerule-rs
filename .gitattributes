@@ -1,0 +1,18 @@
+# Force LF for all text — prevents CRLF drift on Windows checkouts.
+*           text=auto eol=lf
+*.rs        text eol=lf
+*.toml      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.md        text eol=lf
+*.json      text eol=lf
+*.sh        text eol=lf
+
+# Binary — never normalize.
+*.png       binary
+*.jpg       binary
+*.ico       binary
+*.exe       binary
+
+# Cargo.lock should be diffable but commit-noisy.
+Cargo.lock  text eol=lf -diff

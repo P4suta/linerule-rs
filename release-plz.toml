@@ -1,0 +1,51 @@
+# release-plz — automated SemVer bump + CHANGELOG + Release PR.
+# Reads commit type/scope to infer the bump level (Conventional Commits).
+#
+# Reference: https://release-plz.dev/docs/config
+
+[workspace]
+changelog_update    = true
+git_release_enable  = true
+git_release_type    = "auto"
+publish             = false  # cargo-dist owns artifact publishing; we just bump versions + tag.
+release_commits     = "^(feat|fix|perf|refactor|deps)"
+allow_dirty         = false
+semver_check        = true
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to linerule are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+
+# Hand-tuned commit-type → section mapping. Conventional Commits types not
+# listed here fall into "Other".
+body = """
+
+## [{{ version }}]{% if release_link %}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+  {{ commit.message | upper_first }}\
+  {% if commit.links %} ({% for l in commit.links %}[{{ l.text }}]({{ l.href }}){% if not loop.last %}, {% endif %}{% endfor %}){% endif %}
+{% endfor %}
+{% endfor %}
+"""
+
+commit_parsers = [
+    { message = "^feat",     group = "Added"      },
+    { message = "^fix",      group = "Fixed"      },
+    { message = "^perf",     group = "Performance"},
+    { message = "^refactor", group = "Changed"    },
+    { message = "^docs",     group = "Docs"       },
+    { message = "^test",     group = "Tests"      },
+    { message = "^ci",       group = "CI"         },
+    { message = "^build",    group = "Build"      },
+    { message = "^chore",    group = "Chore"      },
+    { message = "^revert",   group = "Reverted"   },
+    { message = "^style",    group = "Style"      },
+]
