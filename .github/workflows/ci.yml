@@ -96,7 +96,7 @@ jobs:
 
       # Install the dev tools we need for tests as precompiled binaries.
       - name: Install nextest + llvm-cov
-        uses: taiki-e/install-action@f4a2cce0922a4d5b75c4a13c30d0d54aafe9b56e # v2.46.7
+        uses: taiki-e/install-action@ec28e287910af896fd98e04056d31fa68607e7ad # v2.77.4
         with:
           tool: cargo-nextest,cargo-llvm-cov
 
