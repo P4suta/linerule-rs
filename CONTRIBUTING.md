@@ -6,8 +6,8 @@ intentionally high; please read this in full before opening a PR.
 ## Quickstart
 
 ```sh
-git clone https://github.com/P4suta/linerule
-cd linerule
+git clone https://github.com/P4suta/linerule-rs
+cd linerule-rs
 just hooks            # install lefthook (pre-commit / commit-msg / pre-push)
 just build            # build the workspace inside Docker
 just test             # run the test suite
