@@ -20,29 +20,13 @@ pre-commit:
       run: just fmt
       stage_fixed: true
 
-    # Workspace clippy with -D warnings — the strictest mode. Pre-commit
-    # is the right gate; not pre-push, because waiting until push to
-    # discover a clippy break wastes the local edit-loop.
-    clippy:
-      glob: "*.{rs,toml}"
-      run: just clippy
-
-    # Cheap lints that catch common drift fast.
-    typos:
-      run: just typos
-
-    # Defensive grep gate — reject `unsafe` outside the platform layer,
-    # `#[allow(...)]` attributes, bare `TODO`, nightly feature gates,
-    # and any other pattern decided to be a bug-source upfront.
-    strict-code:
-      glob: "*.{rs,sh,toml,yml,yaml}"
-      run: just strict-code
-
-    # cargo-shear — find unused workspace.dependencies entries. Cheap
-    # enough to gate on every commit so dead deps never accumulate.
-    shear:
-      glob: "Cargo.toml"
-      run: just shear
+    # `just lint` bundles fmt-check + typos + strict-code + shear +
+    # clippy in ONE docker session — single container startup means
+    # most of the cost is clippy itself. Catching every drift at commit
+    # time beats discovering it on push or in CI.
+    lint:
+      glob: "*.{rs,toml,yml,yaml}"
+      run: just lint
 
 commit-msg:
   commands:

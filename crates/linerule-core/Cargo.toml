@@ -11,6 +11,12 @@ keywords.workspace     = true
 categories.workspace   = true
 description = "Pure-logic core for linerule: Mode/Action state machine, render() pure function, type-safe newtypes"
 
+[lib]
+# Integration tests live in `tests/`; the lib target itself has no
+# `#[test]` items and no doctests, so skip compiling those harnesses.
+test    = false
+doctest = false
+
 [lints]
 workspace = true
 

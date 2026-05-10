@@ -29,7 +29,13 @@ categories    = ["accessibility", "gui", "visualization"]
 # ---------------------------------------------------------------------------
 
 [workspace.lints.rust]
-unsafe_code      = "forbid"           # individual crates may relax to allow + #[deny(unsafe_op_in_unsafe_fn)]
+# `deny`, not `forbid`: pure crates (`linerule-core`, `linerule-config`)
+# upgrade to `#![forbid(unsafe_code)]` at the source root for an
+# absolute compile-time gate; the `linerule-platform` crate uses
+# `#[expect(unsafe_code, reason = "Win32 FFI")]` on the FFI fns. The
+# `// SAFETY:` justification next to each block is enforced by
+# `cargo run -p xtask -- strict-code` (look-back 6 lines).
+unsafe_code      = "deny"
 non_ascii_idents = "deny"
 
 missing_debug_implementations = "warn"
@@ -123,7 +129,7 @@ crossbeam-channel = "0.5"
 smallvec   = { version = "1.13", features = ["const_generics", "const_new", "union"] }
 dirs       = "6"
 serde      = { version = "1", features = ["derive"] }
-toml       = "0.9"
+toml       = "1"
 thiserror  = "2"
 miette     = { version = "7.6", features = ["fancy"] }
 color-eyre = "0.6"
@@ -141,11 +147,26 @@ clap = { version = "4.6", features = ["derive", "wrap_help", "env", "color", "ca
 assert_cmd = "2.0"
 predicates = "3.1"
 
-# --- platform impl (re-added in task #11) ---
-# winit, vello, wgpu, peniko, bytemuck, raw-window-handle,
-# global-hotkey, and `windows` land here alongside the real Win32
-# overlay impl in task #11. They are intentionally absent in the
-# v0.1-scaffold state so `cargo shear` does not flag unused deps.
+# --- platform impl (Windows real overlay stack) ---
+# Window / event loop
+winit = { version = "0.30", features = ["rwh_06"] }
+# GPU 2D — Linebender stack. wgpu is consumed via vello's re-export
+# (`vello::wgpu`) so the dependency graph holds exactly one version.
+vello  = "0.8"
+peniko = "0.6"
+raw-window-handle = "0.6"
+# System-wide hotkeys
+global-hotkey = "0.8"
+# Win32 FFI (only consumed by linerule-platform on Windows targets)
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+# Block on async wgpu init without dragging in tokio.
+pollster = "0.4"
 
 # ---------------------------------------------------------------------------
 # Profiles
@@ -175,7 +196,7 @@ opt-level = 1
 # ---------------------------------------------------------------------------
 
 [workspace.metadata.dist]
-cargo-dist-version = "0.28.0"  # latest mainstream as of 2026-05; bumped via release-plz/Dependabot
+cargo-dist-version = "0.31.0"  # latest mainstream as of 2026-05; bumped via release-plz/Dependabot
 ci                  = ["github"]
 installers          = ["shell", "powershell"]
 targets             = ["x86_64-pc-windows-msvc"]

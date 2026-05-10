@@ -2,12 +2,16 @@
 
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
-
+use std::env;
+use std::fs;
 use std::io;
+use std::path::PathBuf;
+use std::process::Command;
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::{Result, eyre};
+use linerule_config::{Config, HotkeyMap};
+use linerule_core::{Action, State};
 use tracing::instrument;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -18,11 +22,11 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 #[command(name = "linerule", version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Option<CliCommand>,
 }
 
 #[derive(Debug, Subcommand)]
-enum Command {
+enum CliCommand {
     /// Run the overlay (default).
     Run,
 
@@ -52,43 +56,28 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Run) {
-        Command::Run => run_overlay(),
-        Command::Config(ConfigCommand::Show) => config_show(),
-        Command::Config(ConfigCommand::Path) => config_path(),
-        Command::Config(ConfigCommand::Edit) => config_edit(),
+    match cli.command.unwrap_or(CliCommand::Run) {
+        CliCommand::Run => run_overlay(),
+        CliCommand::Config(ConfigCommand::Show) => config_show(),
+        CliCommand::Config(ConfigCommand::Path) => config_path(),
+        CliCommand::Config(ConfigCommand::Edit) => config_edit(),
     }
 }
 
 #[instrument]
 fn run_overlay() -> Result<()> {
-    // Probe the platform layer up-front so the user sees a clear error
-    // *before* the binary pretends an event loop is starting. The real
-    // surface / hotkey / mouse impls land in task #11.
-    let _surface = linerule_platform::open_overlay()
-        .map_err(|e| eyre!("could not open overlay surface: {e}"))?;
-    let _hotkeys =
-        linerule_platform::open_hotkeys().map_err(|e| eyre!("could not open hotkey host: {e}"))?;
-    let _mouse =
-        linerule_platform::open_mouse().map_err(|e| eyre!("could not open mouse tracker: {e}"))?;
-
-    Err(eyre!(
-        "platform impls compiled — event loop wiring lands in task #12 (see plan file)"
-    ))
+    let cfg = load_or_default()?;
+    let mut initial_state = State::default();
+    initial_state.config = cfg.overlay;
+    let bindings = hotkey_bindings(&cfg.hotkeys);
+    linerule_platform::run(initial_state, &bindings)
+        .map_err(|e| eyre!("overlay event loop failed: {e}"))
 }
 
 #[instrument]
 fn config_show() -> Result<()> {
-    let path = linerule_config::default_path()
-        .map_err(|e| eyre!("cannot resolve default config path: {e}"))?;
-    if path.exists() {
-        let cfg = linerule_config::load(&path)
-            .map_err(|e| eyre!("failed to load config from {}: {e}", path.display()))?;
-        println!("{cfg:#?}");
-    } else {
-        println!("# no config file at {} — showing defaults", path.display());
-        println!("{:#?}", linerule_config::Config::default());
-    }
+    let cfg = load_or_default()?;
+    println!("{cfg:#?}");
     Ok(())
 }
 
@@ -102,7 +91,51 @@ fn config_path() -> Result<()> {
 
 #[instrument]
 fn config_edit() -> Result<()> {
-    Err(eyre!(
-        "config edit is not wired up yet — see task #12 in the plan file"
-    ))
+    let path = linerule_config::default_path()
+        .map_err(|e| eyre!("cannot resolve default config path: {e}"))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| eyre!("create config dir {}: {e}", parent.display()))?;
+    }
+    if !path.exists() {
+        let body = toml::to_string_pretty(&Config::default())
+            .map_err(|e| eyre!("seed default toml: {e}"))?;
+        fs::write(&path, body).map_err(|e| eyre!("seed config {}: {e}", path.display()))?;
+    }
+    let editor = env::var("EDITOR").unwrap_or_else(|_| {
+        if cfg!(windows) {
+            "notepad".into()
+        } else {
+            "vi".into()
+        }
+    });
+    let status = Command::new(&editor)
+        .arg(&path)
+        .status()
+        .map_err(|e| eyre!("spawn editor {editor:?}: {e}"))?;
+    if !status.success() {
+        return Err(eyre!("editor {editor:?} exited {status}"));
+    }
+    Ok(())
+}
+
+fn load_or_default() -> Result<Config> {
+    let path = linerule_config::default_path()
+        .map_err(|e| eyre!("cannot resolve default config path: {e}"))?;
+    if path.exists() {
+        linerule_config::load(&path).map_err(|e| eyre!("load config {}: {e}", path.display()))
+    } else {
+        Ok(Config::default())
+    }
+}
+
+fn hotkey_bindings(map: &HotkeyMap) -> Vec<(String, Action)> {
+    vec![
+        (map.cycle_mode.clone(), Action::CycleMode),
+        (map.toggle_visible.clone(), Action::ToggleVisible),
+        (map.thicker.clone(), Action::BumpThickness(2)),
+        (map.thinner.clone(), Action::BumpThickness(-2)),
+        (map.more_opaque.clone(), Action::BumpOpacity(15)),
+        (map.less_opaque.clone(), Action::BumpOpacity(-15)),
+    ]
 }

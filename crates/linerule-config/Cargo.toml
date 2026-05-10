@@ -11,6 +11,10 @@ keywords.workspace     = true
 categories.workspace   = true
 description = "TOML configuration schema and loader for linerule with miette-powered diagnostics"
 
+[lib]
+test    = false
+doctest = false
+
 [lints]
 workspace = true
 

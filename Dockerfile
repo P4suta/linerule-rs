@@ -80,7 +80,7 @@ RUN cargo binstall --no-confirm --locked --no-symlinks \
         sccache
 
 # just (task runner) — upstream provides an install script.
-ARG JUST_VERSION=1.50.0
+ARG JUST_VERSION=1.51.0
 RUN curl -fsSL https://just.systems/install.sh | bash -s -- --to /usr/local/bin --tag ${JUST_VERSION}
 
 # lefthook (pre-commit manager).

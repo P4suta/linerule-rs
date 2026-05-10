@@ -169,7 +169,11 @@ fn no_unsafe_in_pure_crates(files: &[PathBuf]) -> usize {
 
 fn safety_comment_required(files: &[PathBuf]) -> usize {
     // Only check files in `linerule-platform` — that is the one crate
-    // allowed to use unsafe at the FFI boundary.
+    // allowed to use unsafe at the FFI boundary. A safety-tagged comment
+    // (matching `safety_pat` below) anywhere in the preceding
+    // `LOOK_BACK` lines satisfies the rule (so a multi-line block
+    // survives a rustfmt reflow).
+    const LOOK_BACK: usize = 6;
     let plat: Vec<&PathBuf> = files
         .iter()
         .filter(|p| p.to_string_lossy().contains("crates/linerule-platform/"))
@@ -179,16 +183,19 @@ fn safety_comment_required(files: &[PathBuf]) -> usize {
     let mut hits = Vec::new();
     for path in plat {
         let lines = read_lines(path);
-        let mut prev = String::new();
-        for (line, content) in &lines {
-            if unsafe_pat.is_match(content) && !safety_pat.is_match(&prev) {
+        for (idx, (line, content)) in lines.iter().enumerate() {
+            if !unsafe_pat.is_match(content) {
+                continue;
+            }
+            let from = idx.saturating_sub(LOOK_BACK);
+            let preceding_has_safety = lines[from..idx].iter().any(|(_, c)| safety_pat.is_match(c));
+            if !preceding_has_safety {
                 hits.push((path.clone(), *line, content.clone()));
             }
-            prev.clone_from(content);
         }
     }
     report(
-        "unsafe block without preceding `// SAFETY:` justification",
+        "unsafe block without preceding `// SAFETY:` justification (look-back 6 lines)",
         &hits,
     )
 }

@@ -106,6 +106,16 @@ build-release: image-ready
 build-windows: image-ready
     {{_dev}} cargo xwin build --release --target x86_64-pc-windows-msvc
 
+# Extract the cross-compiled .exe from the cargo-target docker volume
+# into the host-visible `dist/` dir so it can be run from Windows
+# (e.g. `\\wsl.localhost\Ubuntu\home\yasunobu\projects\linerule\dist\linerule.exe`).
+[group('build / test')]
+windows-exe: build-windows
+    @mkdir -p dist
+    {{_dev}} bash -c 'cp target/x86_64-pc-windows-msvc/release/linerule.exe /workspace/dist/linerule.exe'
+    @ls -lh dist/linerule.exe
+    @echo "Run from Windows side: \\\\wsl.localhost\\Ubuntu$(pwd)/dist/linerule.exe"
+
 # nextest run, all targets.
 [group('build / test')]
 test *ARGS: image-ready
@@ -128,23 +138,11 @@ snap: image-ready
 
 # --- lint / static analysis ---------------------------------------------------
 #
-# Two flavours, picked by the use case:
-#   `lint-quick` — sub-second after warm cache; fmt-check + typos + strict-code.
-#                  Right for the inner loop / pre-commit hook.
-#   `lint`       — adds clippy + shear; ~1 minute warm. Right before push / CI.
-#
-# Both run as a single `bash -c` inside ONE container session so we pay the
-# docker startup cost once instead of N times.
+# `just lint` runs every gate (fmt-check + typos + strict-code + shear +
+# clippy) as a single `bash -c` inside ONE container session — we pay
+# docker startup cost once instead of five times. Same recipe at
+# pre-commit, pre-push, and CI: lint is lint, no quick/full split.
 
-# Cheap fast lint pass — fmt-check + typos + strict-code in one shell.
-[group('lint / analysis')]
-lint-quick: image-ready
-    {{_dev}} bash -c 'set -e; \
-        cargo fmt --all -- --check; \
-        typos; \
-        cargo run --quiet --release --package xtask -- strict-code'
-
-# Full lint pass — adds clippy + shear; what `just ci` runs.
 [group('lint / analysis')]
 lint: image-ready
     {{_dev}} bash -c 'set -e; \
