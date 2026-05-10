@@ -186,3 +186,29 @@ quit           = \"Ctrl+Alt+Q\"
     assert_eq!(cfg.overlay.mask_color, Rgba::DEFAULT_MASK);
     assert_eq!(cfg.overlay.opacity.get(), Opacity::DEFAULT.get());
 }
+
+#[test]
+fn omitted_fields_each_invoke_their_serde_default_callback() {
+    // Drives every `serde(default = "OverlayConfig::default_<field>")`
+    // arm so the per-field default callbacks are exercised. With every
+    // [overlay] field omitted, all four callbacks must fire and the
+    // result must equal `OverlayConfig::default()`.
+    let only_hotkeys = "
+[overlay]
+[hotkeys]
+cycle_mode     = \"Ctrl+Alt+R\"
+thicker        = \"Ctrl+Alt+]\"
+thinner        = \"Ctrl+Alt+[\"
+more_opaque    = \"Ctrl+Alt+=\"
+less_opaque    = \"Ctrl+Alt+-\"
+pause          = \"Ctrl+Alt+P\"
+quit           = \"Ctrl+Alt+Q\"
+";
+    let cfg = parse_str(Path::new("only_hotkeys.toml"), only_hotkeys)
+        .expect("empty [overlay] must parse via per-field defaults");
+    assert_eq!(
+        cfg.overlay,
+        OverlayConfig::default(),
+        "all-default [overlay] must equal OverlayConfig::default()",
+    );
+}

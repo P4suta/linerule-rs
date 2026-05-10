@@ -1,6 +1,6 @@
 ---
 source: crates/linerule-core/tests/snapshot_render.rs
-description: "Bar at (0,0) — clip prevents top of bar going negative"
+description: Horizontal bar at MAX_PX thickness — bounds clipped within monitor
 expression: frame
 ---
 layers:
@@ -8,9 +8,9 @@ layers:
       Rect:
         origin:
           x: 0
-          y: 0
+          y: 284
         width: 1920
-        height: 14
+        height: 512
     brush:
       Solid:
         r: 255

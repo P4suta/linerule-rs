@@ -68,3 +68,23 @@ fn contains_rect_includes_zero_sized_corner() {
     let inner = rect(100, 100, 0, 0); // zero-size at far corner — fits
     assert!(outer.contains_rect(&inner));
 }
+
+// ---- Manual Clone impls (Point<S> / ScreenRect<S> are generic over a
+// phantom marker, so derive(Clone) cannot infer the bound — they ship
+// hand-written impls that delegate to Copy. Reach the impls explicitly
+// via `Clone::clone(&_)` so clippy's clone_on_copy doesn't bypass us
+// onto the Copy path.) ----
+
+#[test]
+fn point_clone_round_trips() {
+    let p = point(42, -7);
+    let q = Clone::clone(&p);
+    assert_eq!(p, q);
+}
+
+#[test]
+fn screen_rect_clone_round_trips() {
+    let r = rect(1, 2, 3, 4);
+    let s = Clone::clone(&r);
+    assert_eq!(r, s);
+}

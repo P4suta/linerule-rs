@@ -11,7 +11,7 @@ use std::process::Command;
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::{Result, eyre};
 use linerule_config::{Config, HotkeyMap};
-use linerule_core::{Action, State};
+use linerule_core::{Action, HotkeyEffect, State};
 use tracing::instrument;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -129,14 +129,29 @@ fn load_or_default() -> Result<Config> {
     }
 }
 
-fn hotkey_bindings(map: &HotkeyMap) -> Vec<(String, Action)> {
+fn hotkey_bindings(map: &HotkeyMap) -> Vec<(String, HotkeyEffect)> {
     vec![
-        (map.cycle_mode.clone(), Action::CycleMode),
-        (map.pause.clone(), Action::TogglePause),
-        (map.thicker.clone(), Action::BumpThickness(2)),
-        (map.thinner.clone(), Action::BumpThickness(-2)),
-        (map.more_opaque.clone(), Action::BumpOpacity(15)),
-        (map.less_opaque.clone(), Action::BumpOpacity(-15)),
-        (map.quit.clone(), Action::Quit),
+        (
+            map.cycle_mode.clone(),
+            HotkeyEffect::Apply(Action::CycleMode),
+        ),
+        (map.pause.clone(), HotkeyEffect::Apply(Action::TogglePause)),
+        (
+            map.thicker.clone(),
+            HotkeyEffect::Apply(Action::BumpThickness(2)),
+        ),
+        (
+            map.thinner.clone(),
+            HotkeyEffect::Apply(Action::BumpThickness(-2)),
+        ),
+        (
+            map.more_opaque.clone(),
+            HotkeyEffect::Apply(Action::BumpOpacity(15)),
+        ),
+        (
+            map.less_opaque.clone(),
+            HotkeyEffect::Apply(Action::BumpOpacity(-15)),
+        ),
+        (map.quit.clone(), HotkeyEffect::Quit),
     ]
 }

@@ -1,16 +1,16 @@
 ---
 source: crates/linerule-core/tests/snapshot_render.rs
-description: Bar on monitor with non-zero origin — bounds offset accordingly
+description: "Horizontal bar at (0,0) — clip prevents top of bar going negative"
 expression: frame
 ---
 layers:
   - geometry:
       Rect:
         origin:
-          x: 1920
-          y: 526
+          x: 0
+          y: 0
         width: 1920
-        height: 28
+        height: 14
     brush:
       Solid:
         r: 255

@@ -1,6 +1,6 @@
 ---
 source: crates/linerule-core/tests/snapshot_render.rs
-description: Mask centred — top + bottom panels with default mask colour
+description: Horizontal mask centred — top + bottom panels with default mask colour
 expression: frame
 ---
 layers:

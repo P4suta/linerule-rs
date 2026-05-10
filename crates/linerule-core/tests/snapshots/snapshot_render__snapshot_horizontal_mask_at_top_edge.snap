@@ -1,6 +1,6 @@
 ---
 source: crates/linerule-core/tests/snapshot_render.rs
-description: Mask near top — top panel collapses to ~0 height
+description: Horizontal mask near top — top panel collapses to ~0 height
 expression: frame
 ---
 layers:

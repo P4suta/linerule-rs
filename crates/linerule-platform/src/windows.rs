@@ -40,8 +40,8 @@ use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
 };
 use linerule_core::{
-    Action, Brush as CoreBrush, Geometry, Layer, Logical, Mode, OverlayFrame, Point, Rgba,
-    ScreenRect, State, reduce, render,
+    Brush as CoreBrush, Geometry, HotkeyEffect, Layer, Lifecycle, Logical, Mode, OverlayFrame,
+    Point, Rgba, ScreenRect, State, reduce, render,
 };
 use raw_window_handle::HasWindowHandle;
 use windows::Win32::{
@@ -74,7 +74,7 @@ use crate::RunError;
 ///
 /// # Errors
 /// Returns a [`RunError`] for any platform-level failure.
-pub fn run(initial_state: State, hotkeys: &[(String, Action)]) -> Result<(), RunError> {
+pub fn run(initial_state: State, hotkeys: &[(String, HotkeyEffect)]) -> Result<(), RunError> {
     tracing::info!("starting Windows overlay event loop");
 
     let event_loop = EventLoop::<UserMessage>::with_user_event()
@@ -84,13 +84,13 @@ pub fn run(initial_state: State, hotkeys: &[(String, Action)]) -> Result<(), Run
     let manager = GlobalHotKeyManager::new()
         .map_err(|e| RunError::Hotkey(format!("create GlobalHotKeyManager: {e}")))?;
 
-    let mut bindings: Vec<(u32, Action)> = Vec::with_capacity(hotkeys.len());
-    for (chord, action) in hotkeys {
+    let mut bindings: Vec<(u32, HotkeyEffect)> = Vec::with_capacity(hotkeys.len());
+    for (chord, effect) in hotkeys {
         let hk = parse_chord(chord)?;
         manager
             .register(hk)
             .map_err(|e| RunError::Hotkey(format!("register {chord:?}: {e}")))?;
-        bindings.push((hk.id(), *action));
+        bindings.push((hk.id(), *effect));
     }
 
     let proxy = event_loop.create_proxy();
@@ -107,12 +107,12 @@ pub fn run(initial_state: State, hotkeys: &[(String, Action)]) -> Result<(), Run
 
 #[derive(Debug, Clone)]
 enum UserMessage {
-    HotkeyAction(Action),
+    Effect(HotkeyEffect),
 }
 
 fn spawn_hotkey_forwarder(
     recv: Receiver<GlobalHotKeyEvent>,
-    bindings: Vec<(u32, Action)>,
+    bindings: Vec<(u32, HotkeyEffect)>,
     proxy: winit::event_loop::EventLoopProxy<UserMessage>,
 ) {
     thread::Builder::new()
@@ -127,8 +127,8 @@ fn spawn_hotkey_forwarder(
                 if event.state != HotKeyState::Pressed {
                     continue;
                 }
-                if let Some(&(_, action)) = bindings.iter().find(|(id, _)| *id == event.id()) {
-                    if let Err(e) = proxy.send_event(UserMessage::HotkeyAction(action)) {
+                if let Some(&(_, effect)) = bindings.iter().find(|(id, _)| *id == event.id()) {
+                    if let Err(e) = proxy.send_event(UserMessage::Effect(effect)) {
                         tracing::warn!(?e, "event loop closed; hotkey forwarder exiting");
                         break;
                     }
@@ -535,15 +535,18 @@ impl ApplicationHandler<UserMessage> for OverlayApp {
         self.window = Some(window);
         self.bitmap = Some(bitmap);
 
-        if matches!(self.state.mode, Mode::Off) {
-            // Default to Mask mode on first launch — that's the
-            // typoscope (line-isolation) reading aid the rest of the
-            // surrounding text dimmed at ~85% opacity. Bar / Vertical
-            // / VerticalMask are reachable via the `Ctrl+Alt+R` cycle.
-            self.state.mode = Mode::Mask;
-        }
-        // Always start enabled. Pause toggles via `Ctrl+Alt+P`.
-        self.state.enabled = true;
+        // First-launch policy:
+        //   1. If the seeded mode is `Off` (the structural "no choice
+        //      yet"), promote to horizontal Mask — the typoscope is
+        //      the most useful reading-aid default.
+        //   2. Force resume from any serialised `Paused(_)` lifecycle
+        //      so a fresh process always starts visible (the user can
+        //      always re-pause via Ctrl+Alt+P).
+        let mode = match self.state.lifecycle.mode() {
+            Mode::Off => Mode::MASK,
+            other => other,
+        };
+        self.state.lifecycle = Lifecycle::Active(mode);
 
         self.repaint();
     }
@@ -562,15 +565,20 @@ impl ApplicationHandler<UserMessage> for OverlayApp {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserMessage) {
-        match event {
-            UserMessage::HotkeyAction(Action::Quit) => {
+        let UserMessage::Effect(effect) = event;
+        match effect {
+            HotkeyEffect::Quit => {
                 tracing::info!("Quit hotkey received — exiting event loop");
                 event_loop.exit();
             }
-            UserMessage::HotkeyAction(action) => {
+            HotkeyEffect::Apply(action) => {
                 let _delta = reduce(&mut self.state, action);
                 self.repaint();
             }
+            // `HotkeyEffect` is `#[non_exhaustive]`; future variants
+            // (e.g. `Reload`) land here additively. Default to no-op
+            // so an unknown signal cannot wedge the event loop.
+            _ => {}
         }
     }
 
@@ -600,9 +608,13 @@ impl OverlayApp {
             return;
         };
 
-        let frame = if self.state.enabled {
+        // Render only when the lifecycle is `Active(_)`; any other
+        // shape (currently just `Paused(_)`, future additions land
+        // additively under `#[non_exhaustive]`) short-circuits to an
+        // empty frame.
+        let frame = if let Lifecycle::Active(mode) = self.state.lifecycle {
             render(
-                self.state.mode,
+                mode,
                 self.last_cursor,
                 self.monitor_logical,
                 &self.state.config,

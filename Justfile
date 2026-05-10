@@ -191,26 +191,27 @@ semver: image-ready
 
 # --- coverage -----------------------------------------------------------------
 
-# C1 / branch coverage gate. Floor 100% on linerule-core / linerule-config;
-# linerule-platform Win32 FFI is excluded (boundary).
+# Region-coverage gate (LLVM "regions" ≈ basic blocks; the closest C1
+# proxy that cargo-llvm-cov supports on stable — `--fail-under-branches`
+# does not exist as a CLI option, and `--branch` itself is nightly-only).
+# Floor 100% on linerule-core / linerule-config; linerule-platform Win32
+# FFI and the binary entrypoint are excluded (boundary).
 _COV_FLOOR := "100"
 _COV_IGNORE := "(target/|/main\\.rs$|crates/linerule-platform/src/windows.rs|crates/xtask/)"
 
 [group('coverage')]
 coverage: image-ready
-    {{_dev}} cargo llvm-cov nextest \
-        --workspace \
-        --branch \
+    {{_dev}} cargo llvm-cov \
         --ignore-filename-regex '{{_COV_IGNORE}}' \
-        --fail-under-branches {{_COV_FLOOR}}
+        --fail-under-regions {{_COV_FLOOR}} \
+        nextest --workspace
 
 [group('coverage')]
 coverage-html: image-ready
-    {{_dev}} cargo llvm-cov nextest \
-        --workspace \
-        --branch \
+    {{_dev}} cargo llvm-cov \
         --ignore-filename-regex '{{_COV_IGNORE}}' \
-        --html --output-dir coverage/html
+        --html --output-dir coverage/html \
+        nextest --workspace
 
 # --- release ------------------------------------------------------------------
 

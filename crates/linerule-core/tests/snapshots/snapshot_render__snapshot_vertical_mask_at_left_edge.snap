@@ -1,6 +1,6 @@
 ---
 source: crates/linerule-core/tests/snapshot_render.rs
-description: VerticalMask near left edge — left panel collapses to ~0 width
+description: Vertical mask near left edge — left panel collapses to ~0 width
 expression: frame
 ---
 layers:

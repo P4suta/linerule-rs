@@ -1,10 +1,10 @@
-//! Newtype validators — boundary tests for `Opacity` / `Thickness` / `DimLevel`.
+//! Newtype validators — boundary tests for `Opacity` / `Thickness`.
 //!
 //! Encodes the type-level invariants stated in `lib.rs`:
 //! - `Opacity` rejects 0, accepts 1..=255.
 //! - `Thickness` rejects 0 and >512, accepts 1..=512.
 
-use linerule_core::{CoreError, DimLevel, Opacity, Rgba, Thickness};
+use linerule_core::{CoreError, Opacity, Rgba, Thickness};
 
 // ---- Opacity --------------------------------------------------------------
 
@@ -79,12 +79,7 @@ fn thickness_default_is_28() {
     assert_eq!(Thickness::DEFAULT.get(), 28);
 }
 
-// ---- DimLevel & Rgba ------------------------------------------------------
-
-#[test]
-fn dim_level_default_is_cc() {
-    assert_eq!(DimLevel::DEFAULT.0, 0xcc);
-}
+// ---- Rgba -----------------------------------------------------------------
 
 #[test]
 fn rgba_constructor_preserves_channels() {

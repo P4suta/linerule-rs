@@ -28,5 +28,5 @@ dirs          = { workspace = true }
 tracing       = { workspace = true }
 
 [dev-dependencies]
-# bolero / insta / pretty_assertions / tempfile are added back when the
-# first test consumes them (ADR-0008 test strategy).
+linerule-core = { workspace = true }
+tempfile      = { workspace = true }

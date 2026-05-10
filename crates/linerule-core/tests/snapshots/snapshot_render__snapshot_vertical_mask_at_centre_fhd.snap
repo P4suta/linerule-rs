@@ -1,6 +1,6 @@
 ---
 source: crates/linerule-core/tests/snapshot_render.rs
-description: "VerticalMask centred — left + right panels with default mask colour, transparent vertical slit at cursor X (縦書き typoscope)"
+description: "Vertical mask centred — left + right panels with default mask colour, transparent vertical slit at cursor X (縦書き typoscope)"
 expression: frame
 ---
 layers:

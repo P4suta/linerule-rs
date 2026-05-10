@@ -144,6 +144,7 @@ clap = { version = "4.6", features = ["derive", "wrap_help", "env", "color", "ca
 assert_cmd = "2.0"
 predicates = "3.1"
 insta      = { version = "1.47", features = ["yaml", "json", "filters"] }
+tempfile   = "3.10"
 
 # --- platform impl (Windows real overlay stack) ---
 # Window / event loop

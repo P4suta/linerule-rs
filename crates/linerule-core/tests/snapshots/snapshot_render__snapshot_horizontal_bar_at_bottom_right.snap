@@ -1,6 +1,6 @@
 ---
 source: crates/linerule-core/tests/snapshot_render.rs
-description: Bar at FHD far corner — clip prevents bar overshooting bottom
+description: Horizontal bar at FHD far corner — clip prevents bar overshooting bottom
 expression: frame
 ---
 layers:

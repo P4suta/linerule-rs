@@ -7,42 +7,44 @@
 
 ## Context
 
-The overlay supports five user-visible modes — `Off`, `Bar`, `Mask`,
-`Vertical`, `VerticalMask` — cycled in a closed permutation by the
-`CycleMode` action. A natural question: encode the modes as a
-type-state machine (`Overlay<Off> → Overlay<Bar> → ...`) or as a
-runtime enum?
+The overlay supports five user-visible modes — `Off` plus the four
+elements of the (Shape × Orientation) lattice — cycled in a closed
+permutation by the `CycleMode` action. A natural question: encode the
+modes as a type-state machine (`Overlay<Off> → Overlay<Bar> → ...`)
+or as a runtime enum?
 
-Separately, the codebase deals with two distinct coordinate systems —
+The two-axis structure of the modes itself is decided in **ADR-0012**;
+this ADR pins the runtime-enum-vs-type-state choice and the orthogonal
+*lifecycle* (active vs paused) shape decided in **ADR-0011**.
+
+The codebase also deals with two distinct coordinate systems —
 *logical* (DPI-independent) and *physical* (raw pixel) — that the
 compiler should refuse to mix. And it deals with OS-level hotkey
 registrations whose lifetime must be paired to a Rust value to avoid
-leaks.
-
-A third concern: orthogonal to *which* mode the overlay is in, the
-user wants to *temporarily silence the entire overlay* without
-forgetting their mode / config. We model this as a single `enabled:
-bool` on `State` rather than carrying both `visible` and `paused`
-flags; the previous two-flag design produced four states only two of
-which were meaningful (`enabled & shown`, `disabled` — anything
-else was indistinguishable in render output) and forced the platform
-layer to consult both before rendering an empty frame.
+leaks (originally via the `HotkeyToken` capability — see
+**ADR-0010** for why that surface was scrapped after the trait
+abstraction was deemed dead).
 
 ## Decision
 
-- **Mode**: runtime enum `{Off, Bar, Mask, Vertical, VerticalMask}`
-  with exhaustive `match` in `cycle` and `render`. NOT type-state.
-- **Pause / resume**: a single `State.enabled: bool`. While `false`,
-  the platform layer renders `OverlayFrame::empty()` regardless of
-  mode; the rest of `State` (mode, config, last-known cursor) is
-  preserved so re-enabling snaps back to the exact prior visual.
-  `Action::TogglePause` is the only verb that touches it.
+- **Mode**: runtime enum `Off | Active(Shape, Orientation)` with
+  exhaustive `match` in `cycle` and `render`. NOT type-state. The
+  direct-product decomposition itself is the subject of ADR-0012;
+  this ADR records that it lives at runtime, not in the type
+  parameters.
+- **Lifecycle**: `enum Lifecycle { Active(Mode), Paused(Mode) }`
+  carried on `State`. `Action::TogglePause` flips the tag without
+  losing the inner `Mode`. The platform layer short-circuits to
+  `OverlayFrame::empty()` whenever `lifecycle != Active(_)`.
+  Decided in ADR-0011.
 - **Coordinate spaces**: phantom-typed `Point<S>` / `ScreenRect<S>`
   where `S = Logical | Physical`. The compiler refuses to pass a
   physical point where a logical one is expected (and vice versa).
-- **Hotkey registrations**: RAII `HotkeyToken` type. Cannot be cloned
-  or copied. Dropping it calls into the OS unregister path through an
-  inner `Arc<dyn HotkeyRelease>`.
+- **Hotkey registrations**: the original RAII `HotkeyToken` was part
+  of the trait surface scrapped by ADR-0010. The production Windows
+  path now owns `GlobalHotKeyManager` directly inside `windows::run`
+  and drops it when the event loop returns; OS lifetime is bound to
+  the function's stack frame.
 
 ## Consequences
 
@@ -59,10 +61,11 @@ layer to consult both before rendering an empty frame.
   `#[non_exhaustive]` attribute + exhaustive match to catch new
   variants, plus property tests (`cycle⁵ ≡ id`) to verify the cycle
   invariant.
-- A `(enabled = false, mode = Bar)` state is representable but
-  visually indistinguishable from `(enabled = false, mode = Mask)`
-  — the test suite pins this collapse explicitly so the design
-  invariant is documented in code.
+- The `Paused(_)` arm is render-output-equivalent to `Active(Off)` —
+  both produce an empty frame. The two are *semantically* distinct
+  (cycle navigation vs lifecycle suspension) and the test suite pins
+  both behaviours explicitly so the design invariant is documented
+  in code.
 
 ## Alternatives considered
 

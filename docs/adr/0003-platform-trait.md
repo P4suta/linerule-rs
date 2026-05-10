@@ -1,9 +1,16 @@
 # 0003. Platform abstraction: OverlaySurface + HotkeyHost + MouseTracker
 
-- Status: accepted
-- Date: 2026-05-10
+- Status: superseded by ADR-0010
+- Date: 2026-05-10 (superseded 2026-05-11)
 - Deciders: @P4suta
 - Tags: architecture, platform
+
+> **Superseded.** The trait surface defined here was never consumed by
+> the production Windows path (winit's `Window` is `!Send` and the
+> event loop owns the surface concretely, so the only consumer was the
+> mock in `linerule-platform::mock`). v0.1.1 collapses to a
+> direct-dispatch design — see **ADR-0010** for the post-mortem and
+> the new shape.
 
 ## Context
 

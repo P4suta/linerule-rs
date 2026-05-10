@@ -901,6 +901,7 @@ dependencies = [
  "linerule-core",
  "miette",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
  "toml",
  "tracing",

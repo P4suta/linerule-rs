@@ -9,7 +9,7 @@ authors.workspace      = true
 readme.workspace       = true
 keywords.workspace     = true
 categories.workspace   = true
-description = "Platform abstraction and Windows implementation for linerule (winit + vello + Win32 click-through + global-hotkey)"
+description = "Platform-direct event-loop entry for linerule — Windows implementation (winit + Win32 layered-window + global-hotkey)"
 
 [lib]
 test    = false
@@ -19,34 +19,21 @@ doctest = false
 workspace = true
 
 [dependencies]
-linerule-core     = { workspace = true }
-thiserror         = { workspace = true }
-tracing           = { workspace = true }
-crossbeam-channel = { workspace = true }
+linerule-core = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
 
 # Windows-target-only deps. The Windows render path uses raw GDI +
 # `UpdateLayeredWindow` (see ADR-0009) — vello / wgpu / peniko /
-# pollster are NOT consumed and intentionally absent. They will come
-# back in v0.2 alongside the macOS / Linux impls if the cross-platform
+# pollster are NOT consumed and intentionally absent. They come back
+# in v0.2 alongside the macOS / Linux impls if the cross-platform
 # render path goes through Linebender's stack.
 [target.'cfg(target_os = "windows")'.dependencies]
+crossbeam-channel = { workspace = true }
 windows           = { workspace = true }
 winit             = { workspace = true }
 raw-window-handle = { workspace = true }
 global-hotkey     = { workspace = true }
 
-# winit / vello / wgpu / peniko / bytemuck / raw-window-handle /
-# global-hotkey / windows land in task #11 alongside the real Win32
-# overlay impl. They are intentionally absent here so cargo-shear does
-# not flag declared-but-unconsumed deps in the v0.1-scaffold state.
-
-[features]
-default = []
-# Enable in-process mock implementations for testing core via traits without a real OS surface.
-mock = []
-
 [dev-dependencies]
-# Tests instantiate `crossbeam_channel::Sender` directly to bind to
-# `HotkeySink`. bolero / insta / pretty_assertions are added back when
-# the first test consumes them (ADR-0008 test strategy).
-crossbeam-channel = { workspace = true }
+linerule-core = { workspace = true }

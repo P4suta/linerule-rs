@@ -1,16 +1,16 @@
 ---
 source: crates/linerule-core/tests/snapshot_render.rs
-description: Vertical at FHD centre — full-height bar at cursor X
+description: Horizontal bar at FHD centre with default thickness/colour
 expression: frame
 ---
 layers:
   - geometry:
       Rect:
         origin:
-          x: 946
-          y: 0
-        width: 28
-        height: 1080
+          x: 0
+          y: 526
+        width: 1920
+        height: 28
     brush:
       Solid:
         r: 255

@@ -2,10 +2,12 @@
 
 //! Pure-logic core for linerule.
 //!
-//! This crate is IO-free and platform-free. It owns the type vocabulary the
-//! rest of the workspace builds on: validating newtypes, phantom-typed
-//! coordinate spaces, the [`Mode`] state machine, the [`render`] pure
-//! function, and the [`reduce`] state-transition function.
+//! This crate is IO-free and platform-free. It owns the type vocabulary
+//! the rest of the workspace builds on: validating newtypes,
+//! phantom-typed coordinate spaces, the [`Mode`] direct-product ADT
+//! (`Off | Active(Shape, Orientation)`), the [`Lifecycle`] sum type
+//! (`Active(Mode) | Paused(Mode)`), the [`render`] pure function, and
+//! the [`reduce`] state-transition function.
 //!
 //! Higher layers (`linerule-config`, `linerule-platform`, the `linerule`
 //! binary) consume these types but never the other way around. Tests in
@@ -131,17 +133,6 @@ impl From<Thickness> for u16 {
     fn from(value: Thickness) -> Self {
         value.0
     }
-}
-
-/// Mask dim level (0 = no dim, 255 = fully opaque dim).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-#[non_exhaustive]
-pub struct DimLevel(pub u8);
-
-impl DimLevel {
-    /// Default mask darkness (`#cc`, ~80%).
-    pub const DEFAULT: Self = Self(0xcc);
 }
 
 /// Sized 8-bit RGBA color.
@@ -292,45 +283,157 @@ impl<S> ScreenRect<S> {
 }
 
 // ===========================================================================
-// Mode — runtime enum (cf. ADR-0002 for the type-state vs runtime trade-off)
+// Mode — direct-product decomposition (cf. ADR-0012)
+//
+// Mode = Off | Active(Shape, Orientation)
+//
+// `Shape` and `Orientation` are independent axes:
+//   - `Shape       ∈ {Bar, Mask}`           — what to draw
+//   - `Orientation ∈ {Horizontal, Vertical}` — along which axis
+//
+// The four `Active(_, _)` combinations cover the full reading-aid
+// grid; `cycle` traverses the lattice in a fixed canonical order;
+// `render` dispatches on the (shape, orientation) pair through a single
+// axis-symmetric pipeline (project → slit → lift → paint) so adding a
+// new orientation or shape variant is local.
 // ===========================================================================
 
-/// The five user-visible overlay modes.
+/// What to draw on the primary axis: a single solid line, or the
+/// complement (everything *except* a slit) painted with a dim mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Shape {
+    /// Single bar at the cursor's primary-axis projection.
+    Bar,
+    /// Typoscope: dim everything except a slit at the cursor's projection.
+    Mask,
+}
+
+/// Reading orientation. Selects which screen axis is the *primary*
+/// axis (the one that gets the slit / bar) and which is the secondary
+/// (the one that gets stretched to monitor extent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Orientation {
+    /// Left-to-right text. Primary axis = Y (vertical screen axis);
+    /// the bar / slit spans the full monitor width.
+    Horizontal,
+    /// 縦書き / vertical Japanese. Primary axis = X; the bar / slit
+    /// spans the full monitor height.
+    Vertical,
+}
+
+/// The user-visible overlay mode.
 ///
-/// Cycled by [`cycle`] in the order
-/// `Off → Bar → Mask → Vertical → VerticalMask → Off`.
+/// Decomposed as a direct product on the `Active` arm so the four
+/// drawn modes share a single render pipeline (cf. ADR-0012). `Off`
+/// is structurally separate from `Lifecycle::Paused(_)`: `Off` is a
+/// deliberate cycle position, while `Paused` is the orthogonal
+/// "temporarily silenced" lifecycle state.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Mode {
-    /// Overlay hidden.
+    /// Overlay hidden — explicit cycle position meaning "show nothing".
     #[default]
     Off,
-    /// Single horizontal bar at the cursor's Y.
-    Bar,
-    /// Whole screen masked except a horizontal slit at the cursor's Y
-    /// — typoscope for left-to-right horizontal text.
-    Mask,
-    /// Single vertical bar at the cursor's X.
-    Vertical,
-    /// Whole screen masked except a vertical slit at the cursor's X
-    /// — typoscope for 縦書き (vertical Japanese) text.
-    VerticalMask,
+    /// Overlay drawing the (shape, orientation) pair.
+    Active(Shape, Orientation),
+}
+
+impl Mode {
+    /// Horizontal bar — `Active(Bar, Horizontal)`.
+    pub const BAR: Self = Self::Active(Shape::Bar, Orientation::Horizontal);
+    /// Horizontal mask (typoscope) — `Active(Mask, Horizontal)`.
+    pub const MASK: Self = Self::Active(Shape::Mask, Orientation::Horizontal);
+    /// Vertical bar — `Active(Bar, Vertical)`.
+    pub const VERTICAL_BAR: Self = Self::Active(Shape::Bar, Orientation::Vertical);
+    /// Vertical mask (縦書き typoscope) — `Active(Mask, Vertical)`.
+    pub const VERTICAL_MASK: Self = Self::Active(Shape::Mask, Orientation::Vertical);
 }
 
 /// Advance to the next mode in the canonical cycle.
 ///
-/// `Off → Bar → Mask → Vertical → VerticalMask → Off`. The cycle has
-/// period 5; verified by property test `cycle⁵ ≡ id` in
+/// `Off → Bar → Mask → VerticalBar → VerticalMask → Off`. The cycle
+/// has period 5; verified by property test `cycle⁵ ≡ id` in
 /// `tests/property_cycle.rs`.
 #[must_use]
 pub const fn cycle(prev: Mode) -> Mode {
     match prev {
-        Mode::Off => Mode::Bar,
-        Mode::Bar => Mode::Mask,
-        Mode::Mask => Mode::Vertical,
-        Mode::Vertical => Mode::VerticalMask,
-        Mode::VerticalMask => Mode::Off,
+        Mode::Off => Mode::BAR,
+        Mode::Active(Shape::Bar, Orientation::Horizontal) => Mode::MASK,
+        Mode::Active(Shape::Mask, Orientation::Horizontal) => Mode::VERTICAL_BAR,
+        Mode::Active(Shape::Bar, Orientation::Vertical) => Mode::VERTICAL_MASK,
+        Mode::Active(Shape::Mask, Orientation::Vertical) => Mode::Off,
+    }
+}
+
+// ===========================================================================
+// Lifecycle — orthogonal Active vs Paused, both carrying a Mode
+//
+// Pause / resume preserves the inner mode for free; the platform layer
+// short-circuits to `OverlayFrame::empty()` whenever the lifecycle is
+// `Paused(_)`. The two-flag (`enabled: bool` + `mode: Mode`)
+// representation that this replaces produced unreachable states; the
+// sum type makes resume-with-prior-mode the only representable shape.
+// ===========================================================================
+
+/// Lifecycle of the overlay — actively rendering, or paused but
+/// remembering the mode it was in for instant resume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Lifecycle {
+    /// Overlay is rendering the inner [`Mode`].
+    Active(Mode),
+    /// Overlay is paused; the inner [`Mode`] is preserved so resume
+    /// snaps back without losing the user's mode selection.
+    Paused(Mode),
+}
+
+impl Default for Lifecycle {
+    /// Default lifecycle is `Active(Mode::default())` = `Active(Off)`.
+    /// The binary entry point promotes `Off` to a sensible reading-aid
+    /// mode at first run; pure-core consumers see the structural
+    /// "nothing decided yet" state.
+    fn default() -> Self {
+        Self::Active(Mode::default())
+    }
+}
+
+impl Lifecycle {
+    /// The inner mode, regardless of pause state.
+    #[must_use]
+    pub const fn mode(self) -> Mode {
+        match self {
+            Self::Active(m) | Self::Paused(m) => m,
+        }
+    }
+
+    /// `true` iff the lifecycle is `Active(_)`.
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        matches!(self, Self::Active(_))
+    }
+
+    /// Flip pause / resume, preserving the inner mode.
+    #[must_use]
+    pub const fn toggled_pause(self) -> Self {
+        match self {
+            Self::Active(m) => Self::Paused(m),
+            Self::Paused(m) => Self::Active(m),
+        }
+    }
+
+    /// Replace the inner mode, preserving the active / paused state.
+    #[must_use]
+    pub const fn with_mode(self, m: Mode) -> Self {
+        match self {
+            Self::Active(_) => Self::Active(m),
+            Self::Paused(_) => Self::Paused(m),
+        }
     }
 }
 
@@ -386,10 +489,6 @@ impl Default for OverlayConfig {
         }
     }
 }
-
-// ===========================================================================
-// Render output
-// ===========================================================================
 
 // ===========================================================================
 // Render output — categorical decomposition.
@@ -474,19 +573,21 @@ impl Layer {
     }
 }
 
-/// Output of a single [`render`] call: zero to four [`Layer`]s.
+/// Output of a single [`render`] call: zero, one, or two [`Layer`]s.
 ///
-/// `Off` produces 0 layers, `Bar` and `Vertical` produce 1, `Mask`
-/// produces 2 (the regions above and below the slit).
+/// `Off` and `Lifecycle::Paused(_)` produce 0 layers, `Active(Bar, _)`
+/// produces 1, `Active(Mask, _)` produces 2 (the regions on either
+/// side of the slit). Inline capacity 2 covers every present render
+/// output without heap allocation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OverlayFrame {
     /// Layers in z-order (first is drawn first → bottom of the stack).
-    pub layers: SmallVec<[Layer; 4]>,
+    pub layers: SmallVec<[Layer; 2]>,
 }
 
 impl OverlayFrame {
-    /// An empty frame — used by [`Mode::Off`].
+    /// An empty frame — used by [`Mode::Off`] and `Lifecycle::Paused(_)`.
     #[must_use]
     pub const fn empty() -> Self {
         Self {
@@ -502,15 +603,15 @@ impl Default for OverlayFrame {
 }
 
 // ===========================================================================
-// Pure render function — implementation lands in task #8
+// Pure render — axis-symmetric pipeline (project → slit → lift → paint)
 // ===========================================================================
 
 /// Compute the rectangles to draw for the given `(mode, cursor, monitor, cfg)`.
 ///
-/// Pure: no IO, no side effects, deterministic. Each call returns a fresh
-/// [`OverlayFrame`] of zero (`Off`), one (`Bar` / `Vertical`), or two
-/// (`Mask`) filled rectangles, all clipped to `monitor` so the platform
-/// layer can blit them without further bounds checking.
+/// Pure: no IO, no side effects, deterministic. Returns a fresh
+/// [`OverlayFrame`] of zero (`Off`), one (`Active(Bar, _)`), or two
+/// (`Active(Mask, _)`) filled rectangles, all clipped to `monitor` so
+/// the platform layer can blit them without further bounds checking.
 #[must_use]
 pub fn render(
     mode: Mode,
@@ -520,10 +621,91 @@ pub fn render(
 ) -> OverlayFrame {
     match mode {
         Mode::Off => OverlayFrame::empty(),
-        Mode::Bar => render_bar(cursor, monitor, cfg),
-        Mode::Mask => render_mask(cursor, monitor, cfg),
-        Mode::Vertical => render_vertical(cursor, monitor, cfg),
-        Mode::VerticalMask => render_vertical_mask(cursor, monitor, cfg),
+        Mode::Active(shape, orientation) => {
+            render_active((shape, orientation), cursor, monitor, cfg)
+        }
+    }
+}
+
+/// 1-D half-open interval `[lo, hi)` on the primary axis selected by an
+/// [`Orientation`]. Used internally to factor the four `Active(_, _)`
+/// render arms through a single pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Span1D {
+    lo: i32,
+    hi: i32,
+}
+
+impl Span1D {
+    /// Length of the interval, saturating to 0 if `hi <= lo`.
+    /// `abs_diff` is exact whenever `hi >= lo` (the post-clamp
+    /// invariant) and gives a sign-loss-free conversion to `u32`.
+    const fn length(self) -> u32 {
+        if self.hi <= self.lo {
+            0
+        } else {
+            self.hi.abs_diff(self.lo)
+        }
+    }
+}
+
+/// Project the cursor + monitor onto the primary axis selected by
+/// `orientation`. Returns `(cursor projection, monitor span on the
+/// primary axis)`.
+const fn project(
+    orientation: Orientation,
+    cursor: Point<Logical>,
+    monitor: ScreenRect<Logical>,
+) -> (i32, Span1D) {
+    match orientation {
+        Orientation::Horizontal => {
+            let span = Span1D {
+                lo: monitor.origin.y,
+                hi: monitor.origin.y.saturating_add_unsigned(monitor.height),
+            };
+            (cursor.y, span)
+        }
+        Orientation::Vertical => {
+            let span = Span1D {
+                lo: monitor.origin.x,
+                hi: monitor.origin.x.saturating_add_unsigned(monitor.width),
+            };
+            (cursor.x, span)
+        }
+    }
+}
+
+/// Slit interval on the primary axis: cursor centred ± thickness/2,
+/// clamped to `monitor_span`.
+fn slit_span(cursor_proj: i32, monitor_span: Span1D, thickness: Thickness) -> Span1D {
+    let thick = u32::from(thickness.get());
+    let half_t = i32::try_from(thick / 2).unwrap_or(0);
+    let raw_lo = cursor_proj.saturating_sub(half_t);
+    let lo = raw_lo.clamp(monitor_span.lo, monitor_span.hi);
+    let hi = raw_lo
+        .saturating_add_unsigned(thick)
+        .clamp(monitor_span.lo, monitor_span.hi);
+    Span1D { lo, hi }
+}
+
+/// Lift a 1-D span on the primary axis (selected by `orientation`)
+/// into a 2-D rect that spans the monitor's secondary axis.
+fn lift(
+    orientation: Orientation,
+    span: Span1D,
+    monitor: ScreenRect<Logical>,
+) -> ScreenRect<Logical> {
+    match orientation {
+        Orientation::Horizontal => ScreenRect::new(
+            Point::<Logical>::new(monitor.origin.x, span.lo),
+            monitor.width,
+            span.length(),
+        ),
+        Orientation::Vertical => ScreenRect::new(
+            Point::<Logical>::new(span.lo, monitor.origin.y),
+            span.length(),
+            monitor.height,
+        ),
     }
 }
 
@@ -531,161 +713,60 @@ pub fn render(
 /// live opacity slider. The colour stored in `cfg.bar_color` is the
 /// "intent"; `cfg.opacity` is the runtime override surfaced via
 /// hotkey, so the runtime value wins at render time.
-fn fill_with_opacity(base: Rgba, opacity: Opacity) -> Rgba {
+const fn fill_with_opacity(base: Rgba, opacity: Opacity) -> Rgba {
     Rgba {
         a: opacity.get(),
         ..base
     }
 }
 
-fn render_bar(
+fn render_active(
+    axes: (Shape, Orientation),
     cursor: Point<Logical>,
     monitor: ScreenRect<Logical>,
     cfg: &OverlayConfig,
 ) -> OverlayFrame {
-    let thick = u32::from(cfg.thickness.get());
-    let half_t = i32::try_from(thick / 2).unwrap_or(0);
-    let mon_top = monitor.origin.y;
-    let mon_bot = monitor.origin.y.saturating_add_unsigned(monitor.height);
-
-    // Centre the bar on the cursor Y, then clip into the monitor.
-    let raw_top = cursor.y.saturating_sub(half_t);
-    let top = raw_top.clamp(mon_top, mon_bot);
-    let bot = raw_top
-        .saturating_add_unsigned(thick)
-        .clamp(mon_top, mon_bot);
-    let height = u32::try_from(bot - top).unwrap_or(0);
-
-    let bounds = ScreenRect::new(
-        Point::<Logical>::new(monitor.origin.x, top),
-        monitor.width,
-        height,
-    );
+    let (shape, orientation) = axes;
+    let (cursor_proj, mon_span) = project(orientation, cursor, monitor);
+    let slit = slit_span(cursor_proj, mon_span, cfg.thickness);
 
     let mut frame = OverlayFrame::empty();
-    frame.layers.push(Layer::solid_rect(
-        bounds,
-        fill_with_opacity(cfg.bar_color, cfg.opacity),
-    ));
-    frame
-}
-
-fn render_vertical(
-    cursor: Point<Logical>,
-    monitor: ScreenRect<Logical>,
-    cfg: &OverlayConfig,
-) -> OverlayFrame {
-    let thick = u32::from(cfg.thickness.get());
-    let half_t = i32::try_from(thick / 2).unwrap_or(0);
-    let mon_l = monitor.origin.x;
-    let mon_r = monitor.origin.x.saturating_add_unsigned(monitor.width);
-
-    let raw_left = cursor.x.saturating_sub(half_t);
-    let left = raw_left.clamp(mon_l, mon_r);
-    let right = raw_left.saturating_add_unsigned(thick).clamp(mon_l, mon_r);
-    let width = u32::try_from(right - left).unwrap_or(0);
-
-    let bounds = ScreenRect::new(
-        Point::<Logical>::new(left, monitor.origin.y),
-        width,
-        monitor.height,
-    );
-
-    let mut frame = OverlayFrame::empty();
-    frame.layers.push(Layer::solid_rect(
-        bounds,
-        fill_with_opacity(cfg.bar_color, cfg.opacity),
-    ));
-    frame
-}
-
-fn render_mask(
-    cursor: Point<Logical>,
-    monitor: ScreenRect<Logical>,
-    cfg: &OverlayConfig,
-) -> OverlayFrame {
-    let thick = u32::from(cfg.thickness.get());
-    let half_t = i32::try_from(thick / 2).unwrap_or(0);
-    let mon_top = monitor.origin.y;
-    let mon_bot = monitor.origin.y.saturating_add_unsigned(monitor.height);
-
-    // Slit covers [slit_top, slit_bot); two rects clip to [mon_top, slit_top)
-    // and [slit_bot, mon_bot).
-    let raw_top = cursor.y.saturating_sub(half_t);
-    let slit_top = raw_top.clamp(mon_top, mon_bot);
-    let slit_bot = raw_top
-        .saturating_add_unsigned(thick)
-        .clamp(mon_top, mon_bot);
-
-    let top_height = u32::try_from(slit_top - mon_top).unwrap_or(0);
-    let bot_height = u32::try_from(mon_bot - slit_bot).unwrap_or(0);
-
-    let mask_color = cfg.mask_color;
-    let top_bounds = ScreenRect::new(
-        Point::<Logical>::new(monitor.origin.x, mon_top),
-        monitor.width,
-        top_height,
-    );
-    let bot_bounds = ScreenRect::new(
-        Point::<Logical>::new(monitor.origin.x, slit_bot),
-        monitor.width,
-        bot_height,
-    );
-
-    let mut frame = OverlayFrame::empty();
-    frame.layers.push(Layer::solid_rect(top_bounds, mask_color));
-    frame.layers.push(Layer::solid_rect(bot_bounds, mask_color));
-    frame
-}
-
-fn render_vertical_mask(
-    cursor: Point<Logical>,
-    monitor: ScreenRect<Logical>,
-    cfg: &OverlayConfig,
-) -> OverlayFrame {
-    let thick = u32::from(cfg.thickness.get());
-    let half_t = i32::try_from(thick / 2).unwrap_or(0);
-    let mon_left = monitor.origin.x;
-    let mon_right = monitor.origin.x.saturating_add_unsigned(monitor.width);
-
-    // Slit covers [slit_left, slit_right); two rects clip to
-    // [mon_left, slit_left) and [slit_right, mon_right).
-    let raw_left = cursor.x.saturating_sub(half_t);
-    let slit_left = raw_left.clamp(mon_left, mon_right);
-    let slit_right = raw_left
-        .saturating_add_unsigned(thick)
-        .clamp(mon_left, mon_right);
-
-    let left_width = u32::try_from(slit_left - mon_left).unwrap_or(0);
-    let right_width = u32::try_from(mon_right - slit_right).unwrap_or(0);
-
-    let mask_color = cfg.mask_color;
-    let left_bounds = ScreenRect::new(
-        Point::<Logical>::new(mon_left, monitor.origin.y),
-        left_width,
-        monitor.height,
-    );
-    let right_bounds = ScreenRect::new(
-        Point::<Logical>::new(slit_right, monitor.origin.y),
-        right_width,
-        monitor.height,
-    );
-
-    let mut frame = OverlayFrame::empty();
-    frame
-        .layers
-        .push(Layer::solid_rect(left_bounds, mask_color));
-    frame
-        .layers
-        .push(Layer::solid_rect(right_bounds, mask_color));
+    match shape {
+        Shape::Bar => {
+            // 1 layer: paint the slit itself with `bar_color`.
+            let bounds = lift(orientation, slit, monitor);
+            let fill = fill_with_opacity(cfg.bar_color, cfg.opacity);
+            frame.layers.push(Layer::solid_rect(bounds, fill));
+        }
+        Shape::Mask => {
+            // 2 layers: paint the *complement* of the slit on the
+            // primary axis with `mask_color`.
+            let lo_complement = Span1D {
+                lo: mon_span.lo,
+                hi: slit.lo,
+            };
+            let hi_complement = Span1D {
+                lo: slit.hi,
+                hi: mon_span.hi,
+            };
+            for span in [lo_complement, hi_complement] {
+                let bounds = lift(orientation, span, monitor);
+                frame.layers.push(Layer::solid_rect(bounds, cfg.mask_color));
+            }
+        }
+    }
     frame
 }
 
 // ===========================================================================
-// State machine — landed as type stubs; reduce() lands in task #9
+// State machine — Lifecycle ADT + Action sum + reduce
 // ===========================================================================
 
-/// Action vocabulary that the state machine accepts.
+/// Action vocabulary the state machine accepts.
+///
+/// `Quit` is *not* an [`Action`] — it is a control-plane signal handled
+/// at the platform layer (event-loop exit). See [`HotkeyEffect`] for
+/// the broader vocabulary that hotkey bindings are typed against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Action {
@@ -693,19 +774,31 @@ pub enum Action {
     CycleMode,
     /// Pause / resume the overlay — temporarily disable all output
     /// without losing the current mode, position, or config. While
-    /// paused, the overlay renders nothing (fully transparent) and
-    /// captures no input; the bar / mask snaps back into place when
-    /// the user toggles pause off again.
+    /// paused, [`render`] is short-circuited to
+    /// [`OverlayFrame::empty()`]; the bar / mask snaps back into place
+    /// when the user toggles pause off again.
     TogglePause,
     /// Increase bar thickness by `step` logical px (saturating at the bound).
     BumpThickness(i16),
     /// Increase opacity by `step` (saturating at the bound).
     BumpOpacity(i16),
-    /// Emergency exit. The state machine treats this as a no-op
-    /// ([`reduce`] returns a default [`StateDelta`]); the platform
-    /// layer recognises it specially and tears the event loop down so
-    /// the user can always recover from a stuck overlay even when
-    /// every other hotkey is masked by another app.
+}
+
+/// What a hotkey binding produces.
+///
+/// Either a state-machine [`Action`] (handled by [`reduce`]) or a
+/// [`HotkeyEffect::Quit`] control signal (handled at the platform
+/// layer as event-loop tear-down). The decomposition keeps `Action`
+/// closed under [`reduce`] and the platform-side dispatch tagless on
+/// the state-mutation arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HotkeyEffect {
+    /// State-machine [`Action`].
+    Apply(Action),
+    /// Emergency exit; the platform layer tears down the event loop.
+    /// Always present in default hotkey bindings so a stuck overlay
+    /// can always be recovered.
     Quit,
 }
 
@@ -713,14 +806,8 @@ pub enum Action {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct State {
-    /// Current overlay mode.
-    pub mode: Mode,
-    /// Whether the overlay is currently active. While `false` (paused)
-    /// the platform layer renders an empty frame — the overlay is
-    /// effectively off — but the rest of the state (mode, config,
-    /// last-known cursor) is preserved so toggling pause back on
-    /// resumes exactly where the user left off.
-    pub enabled: bool,
+    /// Active vs paused, plus the inner mode in either case.
+    pub lifecycle: Lifecycle,
     /// Live overlay configuration (mutated by [`Action::BumpThickness`] etc.).
     pub config: OverlayConfig,
 }
@@ -728,16 +815,15 @@ pub struct State {
 /// Description of what changed in [`reduce`].
 ///
 /// The platform layer reads this to reapply only the diff — don't
-/// re-create the window for an opacity bump, etc. All `Option` fields
-/// are `Some(new_value)` when the corresponding piece of state changed
-/// and `None` when it did not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// re-create the window for an opacity bump, etc. `lifecycle` is
+/// `Some(new)` when the action transitioned the lifecycle (mode cycle
+/// or pause toggle) and `None` when it did not. `config` is `true`
+/// iff visual config (color/thickness/opacity) changed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct StateDelta {
-    /// New mode, if the action changed the mode.
-    pub mode: Option<Mode>,
-    /// New `enabled` value, if the action toggled pause / resume.
-    pub enabled: Option<bool>,
+    /// New lifecycle value, if the action changed it.
+    pub lifecycle: Option<Lifecycle>,
     /// `true` if visual config (color/thickness/opacity) changed.
     pub config: bool,
 }
@@ -759,18 +845,20 @@ pub struct StateDelta {
 pub fn reduce(state: &mut State, action: Action) -> StateDelta {
     match action {
         Action::CycleMode => {
-            let next = cycle(state.mode);
-            state.mode = next;
+            let next_mode = cycle(state.lifecycle.mode());
+            let next_lc = state.lifecycle.with_mode(next_mode);
+            state.lifecycle = next_lc;
             StateDelta {
-                mode: Some(next),
-                ..Default::default()
+                lifecycle: Some(next_lc),
+                config: false,
             }
         }
         Action::TogglePause => {
-            state.enabled = !state.enabled;
+            let next_lc = state.lifecycle.toggled_pause();
+            state.lifecycle = next_lc;
             StateDelta {
-                enabled: Some(state.enabled),
-                ..Default::default()
+                lifecycle: Some(next_lc),
+                config: false,
             }
         }
         Action::BumpThickness(step) => {
@@ -782,8 +870,8 @@ pub fn reduce(state: &mut State, action: Action) -> StateDelta {
             .expect("clamp invariant guarantees 1..=MAX_PX");
             state.config.thickness = bumped;
             StateDelta {
+                lifecycle: None,
                 config: true,
-                ..Default::default()
             }
         }
         Action::BumpOpacity(step) => {
@@ -794,14 +882,9 @@ pub fn reduce(state: &mut State, action: Action) -> StateDelta {
                     .expect("clamp invariant guarantees 1..=255");
             state.config.opacity = bumped;
             StateDelta {
+                lifecycle: None,
                 config: true,
-                ..Default::default()
             }
         }
-        // Quit is a side-effect-only action handled at the platform
-        // layer (event loop exit). The state machine sees a no-op so
-        // downstream consumers can pattern-match on Action exhaustively
-        // without special-casing Quit.
-        Action::Quit => StateDelta::default(),
     }
 }

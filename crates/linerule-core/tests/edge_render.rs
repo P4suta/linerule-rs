@@ -35,7 +35,7 @@ fn assert_layers_inside_monitor(
 fn cursor_far_above_monitor_clips_bar_to_top_edge() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1920, 1080);
     let frame = render(
-        Mode::Bar,
+        Mode::BAR,
         Point::<Logical>::new(960, -1_000_000),
         monitor,
         &cfg_with_thickness(28),
@@ -49,7 +49,7 @@ fn cursor_far_above_monitor_clips_bar_to_top_edge() {
 fn cursor_far_below_monitor_clips_bar_to_bottom_edge() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1920, 1080);
     let frame = render(
-        Mode::Bar,
+        Mode::BAR,
         Point::<Logical>::new(960, i32::MAX),
         monitor,
         &cfg_with_thickness(28),
@@ -60,7 +60,12 @@ fn cursor_far_below_monitor_clips_bar_to_bottom_edge() {
 #[test]
 fn cursor_at_int_min_does_not_panic() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1920, 1080);
-    for mode in [Mode::Bar, Mode::Mask, Mode::Vertical, Mode::VerticalMask] {
+    for mode in [
+        Mode::BAR,
+        Mode::MASK,
+        Mode::VERTICAL_BAR,
+        Mode::VERTICAL_MASK,
+    ] {
         let frame = render(
             mode,
             Point::<Logical>::new(i32::MIN, i32::MIN),
@@ -74,7 +79,12 @@ fn cursor_at_int_min_does_not_panic() {
 #[test]
 fn cursor_at_int_max_does_not_panic() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1920, 1080);
-    for mode in [Mode::Bar, Mode::Mask, Mode::Vertical, Mode::VerticalMask] {
+    for mode in [
+        Mode::BAR,
+        Mode::MASK,
+        Mode::VERTICAL_BAR,
+        Mode::VERTICAL_MASK,
+    ] {
         let frame = render(
             mode,
             Point::<Logical>::new(i32::MAX, i32::MAX),
@@ -93,7 +103,7 @@ fn cursor_at_int_max_does_not_panic() {
 fn bar_on_secondary_monitor_at_positive_origin() {
     let monitor = ScreenRect::new(Point::<Logical>::new(1920, 0), 1920, 1080);
     let frame = render(
-        Mode::Bar,
+        Mode::BAR,
         Point::<Logical>::new(2880, 540),
         monitor,
         &OverlayConfig::default(),
@@ -115,7 +125,7 @@ fn bar_on_monitor_at_negative_origin() {
     // Vertical-stacked monitors with the secondary at y = -1080.
     let monitor = ScreenRect::new(Point::<Logical>::new(0, -1080), 1920, 1080);
     let frame = render(
-        Mode::Bar,
+        Mode::BAR,
         Point::<Logical>::new(960, -540),
         monitor,
         &OverlayConfig::default(),
@@ -131,7 +141,7 @@ fn bar_on_monitor_at_negative_origin() {
 fn bar_with_thickness_one_renders_thin_line() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1920, 1080);
     let frame = render(
-        Mode::Bar,
+        Mode::BAR,
         Point::<Logical>::new(960, 540),
         monitor,
         &cfg_with_thickness(1),
@@ -149,7 +159,7 @@ fn bar_with_thickness_one_renders_thin_line() {
 fn bar_with_max_thickness_clips_to_monitor() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1920, 1080);
     let frame = render(
-        Mode::Bar,
+        Mode::BAR,
         Point::<Logical>::new(960, 540),
         monitor,
         &cfg_with_thickness(Thickness::MAX_PX),
@@ -163,7 +173,7 @@ fn bar_thicker_than_monitor_collapses_safely() {
     // the monitor height instead of producing a rect outside it.
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 200, 100);
     let frame = render(
-        Mode::Bar,
+        Mode::BAR,
         Point::<Logical>::new(50, 50),
         monitor,
         &cfg_with_thickness(Thickness::MAX_PX),
@@ -188,10 +198,10 @@ fn one_pixel_monitor_does_not_panic() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1, 1);
     for mode in [
         Mode::Off,
-        Mode::Bar,
-        Mode::Mask,
-        Mode::Vertical,
-        Mode::VerticalMask,
+        Mode::BAR,
+        Mode::MASK,
+        Mode::VERTICAL_BAR,
+        Mode::VERTICAL_MASK,
     ] {
         let frame = render(
             mode,
@@ -209,10 +219,10 @@ fn zero_width_monitor_does_not_panic() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 0, 1080);
     for mode in [
         Mode::Off,
-        Mode::Bar,
-        Mode::Mask,
-        Mode::Vertical,
-        Mode::VerticalMask,
+        Mode::BAR,
+        Mode::MASK,
+        Mode::VERTICAL_BAR,
+        Mode::VERTICAL_MASK,
     ] {
         let _frame = render(
             mode,
@@ -232,7 +242,7 @@ fn zero_width_monitor_does_not_panic() {
 fn mask_two_layers_plus_slit_cover_monitor_height() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1920, 1080);
     let cfg = cfg_with_thickness(50);
-    let frame = render(Mode::Mask, Point::<Logical>::new(960, 540), monitor, &cfg);
+    let frame = render(Mode::MASK, Point::<Logical>::new(960, 540), monitor, &cfg);
     assert_eq!(frame.layers.len(), 2);
 
     let mut tops: Vec<i32> = frame
@@ -274,7 +284,7 @@ fn bar_alpha_overrides_to_cfg_opacity() {
     cfg.bar_color = Rgba::new(10, 20, 30, 99);
     cfg.opacity = linerule_core::Opacity::new(200).unwrap();
     let frame = render(
-        Mode::Bar,
+        Mode::BAR,
         Point::<Logical>::new(960, 540),
         ScreenRect::new(Point::<Logical>::new(0, 0), 1920, 1080),
         &cfg,

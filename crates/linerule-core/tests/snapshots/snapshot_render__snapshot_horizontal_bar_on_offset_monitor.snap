@@ -1,16 +1,16 @@
 ---
 source: crates/linerule-core/tests/snapshot_render.rs
-description: Bar at MAX_PX thickness — bounds clipped within monitor
+description: Horizontal bar on monitor with non-zero origin — bounds offset accordingly
 expression: frame
 ---
 layers:
   - geometry:
       Rect:
         origin:
-          x: 0
-          y: 284
+          x: 1920
+          y: 526
         width: 1920
-        height: 512
+        height: 28
     brush:
       Solid:
         r: 255

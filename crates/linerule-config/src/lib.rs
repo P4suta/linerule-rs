@@ -156,10 +156,12 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
 #[instrument(skip_all)]
 pub fn parse_str(path: &Path, body: &str) -> Result<Config, ConfigError> {
     toml::from_str::<Config>(body).map_err(|err| {
-        let span = err.span().map_or_else(
-            || SourceSpan::from((0, body.len().min(1))),
-            |r| SourceSpan::from((r.start, r.end.saturating_sub(r.start).max(1))),
-        );
+        // `toml::Error::span()` carries the offending byte range
+        // whenever the parser knows where it is — a 1-byte fallback
+        // at offset 0 covers the rare span-less variants so miette
+        // always has something to highlight.
+        let raw = err.span().unwrap_or(0..1);
+        let span = SourceSpan::from((raw.start, raw.end.saturating_sub(raw.start).max(1)));
         ConfigError::Parse {
             src: NamedSource::new(path.display().to_string(), body.to_owned()),
             span,

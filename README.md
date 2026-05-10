@@ -1,38 +1,127 @@
-# linerule
+# linerule — デジタル定規
 
-A digital reading ruler — frameless, transparent, click-through,
-always-on-top desktop overlay that follows the cursor. Designed for
-extended reading sessions in any application: Kindle for PC, browser
-e-readers, PDF viewers, 青空文庫 vertical text.
+画面の上に**透明な薄い定規**を浮かせて、マウスカーソルにくっついて
+動かすだけのアプリです。長い文章を読んでいるときに「いま何行目を
+読んでいたっけ?」となるのを防ぎます。
 
-> Status: pre-0.1.0 — under active development. The MVP targets
-> Windows 10/11; macOS / Linux are slated for v0.2+.
+> 対応 OS: Windows 10 / 11 のみ(v0.1)
+>
+> macOS / Linux は v0.2 で来ます
 
-## Modes
+## こんな人に
 
-- **Bar** — single horizontal translucent bar follows the cursor Y.
-- **Mask** (typoscope) — top and bottom are dimmed; only a horizontal
-  slit at the cursor's Y is unmasked.
-- **Vertical** — rotated 90° for 縦書き / 青空文庫 reading.
+- Kindle / 電子書籍リーダー / PDF / ブラウザの長文を読むのが疲れる
+- 行を見失うので指で追いたくなる
+- 縦書き(青空文庫など)でも同じ補助がほしい
+- 既存アプリに改造を加えたくない(linerule は完全に画面の上に
+  *被せる* だけ — 元アプリは何も知りません)
 
-Toggle with `Ctrl+Alt+R` (cycle), `Ctrl+Alt+H` (visible toggle),
-`Ctrl+Alt+[` `]` (thickness), `Ctrl+Alt+-` `=` (opacity).
+## 4 つのモードを切り替えて使います
 
-## Build
+| モード         | 何が出る                                              | 用途                       |
+| -------------- | ----------------------------------------------------- | -------------------------- |
+| 横バー         | カーソルの**高さ**に薄い横帯が 1 本                   | 横書き、行の見失い防止     |
+| 横マスク       | カーソルの**高さ**だけ見えて、その上下が暗くなる      | 横書き、1 行集中(典型)    |
+| 縦バー         | カーソルの**位置**に薄い縦帯が 1 本                   | 縦書き、列の見失い防止     |
+| 縦マスク       | カーソルの**位置**だけ見えて、その左右が暗くなる      | 縦書き、1 列集中(青空文庫)|
 
-Every cargo invocation runs in Docker (ADR-0005). The host needs only
-Docker, `just`, and git.
+「マスク」が**目線ロストを一番防ぐ**ので、起動直後はマスク(横)で
+始まります。あとは `Ctrl+Alt+R` を押すたびに
 
-```sh
-just build           # debug build
-just test            # nextest
-just lint            # fmt-check + clippy + typos + strict-code + shear
-just coverage        # cargo-llvm-cov, fail under 100% branches
-just build-windows   # cross-compile to x86_64-pc-windows-msvc via cargo-xwin
-just hooks           # install lefthook git hooks
+```
+横マスク → 縦バー → 縦マスク → なし → 横バー → ...
 ```
 
-## License
+の順に切り替わります。
 
-Dual-licensed under [Apache-2.0](LICENSE-APACHE) and [MIT](LICENSE-MIT)
-at the user's choice.
+## キー操作(初期値)
+
+<!-- BEGIN GENERATED: hotkeys -->
+
+| キー         | 何が起きる                                      |
+| ---------- | ----------------------------------------------- |
+| Ctrl+Alt+R | 4 モード(+ なし)を順に切り替え                  |
+| Ctrl+Alt+P | 一時的に **完全 OFF**(もう一度押すと元に戻る)   |
+| Ctrl+Alt+] | 帯を太くする                                    |
+| Ctrl+Alt+[ | 帯を細くする                                    |
+| Ctrl+Alt+= | 濃くする                                        |
+| Ctrl+Alt+- | 薄くする                                        |
+| Ctrl+Alt+Q | linerule を終了する(緊急脱出用 — 必ず効きます) |
+
+<!-- END GENERATED: hotkeys -->
+
+> キーが他のアプリと被って効かないときは設定ファイルで変更できます
+> (下「設定を変える」参照)。
+
+## 困ったとき
+
+**画面が真っ暗で操作できない / マスクが邪魔で消せない:**
+`Ctrl+Alt+Q` を押すと linerule が完全終了します。これは設定で
+変えても*必ず*効くようにしてあります。
+
+**画面の上に乗っているのに、クリックは下のアプリに通る:**
+仕様です(*click-through*)。linerule は表示だけで、
+キーボード/マウスの入力は全部下のアプリに素通しします。
+
+**カーソルにくっついてこない:**
+ディスプレイが複数あるときは、起動したモニタの中だけで動きます。
+別モニタで使いたいときは linerule をそちらで再起動してください。
+
+## インストール
+
+(v0.1.0 リリース後ここに `linerule.exe` のダウンロード手順を入れます。
+今は開発中なので「下の "開発者向け" を見て自分でビルド」してください。)
+
+## 設定を変える
+
+設定ファイルは TOML です。場所と内容は次のコマンドで分かります:
+
+```sh
+linerule config path     # 設定ファイルの場所を表示
+linerule config show     # 現在の設定を表示(ファイルがなくても既定値)
+linerule config edit     # $EDITOR で開く(ファイルがなければ作る)
+```
+
+設定ファイルの中身はこんな感じです(全項目とも省略可、省略すると
+既定値):
+
+```toml
+[overlay]
+# 帯の色は { r, g, b, a } の 0..=255。alpha が opacity 兼用。
+bar_color   = { r = 255, g = 235, b = 59,  a = 170 }   # 横/縦バーの色
+mask_color  = { r = 8,   g = 8,   b = 8,   a = 217 }   # マスクの暗さ
+thickness   = 28                                       # 帯の太さ(px)
+opacity     = 170                                      # 0=透明, 255=不透明
+
+[hotkeys]
+cycle_mode  = "Ctrl+Alt+R"
+pause       = "Ctrl+Alt+P"
+thicker     = "Ctrl+Alt+]"
+thinner     = "Ctrl+Alt+["
+more_opaque = "Ctrl+Alt+="
+less_opaque = "Ctrl+Alt+-"
+quit        = "Ctrl+Alt+Q"
+```
+
+`Ctrl` / `Alt` / `Shift` / `Win` の組み合わせと
+A〜Z / `[` / `]` / `=` / `-` / 矢印キーが指定できます。
+
+## 開発者向け
+
+ビルド / テストはぜんぶ Docker の中で動きます(ホスト側に rust も
+要りません)。詳細は [`CONTRIBUTING.md`](CONTRIBUTING.md) と
+[`docs/adr/`](docs/adr/) 参照。
+
+```sh
+just                 # 使えるレシピ一覧
+just build           # debug build
+just test            # nextest で全テスト
+just lint            # fmt + clippy + typos + strict-code + shear
+just coverage        # llvm-cov、region 100% で gate
+just build-windows   # cargo-xwin で linux→Windows クロスコンパイル
+```
+
+## ライセンス
+
+[Apache-2.0](LICENSE-APACHE) と [MIT](LICENSE-MIT) のデュアルライセンス。
+お好きな方をどうぞ。
