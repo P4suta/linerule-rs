@@ -1,20 +1,30 @@
-//! `cycle` is a 4-element permutation — verify cycle⁴ ≡ id.
+//! `cycle` is a 5-element permutation — verify cycle⁵ ≡ id.
 //!
 //! `Mode` is `#[non_exhaustive]` with no public ordering, so we enumerate
-//! the four variants explicitly rather than ask bolero to generate them.
-//! If a fifth variant is ever added, `match` exhaustiveness in `cycle`
+//! the five variants explicitly rather than ask bolero to generate them.
+//! If a sixth variant is ever added, `match` exhaustiveness in `cycle`
 //! will force this test to be revisited.
 
 use std::collections::HashSet;
 
 use linerule_core::{Mode, cycle};
 
-const ALL_MODES: [Mode; 4] = [Mode::Off, Mode::Bar, Mode::Mask, Mode::Vertical];
+const ALL_MODES: [Mode; 5] = [
+    Mode::Off,
+    Mode::Bar,
+    Mode::Mask,
+    Mode::Vertical,
+    Mode::VerticalMask,
+];
 
 #[test]
-fn property_cycle_is_period_four() {
+fn property_cycle_is_period_five() {
     for &m in &ALL_MODES {
-        assert_eq!(cycle(cycle(cycle(cycle(m)))), m, "cycle⁴ != id at {m:?}");
+        assert_eq!(
+            cycle(cycle(cycle(cycle(cycle(m))))),
+            m,
+            "cycle⁵ != id at {m:?}",
+        );
     }
 }
 
@@ -33,7 +43,8 @@ fn cycle_canonical_order() {
     assert_eq!(cycle(Mode::Off), Mode::Bar);
     assert_eq!(cycle(Mode::Bar), Mode::Mask);
     assert_eq!(cycle(Mode::Mask), Mode::Vertical);
-    assert_eq!(cycle(Mode::Vertical), Mode::Off);
+    assert_eq!(cycle(Mode::Vertical), Mode::VerticalMask);
+    assert_eq!(cycle(Mode::VerticalMask), Mode::Off);
 }
 
 #[test]

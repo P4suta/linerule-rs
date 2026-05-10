@@ -60,7 +60,7 @@ fn cursor_far_below_monitor_clips_bar_to_bottom_edge() {
 #[test]
 fn cursor_at_int_min_does_not_panic() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1920, 1080);
-    for mode in [Mode::Bar, Mode::Mask, Mode::Vertical] {
+    for mode in [Mode::Bar, Mode::Mask, Mode::Vertical, Mode::VerticalMask] {
         let frame = render(
             mode,
             Point::<Logical>::new(i32::MIN, i32::MIN),
@@ -74,7 +74,7 @@ fn cursor_at_int_min_does_not_panic() {
 #[test]
 fn cursor_at_int_max_does_not_panic() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1920, 1080);
-    for mode in [Mode::Bar, Mode::Mask, Mode::Vertical] {
+    for mode in [Mode::Bar, Mode::Mask, Mode::Vertical, Mode::VerticalMask] {
         let frame = render(
             mode,
             Point::<Logical>::new(i32::MAX, i32::MAX),
@@ -186,7 +186,13 @@ fn bar_thicker_than_monitor_collapses_safely() {
 #[test]
 fn one_pixel_monitor_does_not_panic() {
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 1, 1);
-    for mode in [Mode::Off, Mode::Bar, Mode::Mask, Mode::Vertical] {
+    for mode in [
+        Mode::Off,
+        Mode::Bar,
+        Mode::Mask,
+        Mode::Vertical,
+        Mode::VerticalMask,
+    ] {
         let frame = render(
             mode,
             Point::<Logical>::new(0, 0),
@@ -201,7 +207,13 @@ fn one_pixel_monitor_does_not_panic() {
 fn zero_width_monitor_does_not_panic() {
     // u32::width = 0 is degenerate but the API allows it.
     let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 0, 1080);
-    for mode in [Mode::Off, Mode::Bar, Mode::Mask, Mode::Vertical] {
+    for mode in [
+        Mode::Off,
+        Mode::Bar,
+        Mode::Mask,
+        Mode::Vertical,
+        Mode::VerticalMask,
+    ] {
         let _frame = render(
             mode,
             Point::<Logical>::new(0, 540),

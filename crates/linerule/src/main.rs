@@ -132,7 +132,6 @@ fn load_or_default() -> Result<Config> {
 fn hotkey_bindings(map: &HotkeyMap) -> Vec<(String, Action)> {
     vec![
         (map.cycle_mode.clone(), Action::CycleMode),
-        (map.toggle_visible.clone(), Action::ToggleVisible),
         (map.pause.clone(), Action::TogglePause),
         (map.thicker.clone(), Action::BumpThickness(2)),
         (map.thinner.clone(), Action::BumpThickness(-2)),

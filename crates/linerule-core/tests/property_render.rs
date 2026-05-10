@@ -161,12 +161,66 @@ fn render_vertical_layer_centered_on_cursor_x() {
     );
 }
 
+// ---- Mode::VerticalMask ---------------------------------------------------
+
+#[test]
+fn render_vertical_mask_produces_exactly_two_layers() {
+    let frame = render(Mode::VerticalMask, cursor(960, 540), monitor(), &cfg());
+    assert_eq!(
+        frame.layers.len(),
+        2,
+        "VerticalMask must emit two layers (left + right of the slit)",
+    );
+}
+
+#[test]
+fn render_vertical_mask_layers_use_configured_mask_color() {
+    let frame = render(Mode::VerticalMask, cursor(960, 540), monitor(), &cfg());
+    for layer in &frame.layers {
+        let (_, fill) = solid_layer_bounds(layer);
+        assert_eq!(
+            fill,
+            Rgba::DEFAULT_MASK,
+            "vertical-mask layers use mask_color"
+        );
+    }
+}
+
+#[test]
+fn render_vertical_mask_slit_is_thickness_pixels_wide() {
+    let cur_x = 960;
+    let frame = render(Mode::VerticalMask, cursor(cur_x, 540), monitor(), &cfg());
+    let mut layers = frame.layers.iter();
+    let first = layers.next().expect("vertical-mask left layer missing");
+    let second = layers.next().expect("vertical-mask right layer missing");
+    let (b1, _) = solid_layer_bounds(first);
+    let (b2, _) = solid_layer_bounds(second);
+    let (left, right) = if b1.origin.x < b2.origin.x {
+        (b1, b2)
+    } else {
+        (b2, b1)
+    };
+    let slit_left = left.origin.x.saturating_add_unsigned(left.width);
+    let slit_right = right.origin.x;
+    assert_eq!(
+        slit_right - slit_left,
+        i32::from(Thickness::DEFAULT.get()),
+        "vertical slit width must match Thickness::DEFAULT",
+    );
+}
+
 // ---- Cross-mode invariants ------------------------------------------------
 
 #[test]
 fn render_layers_always_lie_within_monitor() {
     let m = monitor();
-    for mode in [Mode::Off, Mode::Bar, Mode::Mask, Mode::Vertical] {
+    for mode in [
+        Mode::Off,
+        Mode::Bar,
+        Mode::Mask,
+        Mode::Vertical,
+        Mode::VerticalMask,
+    ] {
         for &(x, y) in &[(0, 0), (1919, 1079), (960, 540), (1, 1080), (1920, 0)] {
             let frame = render(mode, cursor(x, y), m, &cfg());
             for layer in &frame.layers {

@@ -77,6 +77,22 @@ fn snapshot_vertical_at_centre_fhd() {
 }
 
 #[test]
+fn snapshot_vertical_mask_at_centre_fhd() {
+    let frame = render(Mode::VerticalMask, cur(960, 540), fhd(), &cfg());
+    with_settings!({ description => "VerticalMask centred — left + right panels with default mask colour, transparent vertical slit at cursor X (縦書き typoscope)" }, {
+        assert_yaml_snapshot!(frame);
+    });
+}
+
+#[test]
+fn snapshot_vertical_mask_at_left_edge() {
+    let frame = render(Mode::VerticalMask, cur(0, 540), fhd(), &cfg());
+    with_settings!({ description => "VerticalMask near left edge — left panel collapses to ~0 width" }, {
+        assert_yaml_snapshot!(frame);
+    });
+}
+
+#[test]
 fn snapshot_bar_with_max_thickness() {
     let mut cfg = OverlayConfig::default();
     cfg.thickness = Thickness::new(Thickness::MAX_PX).expect("MAX_PX is valid");

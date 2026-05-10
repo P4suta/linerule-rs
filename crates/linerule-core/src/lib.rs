@@ -295,9 +295,10 @@ impl<S> ScreenRect<S> {
 // Mode — runtime enum (cf. ADR-0002 for the type-state vs runtime trade-off)
 // ===========================================================================
 
-/// The four user-visible overlay modes.
+/// The five user-visible overlay modes.
 ///
-/// Cycled by [`cycle`] in the order `Off → Bar → Mask → Vertical → Off`.
+/// Cycled by [`cycle`] in the order
+/// `Off → Bar → Mask → Vertical → VerticalMask → Off`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -307,23 +308,29 @@ pub enum Mode {
     Off,
     /// Single horizontal bar at the cursor's Y.
     Bar,
-    /// Whole screen masked except a horizontal slit at the cursor's Y.
+    /// Whole screen masked except a horizontal slit at the cursor's Y
+    /// — typoscope for left-to-right horizontal text.
     Mask,
-    /// Single vertical bar at the cursor's X — for 縦書き / 青空文庫 reading.
+    /// Single vertical bar at the cursor's X.
     Vertical,
+    /// Whole screen masked except a vertical slit at the cursor's X
+    /// — typoscope for 縦書き (vertical Japanese) text.
+    VerticalMask,
 }
 
 /// Advance to the next mode in the canonical cycle.
 ///
-/// `Off → Bar → Mask → Vertical → Off`. The cycle has period 4; verified by
-/// property test `cycle⁴ ≡ id` in `tests/property_cycle.rs`.
+/// `Off → Bar → Mask → Vertical → VerticalMask → Off`. The cycle has
+/// period 5; verified by property test `cycle⁵ ≡ id` in
+/// `tests/property_cycle.rs`.
 #[must_use]
 pub const fn cycle(prev: Mode) -> Mode {
     match prev {
         Mode::Off => Mode::Bar,
         Mode::Bar => Mode::Mask,
         Mode::Mask => Mode::Vertical,
-        Mode::Vertical => Mode::Off,
+        Mode::Vertical => Mode::VerticalMask,
+        Mode::VerticalMask => Mode::Off,
     }
 }
 
@@ -516,6 +523,7 @@ pub fn render(
         Mode::Bar => render_bar(cursor, monitor, cfg),
         Mode::Mask => render_mask(cursor, monitor, cfg),
         Mode::Vertical => render_vertical(cursor, monitor, cfg),
+        Mode::VerticalMask => render_vertical_mask(cursor, monitor, cfg),
     }
 }
 
@@ -630,6 +638,49 @@ fn render_mask(
     frame
 }
 
+fn render_vertical_mask(
+    cursor: Point<Logical>,
+    monitor: ScreenRect<Logical>,
+    cfg: &OverlayConfig,
+) -> OverlayFrame {
+    let thick = u32::from(cfg.thickness.get());
+    let half_t = i32::try_from(thick / 2).unwrap_or(0);
+    let mon_left = monitor.origin.x;
+    let mon_right = monitor.origin.x.saturating_add_unsigned(monitor.width);
+
+    // Slit covers [slit_left, slit_right); two rects clip to
+    // [mon_left, slit_left) and [slit_right, mon_right).
+    let raw_left = cursor.x.saturating_sub(half_t);
+    let slit_left = raw_left.clamp(mon_left, mon_right);
+    let slit_right = raw_left
+        .saturating_add_unsigned(thick)
+        .clamp(mon_left, mon_right);
+
+    let left_width = u32::try_from(slit_left - mon_left).unwrap_or(0);
+    let right_width = u32::try_from(mon_right - slit_right).unwrap_or(0);
+
+    let mask_color = cfg.mask_color;
+    let left_bounds = ScreenRect::new(
+        Point::<Logical>::new(mon_left, monitor.origin.y),
+        left_width,
+        monitor.height,
+    );
+    let right_bounds = ScreenRect::new(
+        Point::<Logical>::new(slit_right, monitor.origin.y),
+        right_width,
+        monitor.height,
+    );
+
+    let mut frame = OverlayFrame::empty();
+    frame
+        .layers
+        .push(Layer::solid_rect(left_bounds, mask_color));
+    frame
+        .layers
+        .push(Layer::solid_rect(right_bounds, mask_color));
+    frame
+}
+
 // ===========================================================================
 // State machine — landed as type stubs; reduce() lands in task #9
 // ===========================================================================
@@ -640,13 +691,11 @@ fn render_mask(
 pub enum Action {
     /// Advance to the next [`Mode`] in the cycle.
     CycleMode,
-    /// Toggle visibility on / off (orthogonal to cycle and pause).
-    ToggleVisible,
-    /// Toggle the *paused* flag. While paused the platform layer
-    /// stops feeding fresh cursor positions into the state — the
-    /// overlay stays frozen at the position it had at the moment
-    /// of pause, so the user can examine that exact line / region
-    /// without the bar drifting away.
+    /// Pause / resume the overlay — temporarily disable all output
+    /// without losing the current mode, position, or config. While
+    /// paused, the overlay renders nothing (fully transparent) and
+    /// captures no input; the bar / mask snaps back into place when
+    /// the user toggles pause off again.
     TogglePause,
     /// Increase bar thickness by `step` logical px (saturating at the bound).
     BumpThickness(i16),
@@ -666,12 +715,12 @@ pub enum Action {
 pub struct State {
     /// Current overlay mode.
     pub mode: Mode,
-    /// Whether the overlay window is currently visible.
-    pub visible: bool,
-    /// Whether cursor follow is paused. While `true` the platform layer
-    /// stops updating the rendered cursor position; the overlay
-    /// freezes at the location it had when pause was toggled on.
-    pub paused: bool,
+    /// Whether the overlay is currently active. While `false` (paused)
+    /// the platform layer renders an empty frame — the overlay is
+    /// effectively off — but the rest of the state (mode, config,
+    /// last-known cursor) is preserved so toggling pause back on
+    /// resumes exactly where the user left off.
+    pub enabled: bool,
     /// Live overlay configuration (mutated by [`Action::BumpThickness`] etc.).
     pub config: OverlayConfig,
 }
@@ -687,10 +736,8 @@ pub struct State {
 pub struct StateDelta {
     /// New mode, if the action changed the mode.
     pub mode: Option<Mode>,
-    /// New visibility, if the action toggled visibility.
-    pub visible: Option<bool>,
-    /// New pause state, if the action toggled the pause flag.
-    pub paused: Option<bool>,
+    /// New `enabled` value, if the action toggled pause / resume.
+    pub enabled: Option<bool>,
     /// `true` if visual config (color/thickness/opacity) changed.
     pub config: bool,
 }
@@ -719,17 +766,10 @@ pub fn reduce(state: &mut State, action: Action) -> StateDelta {
                 ..Default::default()
             }
         }
-        Action::ToggleVisible => {
-            state.visible = !state.visible;
-            StateDelta {
-                visible: Some(state.visible),
-                ..Default::default()
-            }
-        }
         Action::TogglePause => {
-            state.paused = !state.paused;
+            state.enabled = !state.enabled;
             StateDelta {
-                paused: Some(state.paused),
+                enabled: Some(state.enabled),
                 ..Default::default()
             }
         }

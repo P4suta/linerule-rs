@@ -17,14 +17,13 @@ thickness   = 28
 opacity     = 170
 
 [hotkeys]
-cycle_mode     = \"Ctrl+Alt+R\"
-toggle_visible = \"Ctrl+Alt+H\"
-thicker        = \"Ctrl+Alt+]\"
-thinner        = \"Ctrl+Alt+[\"
-more_opaque    = \"Ctrl+Alt+=\"
-less_opaque    = \"Ctrl+Alt+-\"
-pause          = \"Ctrl+Alt+P\"
-quit           = \"Ctrl+Alt+Q\"
+cycle_mode  = \"Ctrl+Alt+R\"
+pause       = \"Ctrl+Alt+P\"
+thicker     = \"Ctrl+Alt+]\"
+thinner     = \"Ctrl+Alt+[\"
+more_opaque = \"Ctrl+Alt+=\"
+less_opaque = \"Ctrl+Alt+-\"
+quit        = \"Ctrl+Alt+Q\"
 ";
 
 #[test]
@@ -114,18 +113,17 @@ fn default_path_resolves_under_linerule_subdir() {
 }
 
 #[test]
-fn config_default_has_eight_default_hotkeys_including_pause_and_quit() {
+fn config_default_has_seven_default_hotkeys_including_pause_and_quit() {
     let h = linerule_config::HotkeyMap::default();
     assert_eq!(h.cycle_mode, "Ctrl+Alt+R");
-    assert_eq!(h.toggle_visible, "Ctrl+Alt+H");
+    // Pause = temporarily disable the entire overlay (renders nothing
+    // until pressed again). Defaults to `Ctrl+Alt+P` so the user can
+    // pause without editing config.
+    assert_eq!(h.pause, "Ctrl+Alt+P");
     assert_eq!(h.thicker, "Ctrl+Alt+]");
     assert_eq!(h.thinner, "Ctrl+Alt+[");
     assert_eq!(h.more_opaque, "Ctrl+Alt+=");
     assert_eq!(h.less_opaque, "Ctrl+Alt+-");
-    // Pause = freeze cursor follow at the current line. Distinct from
-    // Quit (terminate). MUST be present in defaults so the user can
-    // freeze the bar without editing the config.
-    assert_eq!(h.pause, "Ctrl+Alt+P");
     // Emergency-exit chord MUST be present in defaults so a user who
     // installs linerule and never edits config still has an escape
     // path when the overlay wedges them out.

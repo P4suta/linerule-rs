@@ -37,10 +37,14 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct HotkeyMap {
-    /// Combo for `Action::CycleMode`.
+    /// Combo for `Action::CycleMode` — advance through the mode cycle
+    /// (`Off → Bar → Mask → Vertical → VerticalMask → Off`).
     pub cycle_mode: String,
-    /// Combo for `Action::ToggleVisible`.
-    pub toggle_visible: String,
+    /// Combo for `Action::TogglePause` — temporarily disable the
+    /// overlay (renders nothing) without losing mode / config / cursor
+    /// state. Press again to resume from the same configuration.
+    /// Defaults to `Ctrl+Alt+P`.
+    pub pause: String,
     /// Combo for `Action::BumpThickness(+1)`.
     pub thicker: String,
     /// Combo for `Action::BumpThickness(-1)`.
@@ -49,11 +53,6 @@ pub struct HotkeyMap {
     pub more_opaque: String,
     /// Combo for `Action::BumpOpacity(-5)`.
     pub less_opaque: String,
-    /// Combo for `Action::TogglePause`. While paused the overlay
-    /// freezes at its current position — useful for stopping the
-    /// follow-the-cursor behaviour while you read a specific line.
-    /// Defaults to `Ctrl+Alt+P`.
-    pub pause: String,
     /// Combo for `Action::Quit`. The user's emergency-exit path when
     /// the always-on-top overlay covers the whole screen and another
     /// hotkey collision wedges them out. Defaults to `Ctrl+Alt+Q`,
@@ -65,12 +64,11 @@ impl Default for HotkeyMap {
     fn default() -> Self {
         Self {
             cycle_mode: "Ctrl+Alt+R".into(),
-            toggle_visible: "Ctrl+Alt+H".into(),
+            pause: "Ctrl+Alt+P".into(),
             thicker: "Ctrl+Alt+]".into(),
             thinner: "Ctrl+Alt+[".into(),
             more_opaque: "Ctrl+Alt+=".into(),
             less_opaque: "Ctrl+Alt+-".into(),
-            pause: "Ctrl+Alt+P".into(),
             quit: "Ctrl+Alt+Q".into(),
         }
     }

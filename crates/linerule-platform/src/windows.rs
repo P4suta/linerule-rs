@@ -36,7 +36,7 @@ use std::thread;
 
 use crossbeam_channel::Receiver;
 use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager,
+    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
     hotkey::{Code, HotKey, Modifiers},
 };
 use linerule_core::{
@@ -119,6 +119,14 @@ fn spawn_hotkey_forwarder(
         .name("linerule-hotkey-forwarder".into())
         .spawn(move || {
             while let Ok(event) = recv.recv() {
+                // global-hotkey 0.8 fires both `Pressed` AND `Released`
+                // for every chord. Forwarding both produces a double
+                // toggle — the user perceives the action as inert
+                // ("only works while the key is held"). Filter on
+                // `Pressed` so each chord triggers exactly once.
+                if event.state != HotKeyState::Pressed {
+                    continue;
+                }
                 if let Some(&(_, action)) = bindings.iter().find(|(id, _)| *id == event.id()) {
                     if let Err(e) = proxy.send_event(UserMessage::HotkeyAction(action)) {
                         tracing::warn!(?e, "event loop closed; hotkey forwarder exiting");
@@ -531,10 +539,11 @@ impl ApplicationHandler<UserMessage> for OverlayApp {
             // Default to Mask mode on first launch — that's the
             // typoscope (line-isolation) reading aid the rest of the
             // surrounding text dimmed at ~85% opacity. Bar / Vertical
-            // are reachable via `Ctrl+Alt+R` cycle.
+            // / VerticalMask are reachable via the `Ctrl+Alt+R` cycle.
             self.state.mode = Mode::Mask;
-            self.state.visible = true;
         }
+        // Always start enabled. Pause toggles via `Ctrl+Alt+P`.
+        self.state.enabled = true;
 
         self.repaint();
     }
@@ -566,11 +575,10 @@ impl ApplicationHandler<UserMessage> for OverlayApp {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        // While paused, keep the overlay frozen at the cursor position
-        // it had at the moment the user pressed the pause hotkey.
-        if self.state.paused {
-            return;
-        }
+        // While paused, the overlay renders nothing — but we still
+        // poll the cursor and update `last_cursor` so resuming snaps
+        // to the user's *current* cursor position rather than the
+        // stale one from when pause was pressed.
         if let Some(pos) = poll_cursor_logical(self.dpi) {
             if pos != self.last_cursor {
                 self.last_cursor = pos;
@@ -592,7 +600,7 @@ impl OverlayApp {
             return;
         };
 
-        let frame = if self.state.visible {
+        let frame = if self.state.enabled {
             render(
                 self.state.mode,
                 self.last_cursor,

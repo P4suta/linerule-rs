@@ -1,6 +1,6 @@
-//! State-machine cells for `reduce`. These test the contract — apply each
-//! `Action` to each meaningful starting `State` and check the resulting
-//! `(state, delta)` shape. Most assertions fail until task #9 lands.
+//! State-machine cells for `reduce`. Each test exercises one
+//! `Action` arm against a meaningful starting `State` and pins the
+//! resulting `(State, StateDelta)` shape.
 
 use linerule_core::{Action, Mode, OverlayConfig, State, StateDelta, Thickness, cycle, reduce};
 
@@ -18,35 +18,40 @@ fn cycle_mode_advances_one_step() {
 }
 
 #[test]
-fn cycle_mode_period_4() {
+fn cycle_mode_period_5() {
     let mut s = fresh();
     let initial = s.mode;
-    for _ in 0..4 {
+    for _ in 0..5 {
         reduce(&mut s, Action::CycleMode);
     }
     assert_eq!(
         s.mode, initial,
-        "applying CycleMode four times must return to initial mode"
+        "applying CycleMode five times must return to initial mode (5-mode cycle)",
     );
 }
 
 #[test]
-fn toggle_visible_is_self_inverse() {
+fn toggle_pause_is_self_inverse() {
     let mut s = fresh();
-    let initial_visible = s.visible;
-    reduce(&mut s, Action::ToggleVisible);
-    let after_one = s.visible;
-    reduce(&mut s, Action::ToggleVisible);
-    let after_two = s.visible;
-    assert_ne!(after_one, initial_visible);
-    assert_eq!(after_two, initial_visible);
+    let initial_enabled = s.enabled;
+    reduce(&mut s, Action::TogglePause);
+    let after_one = s.enabled;
+    reduce(&mut s, Action::TogglePause);
+    let after_two = s.enabled;
+    assert_ne!(
+        after_one, initial_enabled,
+        "first TogglePause flips the flag"
+    );
+    assert_eq!(after_two, initial_enabled, "second TogglePause restores it");
 }
 
 #[test]
-fn toggle_visible_delta_reports_new_visibility() {
+fn toggle_pause_delta_reports_new_enabled() {
     let mut s = fresh();
-    let delta = reduce(&mut s, Action::ToggleVisible);
-    assert_eq!(delta.visible, Some(s.visible));
+    let delta = reduce(&mut s, Action::TogglePause);
+    assert_eq!(delta.enabled, Some(s.enabled));
+    assert_eq!(delta.mode, None, "pause must not touch mode");
+    assert!(!delta.config, "pause must not touch the visual config");
 }
 
 #[test]
@@ -126,9 +131,6 @@ fn bump_opacity_saturates_at_max() {
     let mut s = fresh();
     s.config.opacity = linerule_core::Opacity::new(255).expect("255 is in range");
     reduce(&mut s, Action::BumpOpacity(100));
-    // opacity is `u8` so the type bound already implies `<= 255`; what we
-    // really want to confirm is that the saturating add did not wrap to a
-    // smaller value.
     assert_eq!(
         s.config.opacity.get(),
         255,
@@ -140,23 +142,23 @@ fn bump_opacity_saturates_at_max() {
 fn bump_actions_set_config_changed_flag() {
     let mut s = fresh();
     let delta_t = reduce(&mut s, Action::BumpThickness(1));
-    assert!(delta_t.config, "BumpThickness must set config_changed");
+    assert!(delta_t.config, "BumpThickness must set the config flag");
     let delta_o = reduce(&mut s, Action::BumpOpacity(1));
-    assert!(delta_o.config, "BumpOpacity must set config_changed");
+    assert!(delta_o.config, "BumpOpacity must set the config flag");
 }
 
 #[test]
-fn cycle_mode_does_not_change_config_or_visible() {
+fn cycle_mode_does_not_change_config_or_enabled() {
     let mut s = fresh();
     let cfg_before = s.config;
-    let vis_before = s.visible;
+    let enabled_before = s.enabled;
     let delta = reduce(&mut s, Action::CycleMode);
     assert_eq!(s.config, cfg_before, "cycle_mode must not change config");
     assert_eq!(
-        s.visible, vis_before,
-        "cycle_mode must not change visibility"
+        s.enabled, enabled_before,
+        "cycle_mode must not toggle pause"
     );
-    assert_eq!(delta.visible, None);
+    assert_eq!(delta.enabled, None);
     assert!(!delta.config);
 }
 
@@ -164,35 +166,8 @@ fn cycle_mode_does_not_change_config_or_visible() {
 fn delta_default_is_no_change() {
     let d = StateDelta::default();
     assert_eq!(d.mode, None);
-    assert_eq!(d.visible, None);
-    assert_eq!(d.paused, None);
+    assert_eq!(d.enabled, None);
     assert!(!d.config);
-}
-
-#[test]
-fn toggle_pause_is_self_inverse() {
-    let mut s = fresh();
-    let initial = s.paused;
-    reduce(&mut s, Action::TogglePause);
-    assert_ne!(s.paused, initial, "first TogglePause flips the flag");
-    reduce(&mut s, Action::TogglePause);
-    assert_eq!(s.paused, initial, "second TogglePause restores the flag");
-}
-
-#[test]
-fn toggle_pause_delta_reports_new_paused() {
-    let mut s = fresh();
-    let delta = reduce(&mut s, Action::TogglePause);
-    assert_eq!(delta.paused, Some(s.paused));
-    assert_eq!(delta.mode, None, "paused must not touch mode");
-    assert_eq!(delta.visible, None, "paused must not touch visibility");
-    assert!(!delta.config, "paused must not touch the visual config");
-}
-
-#[test]
-fn fresh_state_is_not_paused() {
-    let s = State::default();
-    assert!(!s.paused, "default State must not start paused");
 }
 
 #[test]
@@ -200,7 +175,10 @@ fn state_default_uses_overlay_config_default() {
     let s = State::default();
     assert_eq!(s.config, OverlayConfig::default());
     assert_eq!(s.mode, Mode::Off);
-    assert!(!s.visible);
+    assert!(
+        !s.enabled,
+        "default `State` is paused (off) until the platform layer enables it"
+    );
 }
 
 #[test]
@@ -216,6 +194,6 @@ fn quit_is_a_state_machine_no_op() {
     assert_eq!(
         delta,
         StateDelta::default(),
-        "Quit must produce a default StateDelta"
+        "Quit must produce a default StateDelta",
     );
 }

@@ -92,12 +92,11 @@ fn round_trip_grid_colors() {
 fn round_trip_alternative_hotkey_chords() {
     let mut hk = HotkeyMap::default();
     hk.cycle_mode = "Shift+F1".into();
-    hk.toggle_visible = "ctrl+alt+shift+meta+H".into();
+    hk.pause = "ctrl+alt+shift+meta+H".into();
     hk.thicker = "Win+Up".into();
     hk.thinner = "Cmd+Down".into();
     hk.more_opaque = "Ctrl+Shift+=".into();
     hk.less_opaque = "Ctrl+Shift+-".into();
-    hk.pause = "Ctrl+Shift+P".into();
     hk.quit = "Ctrl+Alt+Shift+Q".into();
     let cfg = make_config(ConfigSeed {
         bar_color: Rgba::DEFAULT_BAR,
@@ -116,7 +115,6 @@ fn deserialize_rejects_thickness_zero() {
 thickness = 0
 [hotkeys]
 cycle_mode     = \"Ctrl+Alt+R\"
-toggle_visible = \"Ctrl+Alt+H\"
 thicker        = \"Ctrl+Alt+]\"
 thinner        = \"Ctrl+Alt+[\"
 more_opaque    = \"Ctrl+Alt+=\"
@@ -136,7 +134,6 @@ fn deserialize_rejects_thickness_above_max() {
 thickness = {}
 [hotkeys]
 cycle_mode     = \"Ctrl+Alt+R\"
-toggle_visible = \"Ctrl+Alt+H\"
 thicker        = \"Ctrl+Alt+]\"
 thinner        = \"Ctrl+Alt+[\"
 more_opaque    = \"Ctrl+Alt+=\"
@@ -156,7 +153,6 @@ fn deserialize_rejects_opacity_zero() {
 opacity = 0
 [hotkeys]
 cycle_mode     = \"Ctrl+Alt+R\"
-toggle_visible = \"Ctrl+Alt+H\"
 thicker        = \"Ctrl+Alt+]\"
 thinner        = \"Ctrl+Alt+[\"
 more_opaque    = \"Ctrl+Alt+=\"
@@ -177,7 +173,6 @@ fn partial_overlay_section_uses_per_field_defaults() {
 thickness = 40
 [hotkeys]
 cycle_mode     = \"Ctrl+Alt+R\"
-toggle_visible = \"Ctrl+Alt+H\"
 thicker        = \"Ctrl+Alt+]\"
 thinner        = \"Ctrl+Alt+[\"
 more_opaque    = \"Ctrl+Alt+=\"
