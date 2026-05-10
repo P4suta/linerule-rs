@@ -97,6 +97,7 @@ fn round_trip_alternative_hotkey_chords() {
     hk.thinner = "Cmd+Down".into();
     hk.more_opaque = "Ctrl+Shift+=".into();
     hk.less_opaque = "Ctrl+Shift+-".into();
+    hk.pause = "Ctrl+Shift+P".into();
     hk.quit = "Ctrl+Alt+Shift+Q".into();
     let cfg = make_config(ConfigSeed {
         bar_color: Rgba::DEFAULT_BAR,
@@ -120,6 +121,7 @@ thicker        = \"Ctrl+Alt+]\"
 thinner        = \"Ctrl+Alt+[\"
 more_opaque    = \"Ctrl+Alt+=\"
 less_opaque    = \"Ctrl+Alt+-\"
+pause          = \"Ctrl+Alt+P\"
 quit           = \"Ctrl+Alt+Q\"
 ";
     parse_str(Path::new("bad.toml"), bad)
@@ -139,6 +141,7 @@ thicker        = \"Ctrl+Alt+]\"
 thinner        = \"Ctrl+Alt+[\"
 more_opaque    = \"Ctrl+Alt+=\"
 less_opaque    = \"Ctrl+Alt+-\"
+pause          = \"Ctrl+Alt+P\"
 quit           = \"Ctrl+Alt+Q\"
 ",
         Thickness::MAX_PX + 1,
@@ -158,6 +161,7 @@ thicker        = \"Ctrl+Alt+]\"
 thinner        = \"Ctrl+Alt+[\"
 more_opaque    = \"Ctrl+Alt+=\"
 less_opaque    = \"Ctrl+Alt+-\"
+pause          = \"Ctrl+Alt+P\"
 quit           = \"Ctrl+Alt+Q\"
 ";
     parse_str(Path::new("bad.toml"), bad)
@@ -178,6 +182,7 @@ thicker        = \"Ctrl+Alt+]\"
 thinner        = \"Ctrl+Alt+[\"
 more_opaque    = \"Ctrl+Alt+=\"
 less_opaque    = \"Ctrl+Alt+-\"
+pause          = \"Ctrl+Alt+P\"
 quit           = \"Ctrl+Alt+Q\"
 ";
     let cfg = parse_str(Path::new("partial.toml"), partial).expect("partial overlay must parse");

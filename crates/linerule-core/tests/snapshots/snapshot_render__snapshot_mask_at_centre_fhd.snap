@@ -16,7 +16,7 @@ layers:
         r: 8
         g: 8
         b: 8
-        a: 204
+        a: 217
   - geometry:
       Rect:
         origin:
@@ -29,4 +29,4 @@ layers:
         r: 8
         g: 8
         b: 8
-        a: 204
+        a: 217

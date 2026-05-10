@@ -12,7 +12,7 @@ use linerule_config::{Config, ConfigError, parse_str};
 const GOLDEN_TOML: &str = "\
 [overlay]
 bar_color   = { r = 255, g = 235, b = 59,  a = 170 }
-mask_color  = { r = 8,   g = 8,   b = 8,   a = 204 }
+mask_color  = { r = 8,   g = 8,   b = 8,   a = 217 }
 thickness   = 28
 opacity     = 170
 
@@ -23,6 +23,7 @@ thicker        = \"Ctrl+Alt+]\"
 thinner        = \"Ctrl+Alt+[\"
 more_opaque    = \"Ctrl+Alt+=\"
 less_opaque    = \"Ctrl+Alt+-\"
+pause          = \"Ctrl+Alt+P\"
 quit           = \"Ctrl+Alt+Q\"
 ";
 
@@ -113,7 +114,7 @@ fn default_path_resolves_under_linerule_subdir() {
 }
 
 #[test]
-fn config_default_has_seven_default_hotkeys_including_emergency_quit() {
+fn config_default_has_eight_default_hotkeys_including_pause_and_quit() {
     let h = linerule_config::HotkeyMap::default();
     assert_eq!(h.cycle_mode, "Ctrl+Alt+R");
     assert_eq!(h.toggle_visible, "Ctrl+Alt+H");
@@ -121,10 +122,12 @@ fn config_default_has_seven_default_hotkeys_including_emergency_quit() {
     assert_eq!(h.thinner, "Ctrl+Alt+[");
     assert_eq!(h.more_opaque, "Ctrl+Alt+=");
     assert_eq!(h.less_opaque, "Ctrl+Alt+-");
+    // Pause = freeze cursor follow at the current line. Distinct from
+    // Quit (terminate). MUST be present in defaults so the user can
+    // freeze the bar without editing the config.
+    assert_eq!(h.pause, "Ctrl+Alt+P");
     // Emergency-exit chord MUST be present in defaults so a user who
     // installs linerule and never edits config still has an escape
-    // path when the overlay wedges them out (it covers the whole
-    // screen and click-through means the binary itself never sees
-    // keypress events).
+    // path when the overlay wedges them out.
     assert_eq!(h.quit, "Ctrl+Alt+Q");
 }

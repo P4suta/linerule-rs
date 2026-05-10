@@ -24,20 +24,16 @@ thiserror         = { workspace = true }
 tracing           = { workspace = true }
 crossbeam-channel = { workspace = true }
 
-# Windows-target-only deps: vello / wgpu / winit / peniko etc. are only
-# referenced from `windows.rs` (gated on `cfg(target_os = "windows")`),
-# so we scope them to the Windows target spec to keep the Linux dev
-# build lean and avoid `cargo shear` flagging them as unused.
+# Windows-target-only deps. The Windows render path uses raw GDI +
+# `UpdateLayeredWindow` (see ADR-0009) — vello / wgpu / peniko /
+# pollster are NOT consumed and intentionally absent. They will come
+# back in v0.2 alongside the macOS / Linux impls if the cross-platform
+# render path goes through Linebender's stack.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows           = { workspace = true }
 winit             = { workspace = true }
-# wgpu is intentionally NOT listed: we use it via `vello::wgpu` so the
-# dependency graph contains exactly one wgpu version (whatever vello pins).
-vello             = { workspace = true }
-peniko            = { workspace = true }
 raw-window-handle = { workspace = true }
 global-hotkey     = { workspace = true }
-pollster          = { workspace = true }
 
 # winit / vello / wgpu / peniko / bytemuck / raw-window-handle /
 # global-hotkey / windows land in task #11 alongside the real Win32

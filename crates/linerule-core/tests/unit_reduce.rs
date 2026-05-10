@@ -165,7 +165,34 @@ fn delta_default_is_no_change() {
     let d = StateDelta::default();
     assert_eq!(d.mode, None);
     assert_eq!(d.visible, None);
+    assert_eq!(d.paused, None);
     assert!(!d.config);
+}
+
+#[test]
+fn toggle_pause_is_self_inverse() {
+    let mut s = fresh();
+    let initial = s.paused;
+    reduce(&mut s, Action::TogglePause);
+    assert_ne!(s.paused, initial, "first TogglePause flips the flag");
+    reduce(&mut s, Action::TogglePause);
+    assert_eq!(s.paused, initial, "second TogglePause restores the flag");
+}
+
+#[test]
+fn toggle_pause_delta_reports_new_paused() {
+    let mut s = fresh();
+    let delta = reduce(&mut s, Action::TogglePause);
+    assert_eq!(delta.paused, Some(s.paused));
+    assert_eq!(delta.mode, None, "paused must not touch mode");
+    assert_eq!(delta.visible, None, "paused must not touch visibility");
+    assert!(!delta.config, "paused must not touch the visual config");
+}
+
+#[test]
+fn fresh_state_is_not_paused() {
+    let s = State::default();
+    assert!(!s.paused, "default State must not start paused");
 }
 
 #[test]

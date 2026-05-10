@@ -148,11 +148,9 @@ insta      = { version = "1.47", features = ["yaml", "json", "filters"] }
 # --- platform impl (Windows real overlay stack) ---
 # Window / event loop
 winit = { version = "0.30", features = ["rwh_06"] }
-# GPU 2D — Linebender stack. wgpu is consumed via vello's re-export
-# (`vello::wgpu`) so the dependency graph holds exactly one version.
-vello  = "0.8"
-peniko = "0.6"
 raw-window-handle = "0.6"
+# vello / peniko are reserved for v0.2 cross-platform — the Windows
+# v0.1 path is GDI + UpdateLayeredWindow (ADR-0009), no GPU 2D needed.
 # System-wide hotkeys
 global-hotkey = "0.8"
 # Win32 FFI (only consumed by linerule-platform on Windows targets)
@@ -163,8 +161,6 @@ windows = { version = "0.62", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
-# Block on async wgpu init without dragging in tokio.
-pollster = "0.4"
 
 # ---------------------------------------------------------------------------
 # Profiles

@@ -167,18 +167,20 @@ impl Rgba {
         a: 0xaa,
     };
 
-    /// Default mask colour. Deliberately a *near*-black (`(8, 8, 8)`)
-    /// rather than pure `(0, 0, 0)` because the Windows v0.1 platform
-    /// uses `LWA_COLORKEY` with pure black as the transparency
-    /// sentinel — see `linerule_platform::windows::COLORKEY_TRANSPARENT`
-    /// and ADR-0009. A pure-black mask region would be silently
-    /// colour-keyed away into a transparent slit. Visually `(8, 8, 8)`
-    /// is indistinguishable from `(0, 0, 0)`.
+    /// Default mask colour: dark near-black at ~85% opacity
+    /// (`alpha = 0xd9 = 217`). 85% is the sweet spot for the
+    /// typoscope effect — the surrounding text is clearly suppressed
+    /// without being so opaque that you lose the layout cues. The
+    /// near-black `(8, 8, 8)` (NOT pure `(0, 0, 0)`) is a hold-over
+    /// from the earlier `LWA_COLORKEY` approach (see ADR-0009 for the
+    /// history); under the current `UpdateLayeredWindow` path pure
+    /// black would also work, but the test suite pins the near-black
+    /// invariant and there is no visual cost to keeping it.
     pub const DEFAULT_MASK: Self = Self {
         r: 8,
         g: 8,
         b: 8,
-        a: 0xcc,
+        a: 0xd9,
     };
 
     /// Compose [`Rgba`] from individual channels.
@@ -638,8 +640,14 @@ fn render_mask(
 pub enum Action {
     /// Advance to the next [`Mode`] in the cycle.
     CycleMode,
-    /// Toggle visibility on / off (orthogonal to cycle).
+    /// Toggle visibility on / off (orthogonal to cycle and pause).
     ToggleVisible,
+    /// Toggle the *paused* flag. While paused the platform layer
+    /// stops feeding fresh cursor positions into the state — the
+    /// overlay stays frozen at the position it had at the moment
+    /// of pause, so the user can examine that exact line / region
+    /// without the bar drifting away.
+    TogglePause,
     /// Increase bar thickness by `step` logical px (saturating at the bound).
     BumpThickness(i16),
     /// Increase opacity by `step` (saturating at the bound).
@@ -660,6 +668,10 @@ pub struct State {
     pub mode: Mode,
     /// Whether the overlay window is currently visible.
     pub visible: bool,
+    /// Whether cursor follow is paused. While `true` the platform layer
+    /// stops updating the rendered cursor position; the overlay
+    /// freezes at the location it had when pause was toggled on.
+    pub paused: bool,
     /// Live overlay configuration (mutated by [`Action::BumpThickness`] etc.).
     pub config: OverlayConfig,
 }
@@ -677,6 +689,8 @@ pub struct StateDelta {
     pub mode: Option<Mode>,
     /// New visibility, if the action toggled visibility.
     pub visible: Option<bool>,
+    /// New pause state, if the action toggled the pause flag.
+    pub paused: Option<bool>,
     /// `true` if visual config (color/thickness/opacity) changed.
     pub config: bool,
 }
@@ -709,6 +723,13 @@ pub fn reduce(state: &mut State, action: Action) -> StateDelta {
             state.visible = !state.visible;
             StateDelta {
                 visible: Some(state.visible),
+                ..Default::default()
+            }
+        }
+        Action::TogglePause => {
+            state.paused = !state.paused;
+            StateDelta {
+                paused: Some(state.paused),
                 ..Default::default()
             }
         }
