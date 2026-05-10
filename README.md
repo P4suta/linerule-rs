@@ -118,8 +118,13 @@ just build           # debug build
 just test            # nextest で全テスト
 just lint            # fmt + clippy + typos + strict-code + shear
 just coverage        # llvm-cov、region 100% で gate
-just build-windows   # cargo-xwin で linux→Windows クロスコンパイル
+just windows-exe     # cargo-xwin で .exe を build → dist/ にコピー(Windows から起動できる)
 ```
+
+> Windows 側から動作確認するときは `just build-windows` ではなく
+> **`just windows-exe`** を使う(後者は `dist/linerule.exe` まで
+> 同期する。`build-windows` だけだと古い `dist/` が残ったまま
+> になり、最新の挙動が試せない)。
 
 ## ライセンス
 
