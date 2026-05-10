@@ -96,7 +96,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@27b8ea9368cf428f0bfe41b0876b1a7e809d9844 # v2.7.1
+        uses: Swatinem/rust-cache@919333daf4640a6fca9dd8b87468dc776e46b44b # v2.7.1
         with:
           key: windows-2022
 
