@@ -16,7 +16,6 @@ use core::marker::PhantomData;
 use smallvec::SmallVec;
 use thiserror::Error;
 
-#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 // ===========================================================================
@@ -47,9 +46,8 @@ pub enum CoreError {
 ///
 /// `0` is excluded because a fully transparent overlay is the [`Mode::Off`]
 /// case and should be expressed structurally, not via a degenerate opacity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "u8", into = "u8"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
 #[non_exhaustive]
 pub struct Opacity(u8);
 
@@ -90,9 +88,8 @@ impl From<Opacity> for u8 {
 }
 
 /// Bar / slit thickness in logical pixels, validated to lie in `1..=512`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(try_from = "u16", into = "u16"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u16", into = "u16")]
 #[non_exhaustive]
 pub struct Thickness(u16);
 
@@ -137,9 +134,8 @@ impl From<Thickness> for u16 {
 }
 
 /// Mask dim level (0 = no dim, 255 = fully opaque dim).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(transparent))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 #[non_exhaustive]
 pub struct DimLevel(pub u8);
 
@@ -149,8 +145,7 @@ impl DimLevel {
 }
 
 /// Sized 8-bit RGBA color.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Rgba {
     /// Red channel.
@@ -172,11 +167,17 @@ impl Rgba {
         a: 0xaa,
     };
 
-    /// Default mask color: black at [`DimLevel::DEFAULT`] darkness.
+    /// Default mask colour. Deliberately a *near*-black (`(8, 8, 8)`)
+    /// rather than pure `(0, 0, 0)` because the Windows v0.1 platform
+    /// uses `LWA_COLORKEY` with pure black as the transparency
+    /// sentinel — see `linerule_platform::windows::COLORKEY_TRANSPARENT`
+    /// and ADR-0009. A pure-black mask region would be silently
+    /// colour-keyed away into a transparent slit. Visually `(8, 8, 8)`
+    /// is indistinguishable from `(0, 0, 0)`.
     pub const DEFAULT_MASK: Self = Self {
-        r: 0,
-        g: 0,
-        b: 0,
+        r: 8,
+        g: 8,
+        b: 8,
         a: 0xcc,
     };
 
@@ -203,12 +204,14 @@ pub struct Physical;
 ///
 /// `S` is a phantom marker — usually [`Logical`] or [`Physical`] — that
 /// prevents accidentally mixing the two systems at the type level.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(bound(serialize = "", deserialize = ""))]
 pub struct Point<S> {
     /// X coordinate.
     pub x: i32,
     /// Y coordinate.
     pub y: i32,
+    #[serde(skip, default)]
     _space: PhantomData<S>,
 }
 
@@ -234,7 +237,8 @@ impl<S> Point<S> {
 
 /// An axis-aligned rectangle in coordinate space `S`, expressed as origin +
 /// non-negative width/height.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(bound(serialize = "", deserialize = ""))]
 pub struct ScreenRect<S> {
     /// Top-left corner.
     pub origin: Point<S>,
@@ -292,9 +296,8 @@ impl<S> ScreenRect<S> {
 /// The four user-visible overlay modes.
 ///
 /// Cycled by [`cycle`] in the order `Off → Bar → Mask → Vertical → Off`.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Mode {
     /// Overlay hidden.
@@ -330,26 +333,22 @@ pub const fn cycle(prev: Mode) -> Mode {
 ///
 /// `linerule-config` wraps this in a fuller user-facing TOML schema that
 /// adds hotkey bindings and other IO-bound concerns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct OverlayConfig {
     /// Bar fill color (also used for the Vertical mode bar).
-    #[cfg_attr(feature = "serde", serde(default = "OverlayConfig::default_bar_color"))]
+    #[serde(default = "OverlayConfig::default_bar_color")]
     pub bar_color: Rgba,
     /// Mask fill color (only the alpha channel is meaningfully used by render).
-    #[cfg_attr(
-        feature = "serde",
-        serde(default = "OverlayConfig::default_mask_color")
-    )]
+    #[serde(default = "OverlayConfig::default_mask_color")]
     pub mask_color: Rgba,
     /// Bar thickness (also slit thickness in Mask mode).
-    #[cfg_attr(feature = "serde", serde(default = "OverlayConfig::default_thickness"))]
+    #[serde(default = "OverlayConfig::default_thickness")]
     pub thickness: Thickness,
     /// Bar opacity override; the alpha in `bar_color` is the source of truth,
     /// `opacity` is exposed for hot-key adjustments.
-    #[cfg_attr(feature = "serde", serde(default = "OverlayConfig::default_opacity"))]
+    #[serde(default = "OverlayConfig::default_opacity")]
     pub opacity: Opacity,
 }
 
@@ -399,7 +398,7 @@ impl Default for OverlayConfig {
 // ===========================================================================
 
 /// Geometric primitive that a [`Layer`] can fill.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Geometry {
     /// Axis-aligned rectangle in logical pixel coordinates.
@@ -419,7 +418,7 @@ impl Geometry {
 }
 
 /// Paint pattern that fills a [`Geometry`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Brush {
     /// Single solid color — alpha is the layer's effective opacity.
@@ -442,7 +441,7 @@ impl Brush {
 
 /// One drawable atom: geometry × brush. Layers are blitted in declaration
 /// order (first → bottom of the z-stack).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Layer {
     /// What shape to fill.
@@ -470,7 +469,7 @@ impl Layer {
 ///
 /// `Off` produces 0 layers, `Bar` and `Vertical` produce 1, `Mask`
 /// produces 2 (the regions above and below the slit).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OverlayFrame {
     /// Layers in z-order (first is drawn first → bottom of the stack).
@@ -645,6 +644,12 @@ pub enum Action {
     BumpThickness(i16),
     /// Increase opacity by `step` (saturating at the bound).
     BumpOpacity(i16),
+    /// Emergency exit. The state machine treats this as a no-op
+    /// ([`reduce`] returns a default [`StateDelta`]); the platform
+    /// layer recognises it specially and tears the event loop down so
+    /// the user can always recover from a stuck overlay even when
+    /// every other hotkey is masked by another app.
+    Quit,
 }
 
 /// Persistent runtime state of the overlay.
@@ -732,5 +737,10 @@ pub fn reduce(state: &mut State, action: Action) -> StateDelta {
                 ..Default::default()
             }
         }
+        // Quit is a side-effect-only action handled at the platform
+        // layer (event loop exit). The state machine sees a no-op so
+        // downstream consumers can pattern-match on Action exhaustively
+        // without special-casing Quit.
+        Action::Quit => StateDelta::default(),
     }
 }

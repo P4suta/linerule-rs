@@ -1,0 +1,32 @@
+---
+source: crates/linerule-core/tests/snapshot_render.rs
+description: Mask centred — top + bottom panels with default mask colour
+expression: frame
+---
+layers:
+  - geometry:
+      Rect:
+        origin:
+          x: 0
+          y: 0
+        width: 1920
+        height: 526
+    brush:
+      Solid:
+        r: 8
+        g: 8
+        b: 8
+        a: 204
+  - geometry:
+      Rect:
+        origin:
+          x: 0
+          y: 554
+        width: 1920
+        height: 526
+    brush:
+      Solid:
+        r: 8
+        g: 8
+        b: 8
+        a: 204

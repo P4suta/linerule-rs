@@ -38,11 +38,15 @@ use peniko::{
     kurbo::{Affine, Rect},
 };
 use raw_window_handle::HasWindowHandle;
-use vello::{AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene, wgpu};
+use vello::{
+    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions, Scene,
+    util::{RenderContext, RenderSurface},
+    wgpu,
+};
 use windows::Win32::{
-    Foundation::{HWND, POINT},
+    Foundation::{COLORREF, HWND, POINT},
     UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GetCursorPos, GetWindowLongPtrW, LWA_ALPHA, SetLayeredWindowAttributes,
+        GWL_EXSTYLE, GetCursorPos, GetWindowLongPtrW, LWA_COLORKEY, SetLayeredWindowAttributes,
         SetWindowLongPtrW, WS_EX_LAYERED, WS_EX_TRANSPARENT,
     },
 };
@@ -127,74 +131,79 @@ fn spawn_hotkey_forwarder(
 }
 
 // ===========================================================================
-// Chord parser — "Ctrl+Alt+R" → global_hotkey::HotKey
+// Chord adapter — `crate::chord::parse` (cross-platform) →
+// `global_hotkey::HotKey` (Windows-bound). Keeping the parser
+// platform-agnostic lets the Linux dev container exercise every
+// corner of the grammar; this adapter is the only OS-specific glue.
 // ===========================================================================
 
 fn parse_chord(chord: &str) -> Result<HotKey, RunError> {
-    let mut mods = Modifiers::empty();
-    let mut code: Option<Code> = None;
-
-    for part in chord.split('+') {
-        let trimmed = part.trim();
-        match trimmed.to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => mods |= Modifiers::CONTROL,
-            "alt" | "option" => mods |= Modifiers::ALT,
-            "shift" => mods |= Modifiers::SHIFT,
-            "super" | "meta" | "win" | "cmd" => mods |= Modifiers::META,
-            _ => {
-                code = Some(parse_code(trimmed).ok_or_else(|| {
-                    RunError::Hotkey(format!("unknown key {trimmed:?} in chord {chord:?}"))
-                })?);
-            }
-        }
-    }
-
-    let code = code.ok_or_else(|| {
-        RunError::Hotkey(format!("chord {chord:?} has no main key (only modifiers)"))
-    })?;
-    Ok(HotKey::new(Some(mods), code))
+    let spec = crate::chord::parse(chord).map_err(|e| RunError::Hotkey(e.to_string()))?;
+    Ok(spec_to_hotkey(spec))
 }
 
-fn parse_code(key: &str) -> Option<Code> {
-    let upper = key.to_ascii_uppercase();
-    match upper.as_str() {
-        // Letters
-        "A" => Some(Code::KeyA),
-        "B" => Some(Code::KeyB),
-        "C" => Some(Code::KeyC),
-        "D" => Some(Code::KeyD),
-        "E" => Some(Code::KeyE),
-        "F" => Some(Code::KeyF),
-        "G" => Some(Code::KeyG),
-        "H" => Some(Code::KeyH),
-        "I" => Some(Code::KeyI),
-        "J" => Some(Code::KeyJ),
-        "K" => Some(Code::KeyK),
-        "L" => Some(Code::KeyL),
-        "M" => Some(Code::KeyM),
-        "N" => Some(Code::KeyN),
-        "O" => Some(Code::KeyO),
-        "P" => Some(Code::KeyP),
-        "Q" => Some(Code::KeyQ),
-        "R" => Some(Code::KeyR),
-        "S" => Some(Code::KeyS),
-        "T" => Some(Code::KeyT),
-        "U" => Some(Code::KeyU),
-        "V" => Some(Code::KeyV),
-        "W" => Some(Code::KeyW),
-        "X" => Some(Code::KeyX),
-        "Y" => Some(Code::KeyY),
-        "Z" => Some(Code::KeyZ),
-        // Punctuation widely used for our defaults
-        "[" => Some(Code::BracketLeft),
-        "]" => Some(Code::BracketRight),
-        "-" | "MINUS" => Some(Code::Minus),
-        "=" | "EQUAL" => Some(Code::Equal),
-        "ARROWUP" | "UP" => Some(Code::ArrowUp),
-        "ARROWDOWN" | "DOWN" => Some(Code::ArrowDown),
-        "ARROWLEFT" | "LEFT" => Some(Code::ArrowLeft),
-        "ARROWRIGHT" | "RIGHT" => Some(Code::ArrowRight),
-        _ => None,
+fn spec_to_hotkey(spec: crate::chord::ChordSpec) -> HotKey {
+    let mut mods = Modifiers::empty();
+    if spec.modifiers.ctrl {
+        mods |= Modifiers::CONTROL;
+    }
+    if spec.modifiers.alt {
+        mods |= Modifiers::ALT;
+    }
+    if spec.modifiers.shift {
+        mods |= Modifiers::SHIFT;
+    }
+    if spec.modifiers.meta {
+        mods |= Modifiers::META;
+    }
+    let mods_arg = if spec.modifiers.any() {
+        Some(mods)
+    } else {
+        None
+    };
+    HotKey::new(mods_arg, key_to_code(spec.key))
+}
+
+fn key_to_code(key: crate::chord::KeyCode) -> Code {
+    match key {
+        crate::chord::KeyCode::Letter(b'A') => Code::KeyA,
+        crate::chord::KeyCode::Letter(b'B') => Code::KeyB,
+        crate::chord::KeyCode::Letter(b'C') => Code::KeyC,
+        crate::chord::KeyCode::Letter(b'D') => Code::KeyD,
+        crate::chord::KeyCode::Letter(b'E') => Code::KeyE,
+        crate::chord::KeyCode::Letter(b'F') => Code::KeyF,
+        crate::chord::KeyCode::Letter(b'G') => Code::KeyG,
+        crate::chord::KeyCode::Letter(b'H') => Code::KeyH,
+        crate::chord::KeyCode::Letter(b'I') => Code::KeyI,
+        crate::chord::KeyCode::Letter(b'J') => Code::KeyJ,
+        crate::chord::KeyCode::Letter(b'K') => Code::KeyK,
+        crate::chord::KeyCode::Letter(b'L') => Code::KeyL,
+        crate::chord::KeyCode::Letter(b'M') => Code::KeyM,
+        crate::chord::KeyCode::Letter(b'N') => Code::KeyN,
+        crate::chord::KeyCode::Letter(b'O') => Code::KeyO,
+        crate::chord::KeyCode::Letter(b'P') => Code::KeyP,
+        crate::chord::KeyCode::Letter(b'Q') => Code::KeyQ,
+        crate::chord::KeyCode::Letter(b'R') => Code::KeyR,
+        crate::chord::KeyCode::Letter(b'S') => Code::KeyS,
+        crate::chord::KeyCode::Letter(b'T') => Code::KeyT,
+        crate::chord::KeyCode::Letter(b'U') => Code::KeyU,
+        crate::chord::KeyCode::Letter(b'V') => Code::KeyV,
+        crate::chord::KeyCode::Letter(b'W') => Code::KeyW,
+        crate::chord::KeyCode::Letter(b'X') => Code::KeyX,
+        crate::chord::KeyCode::Letter(b'Y') => Code::KeyY,
+        crate::chord::KeyCode::Letter(b'Z') => Code::KeyZ,
+        // Letter() always carries an ASCII uppercase byte by parser
+        // construction; any other byte would be a parser bug, not a
+        // runtime concern.
+        crate::chord::KeyCode::Letter(_) => Code::KeyR,
+        crate::chord::KeyCode::BracketLeft => Code::BracketLeft,
+        crate::chord::KeyCode::BracketRight => Code::BracketRight,
+        crate::chord::KeyCode::Minus => Code::Minus,
+        crate::chord::KeyCode::Equal => Code::Equal,
+        crate::chord::KeyCode::ArrowUp => Code::ArrowUp,
+        crate::chord::KeyCode::ArrowDown => Code::ArrowDown,
+        crate::chord::KeyCode::ArrowLeft => Code::ArrowLeft,
+        crate::chord::KeyCode::ArrowRight => Code::ArrowRight,
     }
 }
 
@@ -202,26 +211,57 @@ fn parse_code(key: &str) -> Option<Code> {
 // Win32 click-through + cursor poll
 // ===========================================================================
 
+/// The Win32 colour key. Pixels rendered with this exact RGB value
+/// become fully transparent under the layered-window compositor; every
+/// other pixel is fully opaque. We picked PURE BLACK because vello's
+/// `Color::TRANSPARENT` (the unrendered region of every frame) maps
+/// to `(0, 0, 0, *)` after blitting — automatic background hole-out.
+///
+/// Colours we *do* want to draw must therefore avoid pure black; the
+/// mask region uses `Rgba::DEFAULT_MASK` (a near-black) so it survives
+/// the colour-key test as opaque mask. See `linerule_core::Rgba`.
+pub(crate) const COLORKEY_TRANSPARENT: COLORREF = COLORREF(0x00_00_00);
+
 #[expect(
     unsafe_code,
-    reason = "Win32 FFI: SetWindowLongPtrW / SetLayeredWindowAttributes"
+    reason = "Win32 FFI: SetWindowLongPtrW + SetLayeredWindowAttributes for click-through + colour-key transparency"
 )]
 fn apply_click_through(window: &Window) -> Result<(), RunError> {
+    // v0.1 transparency strategy — see ADR-0009.
+    //
+    // wgpu's `CreateSwapChainForHwnd` path on DX12 does NOT route through
+    // Direct Composition, so the swapchain's `CompositeAlphaMode` is
+    // ignored by DWM for layered windows. The only Win32 mechanism that
+    // produces transparent pixels in this configuration is
+    // `LWA_COLORKEY`: pixels rendered with the colour key become fully
+    // transparent, every other pixel is fully opaque.
+    //
+    // We pick `COLORKEY_TRANSPARENT = pure black` because vello's
+    // `Color::TRANSPARENT` clears unrendered regions to `(0, 0, 0, 0)`,
+    // which the blitter writes into the swapchain as `(0, 0, 0)` after
+    // alpha drops. Mask regions use `Rgba::DEFAULT_MASK` (a near-black
+    // shade chosen to NOT match the colour key) so they survive as an
+    // opaque dim.
+    //
+    // `WS_EX_LAYERED + WS_EX_TRANSPARENT` together give per-pixel
+    // colour-key transparency AND mouse pass-through.
+    //
+    // True per-pixel alpha (translucent bar / dim) requires Direct
+    // Composition, which wgpu does not yet expose. v0.2 will lift this.
     let hwnd = win32_hwnd(window)?;
-    // SAFETY: `hwnd` came from `winit::Window::window_handle()` and is a
-    // valid HWND for the lifetime of the window. `GWL_EXSTYLE` is the
-    // standard window-long index for extended styles. `SetWindowLongPtrW`
-    // returns the previous value (0 on first call); we OR our flags into
-    // it. Both APIs require running on the window's owner thread, which
-    // is the event-loop thread invoking this.
+    // SAFETY: `hwnd` came from `winit::Window::window_handle()` and is
+    // valid for the lifetime of the window. `GWL_EXSTYLE` is the
+    // standard window-long index for extended styles.
+    // `SetWindowLongPtrW` / `GetWindowLongPtrW` require running on the
+    // window's owner thread, which is the event-loop thread here.
     let prev_exstyle = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
     let new_exstyle = prev_exstyle | (WS_EX_LAYERED.0 as isize) | (WS_EX_TRANSPARENT.0 as isize);
     // SAFETY: see GetWindowLongPtrW above.
     let prev = unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_exstyle) };
     if prev == 0 {
-        // Per MS docs, 0 may indicate either "previous value was 0" or an
-        // error. We disambiguate via a follow-up read.
-        // SAFETY: same window / index validity argument as above.
+        // Per MS docs, 0 may mean "previous was 0" or "error".
+        // Disambiguate via a follow-up read.
+        // SAFETY: same window / index validity as above.
         let confirmed = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
         if confirmed == 0 {
             return Err(RunError::ClickThrough(
@@ -229,16 +269,14 @@ fn apply_click_through(window: &Window) -> Result<(), RunError> {
             ));
         }
     }
-    // SAFETY: `hwnd` valid; `LWA_ALPHA` is a stable semantic constant;
-    // alpha = 255 means "let per-pixel alpha from vello drive blending".
+    // SAFETY: `hwnd` valid; `LWA_COLORKEY` is a stable semantic flag;
+    // `bAlpha` is unused under colour-key-only mode but the Win32 ABI
+    // requires a value (we pass 255 which would mean "fully opaque" if
+    // `LWA_ALPHA` were also set — it is not).
     unsafe {
-        SetLayeredWindowAttributes(
-            hwnd,
-            windows::Win32::Foundation::COLORREF(0),
-            255,
-            LWA_ALPHA,
-        )
-        .map_err(|e| RunError::ClickThrough(format!("SetLayeredWindowAttributes: {e}")))?;
+        SetLayeredWindowAttributes(hwnd, COLORKEY_TRANSPARENT, 255, LWA_COLORKEY).map_err(|e| {
+            RunError::ClickThrough(format!("SetLayeredWindowAttributes(LWA_COLORKEY): {e}"))
+        })?;
     }
     Ok(())
 }
@@ -273,18 +311,18 @@ fn win32_hwnd(window: &Window) -> Result<HWND, RunError> {
 }
 
 // ===========================================================================
-// Vello / wgpu rendering
+// Vello / wgpu rendering — uses the upstream `vello::util::RenderContext`
+// + `RenderSurface` helpers, which own the offscreen `Rgba8Unorm`
+// storage texture vello requires AND a `wgpu::util::TextureBlitter` that
+// blits it onto the swapchain (handling the Bgra8Unorm/Rgba8Unorm
+// format mismatch DX12 forces). Documented at
+// https://docs.rs/vello/0.8.0/vello/util/struct.RenderSurface.html
 // ===========================================================================
 
 struct Surface {
     window: Arc<Window>,
-    // wgpu::Instance is intentionally NOT held — `create_surface`
-    // already binds the surface to its own backend; we don't need to
-    // keep the instance alive afterwards.
-    wgpu_surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
+    render_cx: RenderContext,
+    render_surface: RenderSurface<'static>,
     renderer: Renderer,
     scene: Scene,
     monitor: ScreenRect<Logical>,
@@ -293,59 +331,35 @@ struct Surface {
 
 impl Surface {
     fn new(window: Arc<Window>) -> Result<Self, RunError> {
+        pollster::block_on(Self::new_async(window))
+    }
+
+    async fn new_async(window: Arc<Window>) -> Result<Self, RunError> {
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
 
-        let monitor = ScreenRect::<Logical>::new(
-            Point::<Logical>::new(0, 0),
-            (size.width as f32 / scale).round() as u32,
-            (size.height as f32 / scale).round() as u32,
-        );
+        let mut render_cx = RenderContext::new();
+        let render_surface = render_cx
+            .create_surface(
+                window.clone(),
+                size.width.max(1),
+                size.height.max(1),
+                wgpu::PresentMode::AutoVsync,
+            )
+            .await
+            .map_err(|e| RunError::Renderer(format!("RenderContext::create_surface: {e}")))?;
 
-        let instance = wgpu::Instance::default();
-        let wgpu_surface = instance
-            .create_surface(window.clone())
-            .map_err(|e| RunError::Renderer(format!("create_surface: {e}")))?;
+        // NOTE: we do NOT override `render_surface.config.alpha_mode`.
+        // wgpu's `CreateSwapChainForHwnd` path on DX12 ignores
+        // `CompositeAlphaMode` for layered windows — DWM only honours
+        // alpha when the swapchain is created via Direct Composition
+        // (`CreateSwapChainForComposition`), which wgpu does not yet
+        // expose. v0.1 transparency goes through the `LWA_COLORKEY`
+        // path applied in `apply_click_through`. See ADR-0009.
 
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&wgpu_surface),
-            force_fallback_adapter: false,
-        }))
-        .map_err(|e| RunError::Renderer(format!("request_adapter: {e}")))?;
-
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("linerule-overlay-device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
-            memory_hints: wgpu::MemoryHints::Performance,
-            trace: wgpu::Trace::Off,
-            experimental_features: wgpu::ExperimentalFeatures::default(),
-        }))
-        .map_err(|e| RunError::Renderer(format!("request_device: {e}")))?;
-
-        let surface_format = wgpu_surface
-            .get_capabilities(&adapter)
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb);
-
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
-            view_formats: Vec::new(),
-            desired_maximum_frame_latency: 2,
-        };
-        wgpu_surface.configure(&device, &config);
-
+        let dev_handle = &render_cx.devices[render_surface.dev_id];
         let renderer = Renderer::new(
-            &device,
+            &dev_handle.device,
             RendererOptions {
                 use_cpu: false,
                 antialiasing_support: AaSupport {
@@ -359,12 +373,16 @@ impl Surface {
         )
         .map_err(|e| RunError::Renderer(format!("Renderer::new: {e}")))?;
 
+        let monitor = ScreenRect::<Logical>::new(
+            Point::<Logical>::new(0, 0),
+            (size.width as f32 / scale).round() as u32,
+            (size.height as f32 / scale).round() as u32,
+        );
+
         Ok(Self {
             window,
-            wgpu_surface,
-            device,
-            queue,
-            config,
+            render_cx,
+            render_surface,
             renderer,
             scene: Scene::new(),
             monitor,
@@ -373,9 +391,8 @@ impl Surface {
     }
 
     fn resize(&mut self, width: u32, height: u32) {
-        self.config.width = width.max(1);
-        self.config.height = height.max(1);
-        self.wgpu_surface.configure(&self.device, &self.config);
+        self.render_cx
+            .resize_surface(&mut self.render_surface, width.max(1), height.max(1));
         self.monitor = ScreenRect::<Logical>::new(
             Point::<Logical>::new(0, 0),
             (width as f32 / self.dpi).round() as u32,
@@ -389,30 +406,48 @@ impl Surface {
             stamp_layer(&mut self.scene, layer);
         }
 
-        let surface_texture = self
-            .wgpu_surface
-            .get_current_texture()
-            .map_err(|e| RunError::Renderer(format!("get_current_texture: {e}")))?;
+        let dev_handle = &self.render_cx.devices[self.render_surface.dev_id];
+        let device = &dev_handle.device;
+        let queue = &dev_handle.queue;
 
-        let view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
+        // 1. Render vello scene into the offscreen Rgba8Unorm storage texture
+        //    that vello requires.
         self.renderer
             .render_to_texture(
-                &self.device,
-                &self.queue,
+                device,
+                queue,
                 &self.scene,
-                &view,
+                &self.render_surface.target_view,
                 &RenderParams {
                     base_color: Color::TRANSPARENT,
-                    width: self.config.width,
-                    height: self.config.height,
+                    width: self.render_surface.config.width,
+                    height: self.render_surface.config.height,
                     antialiasing_method: AaConfig::Area,
                 },
             )
             .map_err(|e| RunError::Renderer(format!("render_to_texture: {e}")))?;
 
+        // 2. Acquire a swapchain frame, then blit the offscreen target into
+        //    it via the format-aware TextureBlitter (handles Rgba8↔Bgra8).
+        let surface_texture = self
+            .render_surface
+            .surface
+            .get_current_texture()
+            .map_err(|e| RunError::Renderer(format!("get_current_texture: {e}")))?;
+        let surface_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("linerule-blit-overlay"),
+        });
+        self.render_surface.blitter.copy(
+            device,
+            &mut encoder,
+            &self.render_surface.target_view,
+            &surface_view,
+        );
+        queue.submit(Some(encoder.finish()));
         surface_texture.present();
         Ok(())
     }
@@ -527,8 +562,16 @@ impl ApplicationHandler<UserMessage> for OverlayApp {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserMessage) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserMessage) {
         match event {
+            // Emergency-exit hotkey — bypasses the state machine and
+            // tears the event loop down. Always responsive, even if
+            // the renderer is wedged or the user lost track of which
+            // mode they're in.
+            UserMessage::HotkeyAction(Action::Quit) => {
+                tracing::info!("Quit hotkey received — exiting event loop");
+                event_loop.exit();
+            }
             UserMessage::HotkeyAction(action) => {
                 let _delta = reduce(&mut self.state, action);
                 if let Some(s) = self.surface.as_ref() {

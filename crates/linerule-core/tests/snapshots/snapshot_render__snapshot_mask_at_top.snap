@@ -1,0 +1,32 @@
+---
+source: crates/linerule-core/tests/snapshot_render.rs
+description: Mask near top — top panel collapses to ~0 height
+expression: frame
+---
+layers:
+  - geometry:
+      Rect:
+        origin:
+          x: 0
+          y: 0
+        width: 1920
+        height: 0
+    brush:
+      Solid:
+        r: 8
+        g: 8
+        b: 8
+        a: 204
+  - geometry:
+      Rect:
+        origin:
+          x: 0
+          y: 14
+        width: 1920
+        height: 1066
+    brush:
+      Solid:
+        r: 8
+        g: 8
+        b: 8
+        a: 204

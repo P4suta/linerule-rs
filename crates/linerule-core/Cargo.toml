@@ -21,14 +21,9 @@ doctest = false
 workspace = true
 
 [dependencies]
-smallvec  = { workspace = true }
+smallvec  = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
-serde     = { workspace = true, optional = true }
-
-[features]
-default = []
-serde   = ["dep:serde", "smallvec/serde"]
+serde     = { workspace = true }
 
 [dev-dependencies]
-# bolero / insta / pretty_assertions are added back when the first
-# property / snapshot / pretty-diff test lands (ADR-0008 test strategy).
+insta = { workspace = true }

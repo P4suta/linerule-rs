@@ -49,6 +49,11 @@ pub struct HotkeyMap {
     pub more_opaque: String,
     /// Combo for `Action::BumpOpacity(-5)`.
     pub less_opaque: String,
+    /// Combo for `Action::Quit`. The user's emergency-exit path when
+    /// the always-on-top overlay covers the whole screen and another
+    /// hotkey collision wedges them out. Defaults to `Ctrl+Alt+Q`,
+    /// chosen NOT to clash with common system bindings.
+    pub quit: String,
 }
 
 impl Default for HotkeyMap {
@@ -60,6 +65,7 @@ impl Default for HotkeyMap {
             thinner: "Ctrl+Alt+[".into(),
             more_opaque: "Ctrl+Alt+=".into(),
             less_opaque: "Ctrl+Alt+-".into(),
+            quit: "Ctrl+Alt+Q".into(),
         }
     }
 }

@@ -175,3 +175,20 @@ fn state_default_uses_overlay_config_default() {
     assert_eq!(s.mode, Mode::Off);
     assert!(!s.visible);
 }
+
+#[test]
+fn quit_is_a_state_machine_no_op() {
+    // `Action::Quit` is a side-effect-only action handled by the
+    // platform layer (event-loop tear-down). The state machine MUST
+    // treat it as a no-op so the OverlayApp can pattern-match on
+    // Action exhaustively without special-casing Quit.
+    let mut s = fresh();
+    let snapshot = s;
+    let delta = reduce(&mut s, Action::Quit);
+    assert_eq!(s, snapshot, "Quit must not mutate State");
+    assert_eq!(
+        delta,
+        StateDelta::default(),
+        "Quit must produce a default StateDelta"
+    );
+}

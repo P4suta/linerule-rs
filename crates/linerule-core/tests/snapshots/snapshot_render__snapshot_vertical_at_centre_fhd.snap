@@ -1,0 +1,19 @@
+---
+source: crates/linerule-core/tests/snapshot_render.rs
+description: Vertical at FHD centre — full-height bar at cursor X
+expression: frame
+---
+layers:
+  - geometry:
+      Rect:
+        origin:
+          x: 946
+          y: 0
+        width: 28
+        height: 1080
+    brush:
+      Solid:
+        r: 255
+        g: 235
+        b: 59
+        a: 170

@@ -102,7 +102,24 @@ fn rgba_default_bar_is_warm_yellow() {
 }
 
 #[test]
-fn rgba_default_mask_is_translucent_black() {
-    let mask = Rgba::DEFAULT_MASK;
-    assert_eq!((mask.r, mask.g, mask.b, mask.a), (0, 0, 0, 0xcc));
+fn rgba_default_mask_is_near_black_not_pure_black() {
+    // Pure black is the Windows colour-key sentinel
+    // (`linerule_platform::windows::COLORKEY_TRANSPARENT`). The mask
+    // colour MUST avoid `(0, 0, 0)` or its dim regions become
+    // transparent slits in the Win32 layered window.
+    let m = Rgba::DEFAULT_MASK;
+    assert!(
+        (m.r, m.g, m.b) != (0, 0, 0),
+        "DEFAULT_MASK must NOT be pure black (would collide with the LWA_COLORKEY sentinel); got ({}, {}, {})",
+        m.r,
+        m.g,
+        m.b,
+    );
+    assert!(
+        m.r < 64 && m.g < 64 && m.b < 64,
+        "DEFAULT_MASK should still be a dark shade for the typoscope effect; got ({}, {}, {})",
+        m.r,
+        m.g,
+        m.b,
+    );
 }

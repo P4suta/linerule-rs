@@ -137,5 +137,6 @@ fn hotkey_bindings(map: &HotkeyMap) -> Vec<(String, Action)> {
         (map.thinner.clone(), Action::BumpThickness(-2)),
         (map.more_opaque.clone(), Action::BumpOpacity(15)),
         (map.less_opaque.clone(), Action::BumpOpacity(-15)),
+        (map.quit.clone(), Action::Quit),
     ]
 }

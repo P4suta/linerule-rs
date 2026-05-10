@@ -244,6 +244,8 @@ pub trait HotkeyRelease: Send + Sync + 'static {}
 // Per-OS modules
 // ===========================================================================
 
+pub mod chord;
+
 #[cfg(target_os = "windows")]
 pub mod windows;
 

@@ -141,11 +141,9 @@ tracing-error      = "0.2"
 clap = { version = "4.6", features = ["derive", "wrap_help", "env", "color", "cargo"] }
 
 # --- testing ---
-# bolero / insta / pretty_assertions / tempfile are referenced by ADR-0008
-# (test strategy) but only re-enabled here once a test actually consumes
-# them — cargo-shear flags declared-but-unused workspace deps.
 assert_cmd = "2.0"
 predicates = "3.1"
+insta      = { version = "1.47", features = ["yaml", "json", "filters"] }
 
 # --- platform impl (Windows real overlay stack) ---
 # Window / event loop

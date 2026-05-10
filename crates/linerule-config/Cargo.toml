@@ -19,7 +19,7 @@ doctest = false
 workspace = true
 
 [dependencies]
-linerule-core = { workspace = true, features = ["serde"] }
+linerule-core = { workspace = true }
 serde         = { workspace = true }
 toml          = { workspace = true }
 thiserror     = { workspace = true }

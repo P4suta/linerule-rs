@@ -1,0 +1,19 @@
+---
+source: crates/linerule-core/tests/snapshot_render.rs
+description: Bar at FHD centre with default thickness/colour
+expression: frame
+---
+layers:
+  - geometry:
+      Rect:
+        origin:
+          x: 0
+          y: 526
+        width: 1920
+        height: 28
+    brush:
+      Solid:
+        r: 255
+        g: 235
+        b: 59
+        a: 170
