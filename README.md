@@ -1,5 +1,8 @@
 # linerule — デジタル定規
 
+[![CI](https://github.com/P4suta/linerule-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/P4suta/linerule-rs/actions/workflows/ci.yml)
+[![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#%E3%83%A9%E3%82%A4%E3%82%BB%E3%83%B3%E3%82%B9)
+
 画面の上に**透明な薄い定規**を浮かせて、マウスカーソルにくっついて
 動かすだけのアプリです。長い文章を読んでいるときに「いま何行目を
 読んでいたっけ?」となるのを防ぎます。
