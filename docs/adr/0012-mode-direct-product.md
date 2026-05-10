@@ -1,9 +1,19 @@
-# 0012. Mode = Off | Active(Shape, Orientation) — direct-product decomposition
+# 0012. Mode = Off | Mask(Orientation) — orientation-parametric typoscope
 
-- Status: accepted
+- Status: amended 2026-05-11 (originally proposed `Active(Shape, Orientation)`)
 - Date: 2026-05-11
 - Deciders: @P4suta
 - Tags: architecture, types, render
+
+> **Amendment.** The original decision below proposed
+> `Mode = Off | Active(Shape × Orientation)` with `Shape ∈ {Bar, Mask}`.
+> User feedback after live testing was that the bar variant added no
+> reading-aid value the mask did not already provide ("マスクで周りを
+> 暗くするのがマジでいいからそれだけでいいかも"), so `Shape` was
+> retired. The remaining structure — orientation-parametric mask — is
+> the natural collapse: `Mode = Off | Mask(Orientation)`. The
+> *axis-symmetric render pipeline* (project → slit → lift → paint)
+> survives unchanged; it now dispatches on `Orientation` only.
 
 ## Context
 

@@ -583,7 +583,7 @@ impl ApplicationHandler<UserMessage> for OverlayApp {
         //      so a fresh process always starts visible (the user can
         //      always re-pause via Ctrl+Alt+P).
         let mode = match self.state.lifecycle.mode() {
-            Mode::Off => Mode::MASK,
+            Mode::Off => Mode::HORIZONTAL_MASK,
             other => other,
         };
         self.state.lifecycle = Lifecycle::Active(mode);
@@ -662,7 +662,7 @@ impl OverlayApp {
                 mode,
                 self.last_cursor,
                 self.monitor_logical,
-                &self.state.config,
+                self.state.config,
             )
         } else {
             OverlayFrame::empty()

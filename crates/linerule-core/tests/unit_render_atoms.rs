@@ -1,10 +1,11 @@
 //! Cells for the small render-output ADT atoms (`Geometry`, `Brush`,
-//! `Layer`, `OverlayFrame`). These are exercised indirectly through
-//! `render` / `solid_layer_bounds`, but the explicit cells pin the
-//! constructor + projection contracts so the surface stays auditable.
+//! `Layer`, `OverlayFrame`, `Orientation`). These are exercised
+//! indirectly through `render` / `solid_layer_bounds`, but the
+//! explicit cells pin the constructor + projection contracts so the
+//! surface stays auditable.
 
 use linerule_core::{
-    Brush, Geometry, Layer, Logical, OverlayFrame, Point, Rgba, ScreenRect, Shape,
+    Brush, Geometry, Layer, Logical, Orientation, OverlayFrame, Point, Rgba, ScreenRect,
 };
 
 fn rect_at_origin() -> ScreenRect<Logical> {
@@ -31,8 +32,9 @@ fn brush_solid_alpha_is_the_color_alpha() {
 
 #[test]
 fn brush_solid_alpha_zero_is_preserved() {
-    // alpha=0 cannot enter via Opacity (which rejects 0), but can
-    // enter via a raw Rgba; the brush must report it faithfully.
+    // alpha=0 cannot enter via `mask_color.a` after a `BumpOpacity`
+    // (clamped to 1..=255), but can enter via a raw `Rgba`; the
+    // brush must report it faithfully.
     let b = Brush::Solid(Rgba::new(255, 255, 255, 0));
     assert_eq!(b.alpha(), 0);
 }
@@ -64,11 +66,9 @@ fn overlay_frame_default_is_empty() {
 }
 
 #[test]
-fn shape_and_orientation_are_independently_constructible() {
+fn orientation_variants_are_independently_constructible() {
     // Just exercises the variants exist and round-trip through PartialEq;
-    // the lattice these axes form is verified in property_render.rs.
-    let _ = Shape::Bar;
-    let _ = Shape::Mask;
-    let _ = linerule_core::Orientation::Horizontal;
-    let _ = linerule_core::Orientation::Vertical;
+    // the lattice this axis forms is verified in property_render.rs.
+    let _ = Orientation::Horizontal;
+    let _ = Orientation::Vertical;
 }

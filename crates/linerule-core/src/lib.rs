@@ -4,8 +4,8 @@
 //!
 //! This crate is IO-free and platform-free. It owns the type vocabulary
 //! the rest of the workspace builds on: validating newtypes,
-//! phantom-typed coordinate spaces, the [`Mode`] direct-product ADT
-//! (`Off | Active(Shape, Orientation)`), the [`Lifecycle`] sum type
+//! phantom-typed coordinate spaces, the [`Mode`] sum type
+//! (`Off | Mask(Orientation)`), the [`Lifecycle`] sum type
 //! (`Active(Mode) | Paused(Mode)`), the [`render`] pure function, and
 //! the [`reduce`] state-transition function.
 //!
@@ -31,10 +31,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Error, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CoreError {
-    /// Opacity must be in `1..=255`.
-    #[error("opacity must be in 1..=255 (got {0})")]
-    Opacity(u16),
-
     /// Thickness must be in `1..=512` logical pixels.
     #[error("thickness must be in 1..=512 logical px (got {0})")]
     Thickness(u32),
@@ -44,51 +40,6 @@ pub enum CoreError {
 // Validating newtypes
 // ===========================================================================
 
-/// Alpha-channel opacity, validated to lie in `1..=255`.
-///
-/// `0` is excluded because a fully transparent overlay is the [`Mode::Off`]
-/// case and should be expressed structurally, not via a degenerate opacity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "u8", into = "u8")]
-#[non_exhaustive]
-pub struct Opacity(u8);
-
-impl Opacity {
-    /// A reasonable default (`#aa`, ~67%).
-    pub const DEFAULT: Self = Self(0xaa);
-
-    /// Construct an [`Opacity`] from a raw `u8`.
-    ///
-    /// # Errors
-    /// Returns [`CoreError::Opacity`] if `value == 0`.
-    pub const fn new(value: u8) -> Result<Self, CoreError> {
-        if value == 0 {
-            Err(CoreError::Opacity(value as u16))
-        } else {
-            Ok(Self(value))
-        }
-    }
-
-    /// Raw alpha channel value.
-    #[must_use]
-    pub const fn get(self) -> u8 {
-        self.0
-    }
-}
-
-impl TryFrom<u8> for Opacity {
-    type Error = CoreError;
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<Opacity> for u8 {
-    fn from(value: Opacity) -> Self {
-        value.0
-    }
-}
-
 /// Bar / slit thickness in logical pixels, validated to lie in `1..=512`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "u16", into = "u16")]
@@ -96,7 +47,7 @@ impl From<Opacity> for u8 {
 pub struct Thickness(u16);
 
 impl Thickness {
-    /// Default bar thickness (28 logical px ≈ a typical body line height).
+    /// Default mask-slit thickness (28 logical px ≈ a typical body line height).
     pub const DEFAULT: Self = Self(28);
 
     /// Maximum permitted thickness in logical pixels.
@@ -150,14 +101,6 @@ pub struct Rgba {
 }
 
 impl Rgba {
-    /// Default bar color: warm yellow with [`Opacity::DEFAULT`] alpha.
-    pub const DEFAULT_BAR: Self = Self {
-        r: 0xff,
-        g: 0xeb,
-        b: 0x3b,
-        a: 0xaa,
-    };
-
     /// Default mask colour: dark near-black at ~85% opacity
     /// (`alpha = 0xd9 = 217`). 85% is the sweet spot for the
     /// typoscope effect — the surrounding text is clearly suppressed
@@ -283,55 +226,42 @@ impl<S> ScreenRect<S> {
 }
 
 // ===========================================================================
-// Mode — direct-product decomposition (cf. ADR-0012)
+// Mode — Off | Mask(Orientation)
 //
-// Mode = Off | Active(Shape, Orientation)
+// The user picked "mask everything except a slit at the cursor"
+// (typoscope) as the only reading-aid worth keeping. The bar variant
+// has been retired. `Orientation` parametrises which screen axis the
+// slit runs along: horizontal for left-to-right text, vertical for
+// 縦書き (vertical Japanese / Chinese).
 //
-// `Shape` and `Orientation` are independent axes:
-//   - `Shape       ∈ {Bar, Mask}`           — what to draw
-//   - `Orientation ∈ {Horizontal, Vertical}` — along which axis
-//
-// The four `Active(_, _)` combinations cover the full reading-aid
-// grid; `cycle` traverses the lattice in a fixed canonical order;
-// `render` dispatches on the (shape, orientation) pair through a single
+// `cycle` traverses the lattice in a fixed canonical order; `render`
+// dispatches on the (mode, orientation) pair through a single
 // axis-symmetric pipeline (project → slit → lift → paint) so adding a
-// new orientation or shape variant is local.
+// new orientation is local.
 // ===========================================================================
 
-/// What to draw on the primary axis: a single solid line, or the
-/// complement (everything *except* a slit) painted with a dim mask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum Shape {
-    /// Single bar at the cursor's primary-axis projection.
-    Bar,
-    /// Typoscope: dim everything except a slit at the cursor's projection.
-    Mask,
-}
-
 /// Reading orientation. Selects which screen axis is the *primary*
-/// axis (the one that gets the slit / bar) and which is the secondary
+/// axis (the one that gets the slit) and which is the secondary
 /// (the one that gets stretched to monitor extent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Orientation {
     /// Left-to-right text. Primary axis = Y (vertical screen axis);
-    /// the bar / slit spans the full monitor width.
+    /// the slit spans the full monitor width.
     Horizontal,
-    /// 縦書き / vertical Japanese. Primary axis = X; the bar / slit
-    /// spans the full monitor height.
+    /// 縦書き / vertical Japanese. Primary axis = X; the slit spans
+    /// the full monitor height.
     Vertical,
 }
 
 /// The user-visible overlay mode.
 ///
-/// Decomposed as a direct product on the `Active` arm so the four
-/// drawn modes share a single render pipeline (cf. ADR-0012). `Off`
-/// is structurally separate from `Lifecycle::Paused(_)`: `Off` is a
-/// deliberate cycle position, while `Paused` is the orthogonal
-/// "temporarily silenced" lifecycle state.
+/// Either off (cycle position meaning "draw nothing") or a typoscope
+/// mask along an [`Orientation`]. `Off` is structurally separate from
+/// `Lifecycle::Paused(_)`: `Off` is a deliberate cycle position,
+/// while `Paused` is the orthogonal "temporarily silenced" lifecycle
+/// state.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -339,34 +269,28 @@ pub enum Mode {
     /// Overlay hidden — explicit cycle position meaning "show nothing".
     #[default]
     Off,
-    /// Overlay drawing the (shape, orientation) pair.
-    Active(Shape, Orientation),
+    /// Mask (typoscope) overlay along the given orientation.
+    Mask(Orientation),
 }
 
 impl Mode {
-    /// Horizontal bar — `Active(Bar, Horizontal)`.
-    pub const BAR: Self = Self::Active(Shape::Bar, Orientation::Horizontal);
-    /// Horizontal mask (typoscope) — `Active(Mask, Horizontal)`.
-    pub const MASK: Self = Self::Active(Shape::Mask, Orientation::Horizontal);
-    /// Vertical bar — `Active(Bar, Vertical)`.
-    pub const VERTICAL_BAR: Self = Self::Active(Shape::Bar, Orientation::Vertical);
-    /// Vertical mask (縦書き typoscope) — `Active(Mask, Vertical)`.
-    pub const VERTICAL_MASK: Self = Self::Active(Shape::Mask, Orientation::Vertical);
+    /// Horizontal mask (typoscope for left-to-right text).
+    pub const HORIZONTAL_MASK: Self = Self::Mask(Orientation::Horizontal);
+    /// Vertical mask (縦書き typoscope for vertical Japanese / Chinese).
+    pub const VERTICAL_MASK: Self = Self::Mask(Orientation::Vertical);
 }
 
 /// Advance to the next mode in the canonical cycle.
 ///
-/// `Off → Bar → Mask → VerticalBar → VerticalMask → Off`. The cycle
-/// has period 5; verified by property test `cycle⁵ ≡ id` in
+/// `Off → HorizontalMask → VerticalMask → Off`. The cycle has period
+/// 3; verified by property test `cycle³ ≡ id` in
 /// `tests/property_cycle.rs`.
 #[must_use]
 pub const fn cycle(prev: Mode) -> Mode {
     match prev {
-        Mode::Off => Mode::BAR,
-        Mode::Active(Shape::Bar, Orientation::Horizontal) => Mode::MASK,
-        Mode::Active(Shape::Mask, Orientation::Horizontal) => Mode::VERTICAL_BAR,
-        Mode::Active(Shape::Bar, Orientation::Vertical) => Mode::VERTICAL_MASK,
-        Mode::Active(Shape::Mask, Orientation::Vertical) => Mode::Off,
+        Mode::Off => Mode::HORIZONTAL_MASK,
+        Mode::Mask(Orientation::Horizontal) => Mode::VERTICAL_MASK,
+        Mode::Mask(Orientation::Vertical) => Mode::Off,
     }
 }
 
@@ -449,43 +373,31 @@ impl Lifecycle {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct OverlayConfig {
-    /// Bar fill color (also used for the Vertical mode bar).
-    #[serde(default = "OverlayConfig::default_bar_color")]
-    pub bar_color: Rgba,
-    /// Mask fill color (only the alpha channel is meaningfully used by render).
+    /// Mask fill color. The alpha channel is the typoscope dimming
+    /// strength; the user adjusts it live with the
+    /// [`Action::BumpOpacity`] hotkey.
     #[serde(default = "OverlayConfig::default_mask_color")]
     pub mask_color: Rgba,
-    /// Bar thickness (also slit thickness in Mask mode).
+    /// Slit thickness — how tall (Horizontal) / wide (Vertical) the
+    /// transparent reading window is.
     #[serde(default = "OverlayConfig::default_thickness")]
     pub thickness: Thickness,
-    /// Bar opacity override; the alpha in `bar_color` is the source of truth,
-    /// `opacity` is exposed for hot-key adjustments.
-    #[serde(default = "OverlayConfig::default_opacity")]
-    pub opacity: Opacity,
 }
 
 impl OverlayConfig {
-    fn default_bar_color() -> Rgba {
-        Rgba::DEFAULT_BAR
-    }
     fn default_mask_color() -> Rgba {
         Rgba::DEFAULT_MASK
     }
     fn default_thickness() -> Thickness {
         Thickness::DEFAULT
     }
-    fn default_opacity() -> Opacity {
-        Opacity::DEFAULT
-    }
 }
 
 impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
-            bar_color: Rgba::DEFAULT_BAR,
             mask_color: Rgba::DEFAULT_MASK,
             thickness: Thickness::DEFAULT,
-            opacity: Opacity::DEFAULT,
         }
     }
 }
@@ -573,12 +485,12 @@ impl Layer {
     }
 }
 
-/// Output of a single [`render`] call: zero, one, or two [`Layer`]s.
+/// Output of a single [`render`] call: zero or two [`Layer`]s.
 ///
-/// `Off` and `Lifecycle::Paused(_)` produce 0 layers, `Active(Bar, _)`
-/// produces 1, `Active(Mask, _)` produces 2 (the regions on either
-/// side of the slit). Inline capacity 2 covers every present render
-/// output without heap allocation.
+/// `Off` and `Lifecycle::Paused(_)` produce 0 layers, `Mask(_)`
+/// produces 2 (the regions on either side of the slit). Inline
+/// capacity 2 covers every present render output without heap
+/// allocation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct OverlayFrame {
@@ -609,27 +521,25 @@ impl Default for OverlayFrame {
 /// Compute the rectangles to draw for the given `(mode, cursor, monitor, cfg)`.
 ///
 /// Pure: no IO, no side effects, deterministic. Returns a fresh
-/// [`OverlayFrame`] of zero (`Off`), one (`Active(Bar, _)`), or two
-/// (`Active(Mask, _)`) filled rectangles, all clipped to `monitor` so
-/// the platform layer can blit them without further bounds checking.
+/// [`OverlayFrame`] of zero (`Off`) or two (`Mask(_)`) filled
+/// rectangles, all clipped to `monitor` so the platform layer can
+/// blit them without further bounds checking.
 #[must_use]
 pub fn render(
     mode: Mode,
     cursor: Point<Logical>,
     monitor: ScreenRect<Logical>,
-    cfg: &OverlayConfig,
+    cfg: OverlayConfig,
 ) -> OverlayFrame {
     match mode {
         Mode::Off => OverlayFrame::empty(),
-        Mode::Active(shape, orientation) => {
-            render_active((shape, orientation), cursor, monitor, cfg)
-        }
+        Mode::Mask(orientation) => render_mask(orientation, cursor, monitor, cfg),
     }
 }
 
 /// 1-D half-open interval `[lo, hi)` on the primary axis selected by an
-/// [`Orientation`]. Used internally to factor the four `Active(_, _)`
-/// render arms through a single pipeline.
+/// [`Orientation`]. Used internally to factor the two `Mask(_)` render
+/// arms through a single pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Span1D {
     lo: i32,
@@ -709,51 +619,30 @@ fn lift(
     }
 }
 
-/// Compose the bar fill colour, replacing the alpha with the user's
-/// live opacity slider. The colour stored in `cfg.bar_color` is the
-/// "intent"; `cfg.opacity` is the runtime override surfaced via
-/// hotkey, so the runtime value wins at render time.
-const fn fill_with_opacity(base: Rgba, opacity: Opacity) -> Rgba {
-    Rgba {
-        a: opacity.get(),
-        ..base
-    }
-}
-
-fn render_active(
-    axes: (Shape, Orientation),
+fn render_mask(
+    orientation: Orientation,
     cursor: Point<Logical>,
     monitor: ScreenRect<Logical>,
-    cfg: &OverlayConfig,
+    cfg: OverlayConfig,
 ) -> OverlayFrame {
-    let (shape, orientation) = axes;
     let (cursor_proj, mon_span) = project(orientation, cursor, monitor);
     let slit = slit_span(cursor_proj, mon_span, cfg.thickness);
 
+    // Two layers: paint the *complement* of the slit on the primary
+    // axis with `mask_color`. Slit itself stays fully transparent.
+    let lo_complement = Span1D {
+        lo: mon_span.lo,
+        hi: slit.lo,
+    };
+    let hi_complement = Span1D {
+        lo: slit.hi,
+        hi: mon_span.hi,
+    };
+
     let mut frame = OverlayFrame::empty();
-    match shape {
-        Shape::Bar => {
-            // 1 layer: paint the slit itself with `bar_color`.
-            let bounds = lift(orientation, slit, monitor);
-            let fill = fill_with_opacity(cfg.bar_color, cfg.opacity);
-            frame.layers.push(Layer::solid_rect(bounds, fill));
-        }
-        Shape::Mask => {
-            // 2 layers: paint the *complement* of the slit on the
-            // primary axis with `mask_color`.
-            let lo_complement = Span1D {
-                lo: mon_span.lo,
-                hi: slit.lo,
-            };
-            let hi_complement = Span1D {
-                lo: slit.hi,
-                hi: mon_span.hi,
-            };
-            for span in [lo_complement, hi_complement] {
-                let bounds = lift(orientation, span, monitor);
-                frame.layers.push(Layer::solid_rect(bounds, cfg.mask_color));
-            }
-        }
+    for span in [lo_complement, hi_complement] {
+        let bounds = lift(orientation, span, monitor);
+        frame.layers.push(Layer::solid_rect(bounds, cfg.mask_color));
     }
     frame
 }
@@ -775,12 +664,15 @@ pub enum Action {
     /// Pause / resume the overlay — temporarily disable all output
     /// without losing the current mode, position, or config. While
     /// paused, [`render`] is short-circuited to
-    /// [`OverlayFrame::empty()`]; the bar / mask snaps back into place
-    /// when the user toggles pause off again.
+    /// [`OverlayFrame::empty()`]; the mask snaps back into place when
+    /// the user toggles pause off again.
     TogglePause,
-    /// Increase bar thickness by `step` logical px (saturating at the bound).
+    /// Increase slit thickness by `step` logical px (saturating at the bound).
     BumpThickness(i16),
-    /// Increase opacity by `step` (saturating at the bound).
+    /// Increase mask opacity by `step` (saturating at `1..=255`). The
+    /// alpha channel of `OverlayConfig.mask_color` is what changes;
+    /// `0` is excluded so a "fully transparent mask" stays expressible
+    /// only via [`Mode::Off`] or [`Lifecycle::Paused`].
     BumpOpacity(i16),
 }
 
@@ -818,13 +710,13 @@ pub struct State {
 /// re-create the window for an opacity bump, etc. `lifecycle` is
 /// `Some(new)` when the action transitioned the lifecycle (mode cycle
 /// or pause toggle) and `None` when it did not. `config` is `true`
-/// iff visual config (color/thickness/opacity) changed.
+/// iff visual config (color/thickness) changed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct StateDelta {
     /// New lifecycle value, if the action changed it.
     pub lifecycle: Option<Lifecycle>,
-    /// `true` if visual config (color/thickness/opacity) changed.
+    /// `true` if visual config (color/thickness) changed.
     pub config: bool,
 }
 
@@ -834,14 +726,14 @@ pub struct StateDelta {
 /// Pure deterministic transition. Saturating arithmetic on the
 /// `Bump*` variants keeps `State.config` inside the validated range
 /// of every newtype it contains — `Thickness` stays in `1..=512`,
-/// `Opacity` stays in `1..=255`.
+/// `mask_color.a` stays in `1..=255`.
 ///
 /// # Panics
-/// This function panics on a logic bug only: the `Bump*` arms call into
-/// [`Thickness::new`] / [`Opacity::new`] *after* clamping the step into
-/// the validated range, so the inner `expect` should be unreachable.
-/// A panic here indicates that the clamp invariant has drifted and is a
-/// bug to be fixed in this crate, not a runtime concern for callers.
+/// This function panics on a logic bug only: the `BumpThickness` arm
+/// calls into [`Thickness::new`] *after* clamping the step into the
+/// validated range, so the inner `expect` should be unreachable. A
+/// panic here indicates that the clamp invariant has drifted and is
+/// a bug to be fixed in this crate, not a runtime concern for callers.
 pub fn reduce(state: &mut State, action: Action) -> StateDelta {
     match action {
         Action::CycleMode => {
@@ -875,12 +767,9 @@ pub fn reduce(state: &mut State, action: Action) -> StateDelta {
             }
         }
         Action::BumpOpacity(step) => {
-            let current = i32::from(state.config.opacity.get());
+            let current = i32::from(state.config.mask_color.a);
             let next = (current + i32::from(step)).clamp(1, 255);
-            let bumped =
-                Opacity::new(u8::try_from(next).expect("clamp invariant guarantees 1..=255 (u8)"))
-                    .expect("clamp invariant guarantees 1..=255");
-            state.config.opacity = bumped;
+            state.config.mask_color.a = u8::try_from(next).unwrap_or(1);
             StateDelta {
                 lifecycle: None,
                 config: true,

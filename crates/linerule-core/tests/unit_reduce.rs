@@ -2,7 +2,9 @@
 //! `Action` arm against a meaningful starting `State` and pins the
 //! resulting `(State, StateDelta)` shape.
 
-use linerule_core::{Action, Lifecycle, Mode, OverlayConfig, State, StateDelta, Thickness, reduce};
+use linerule_core::{
+    Action, Lifecycle, Mode, OverlayConfig, Rgba, State, StateDelta, Thickness, reduce,
+};
 
 fn fresh() -> State {
     State::default()
@@ -29,22 +31,22 @@ fn cycle_mode_advances_one_step_within_active_lifecycle() {
 }
 
 #[test]
-fn cycle_mode_period_5() {
+fn cycle_mode_period_3() {
     let mut s = fresh();
     let initial = s.lifecycle;
-    for _ in 0..5 {
+    for _ in 0..3 {
         reduce(&mut s, Action::CycleMode);
     }
     assert_eq!(
         s.lifecycle, initial,
-        "applying CycleMode five times must return to initial lifecycle",
+        "applying CycleMode three times must return to initial lifecycle",
     );
 }
 
 #[test]
 fn cycle_mode_preserves_paused_state() {
     let mut s = fresh();
-    s.lifecycle = Lifecycle::Paused(Mode::BAR);
+    s.lifecycle = Lifecycle::Paused(Mode::HORIZONTAL_MASK);
     reduce(&mut s, Action::CycleMode);
     assert!(
         matches!(s.lifecycle, Lifecycle::Paused(_)),
@@ -52,7 +54,7 @@ fn cycle_mode_preserves_paused_state() {
     );
     assert_eq!(
         s.lifecycle.mode(),
-        Mode::MASK,
+        Mode::VERTICAL_MASK,
         "cycle while paused still advances the mode",
     );
 }
@@ -142,41 +144,65 @@ fn bump_thickness_saturates_at_maximum() {
     );
 }
 
-// ---- BumpOpacity ----------------------------------------------------------
+// ---- BumpOpacity (mask alpha) --------------------------------------------
 
 #[test]
-fn bump_opacity_increases_opacity() {
+fn bump_opacity_increases_mask_alpha() {
     let mut s = fresh();
-    let before = s.config.opacity.get();
-    reduce(&mut s, Action::BumpOpacity(5));
+    s.config.mask_color.a = 100;
+    reduce(&mut s, Action::BumpOpacity(15));
     assert_eq!(
-        s.config.opacity.get(),
-        before.saturating_add(5),
-        "BumpOpacity(+5) must add 5",
+        s.config.mask_color.a, 115,
+        "BumpOpacity(+15) must add 15 to mask_color.a",
+    );
+}
+
+#[test]
+fn bump_opacity_decreases_mask_alpha() {
+    let mut s = fresh();
+    s.config.mask_color.a = 100;
+    reduce(&mut s, Action::BumpOpacity(-15));
+    assert_eq!(
+        s.config.mask_color.a, 85,
+        "BumpOpacity(-15) must subtract 15 from mask_color.a",
     );
 }
 
 #[test]
 fn bump_opacity_saturates_at_one() {
     let mut s = fresh();
-    s.config.opacity = linerule_core::Opacity::new(1).expect("1 is in range");
+    s.config.mask_color.a = 1;
     reduce(&mut s, Action::BumpOpacity(-100));
     assert!(
-        s.config.opacity.get() >= 1,
-        "opacity must never drop below 1 (was {})",
-        s.config.opacity.get(),
+        s.config.mask_color.a >= 1,
+        "mask alpha must never drop below 1 (was {})",
+        s.config.mask_color.a,
     );
 }
 
 #[test]
 fn bump_opacity_saturates_at_max() {
     let mut s = fresh();
-    s.config.opacity = linerule_core::Opacity::new(255).expect("255 is in range");
+    s.config.mask_color.a = 255;
     reduce(&mut s, Action::BumpOpacity(100));
     assert_eq!(
-        s.config.opacity.get(),
-        255,
-        "opacity must saturate at 255 instead of wrapping",
+        s.config.mask_color.a, 255,
+        "mask alpha must saturate at 255 instead of wrapping",
+    );
+}
+
+#[test]
+fn bump_opacity_preserves_rgb_channels() {
+    let mut s = fresh();
+    s.config.mask_color = Rgba::new(33, 44, 55, 100);
+    reduce(&mut s, Action::BumpOpacity(15));
+    assert_eq!(
+        (
+            s.config.mask_color.r,
+            s.config.mask_color.g,
+            s.config.mask_color.b
+        ),
+        (33, 44, 55)
     );
 }
 
@@ -234,25 +260,37 @@ fn state_default_is_active_off_with_default_config() {
 fn lifecycle_with_mode_preserves_active_paused() {
     let active = Lifecycle::Active(Mode::Off);
     let paused = Lifecycle::Paused(Mode::Off);
-    assert_eq!(active.with_mode(Mode::BAR), Lifecycle::Active(Mode::BAR));
-    assert_eq!(paused.with_mode(Mode::BAR), Lifecycle::Paused(Mode::BAR));
+    assert_eq!(
+        active.with_mode(Mode::HORIZONTAL_MASK),
+        Lifecycle::Active(Mode::HORIZONTAL_MASK),
+    );
+    assert_eq!(
+        paused.with_mode(Mode::HORIZONTAL_MASK),
+        Lifecycle::Paused(Mode::HORIZONTAL_MASK),
+    );
 }
 
 #[test]
 fn lifecycle_toggled_pause_is_self_inverse() {
-    let lc = Lifecycle::Active(Mode::MASK);
-    assert_eq!(lc.toggled_pause(), Lifecycle::Paused(Mode::MASK));
+    let lc = Lifecycle::Active(Mode::HORIZONTAL_MASK);
+    assert_eq!(lc.toggled_pause(), Lifecycle::Paused(Mode::HORIZONTAL_MASK));
     assert_eq!(lc.toggled_pause().toggled_pause(), lc);
 }
 
 #[test]
 fn lifecycle_mode_strips_pause_layer() {
-    assert_eq!(Lifecycle::Active(Mode::BAR).mode(), Mode::BAR);
-    assert_eq!(Lifecycle::Paused(Mode::BAR).mode(), Mode::BAR);
+    assert_eq!(
+        Lifecycle::Active(Mode::HORIZONTAL_MASK).mode(),
+        Mode::HORIZONTAL_MASK
+    );
+    assert_eq!(
+        Lifecycle::Paused(Mode::HORIZONTAL_MASK).mode(),
+        Mode::HORIZONTAL_MASK
+    );
 }
 
 #[test]
 fn lifecycle_is_active_distinguishes_active_from_paused() {
-    assert!(Lifecycle::Active(Mode::BAR).is_active());
-    assert!(!Lifecycle::Paused(Mode::BAR).is_active());
+    assert!(Lifecycle::Active(Mode::HORIZONTAL_MASK).is_active());
+    assert!(!Lifecycle::Paused(Mode::HORIZONTAL_MASK).is_active());
 }

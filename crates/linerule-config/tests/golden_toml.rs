@@ -11,10 +11,8 @@ use linerule_config::{Config, ConfigError, parse_str};
 
 const GOLDEN_TOML: &str = "\
 [overlay]
-bar_color   = { r = 255, g = 235, b = 59,  a = 170 }
-mask_color  = { r = 8,   g = 8,   b = 8,   a = 217 }
-thickness   = 28
-opacity     = 170
+mask_color = { r = 8, g = 8, b = 8, a = 217 }
+thickness  = 28
 
 [hotkeys]
 cycle_mode  = \"Ctrl+Alt+R\"
@@ -53,7 +51,7 @@ fn unknown_keys_are_rejected() {
 
 #[test]
 fn malformed_syntax_produces_parse_error_with_span() {
-    let bad = "[overlay\nbar_color = ?";
+    let bad = "[overlay\nmask_color = ?";
     let err = parse_str(Path::new("bad.toml"), bad).expect_err("must reject malformed TOML");
     match err {
         ConfigError::Parse { span, .. } => {
@@ -67,10 +65,10 @@ fn malformed_syntax_produces_parse_error_with_span() {
 }
 
 #[test]
-fn opacity_zero_is_rejected_at_deserialize_time() {
-    let bad = "[overlay]\nopacity = 0\n";
+fn thickness_zero_is_rejected_at_deserialize_time() {
+    let bad = "[overlay]\nthickness = 0\n";
     let err = parse_str(Path::new("bad.toml"), bad)
-        .expect_err("opacity=0 must be rejected at deserialize");
+        .expect_err("thickness=0 must be rejected at deserialize");
     assert!(matches!(err, ConfigError::Parse { .. }));
 }
 
