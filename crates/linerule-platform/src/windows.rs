@@ -255,7 +255,7 @@ fn apply_window_styles(window: &Window) -> Result<(), RunError> {
     unsafe_code,
     reason = "Win32 FFI: GetCursorPos writes the screen-space cursor into &mut POINT"
 )]
-fn poll_cursor_logical(scale: f32) -> Option<Point<Logical>> {
+fn poll_cursor_logical(monitor_origin_physical: (i32, i32), scale: f32) -> Option<Point<Logical>> {
     let mut p = POINT { x: 0, y: 0 };
     // SAFETY: `&mut p` is a valid POINT* receiver. GetCursorPos has no
     // thread-affinity requirement.
@@ -263,8 +263,22 @@ fn poll_cursor_logical(scale: f32) -> Option<Point<Logical>> {
     if ok.is_err() {
         return None;
     }
-    let logical_x = (p.x as f32 / scale).round() as i32;
-    let logical_y = (p.y as f32 / scale).round() as i32;
+    // `GetCursorPos` returns the system-wide *virtual screen* coordinate.
+    // The renderer stores the monitor as `origin = (0, 0)` (everything is
+    // relative to the bitmap's own top-left), so we shift the cursor by
+    // the monitor's physical position before scaling. Without this, the
+    // *vertical* mode silently breaks on any non-primary monitor: the
+    // monitor that the overlay covers might sit at, say, screen X 1920,
+    // and a cursor at screen X 2880 (right half of the second monitor)
+    // would land at logical X 2880 against a `monitor.width = 1920` —
+    // `slit_span` clamps to a zero-length interval and the renderer
+    // emits no layer. Horizontal modes happen to dodge this when the
+    // cursor.y stays inside the secondary's height, which is why the
+    // bug looked orientation-specific.
+    let local_x = p.x.saturating_sub(monitor_origin_physical.0);
+    let local_y = p.y.saturating_sub(monitor_origin_physical.1);
+    let logical_x = (local_x as f32 / scale).round() as i32;
+    let logical_y = (local_y as f32 / scale).round() as i32;
     Some(Point::<Logical>::new(logical_x, logical_y))
 }
 
@@ -467,6 +481,10 @@ struct OverlayApp {
     window: Option<Arc<Window>>,
     bitmap: Option<LayeredBitmap>,
     monitor_logical: ScreenRect<Logical>,
+    /// Physical position of the bound monitor's top-left corner on the
+    /// virtual screen. `poll_cursor_logical` subtracts this so the
+    /// renderer always sees a cursor in monitor-local coordinates.
+    monitor_origin_physical: (i32, i32),
     dpi: f32,
     last_cursor: Point<Logical>,
 }
@@ -478,6 +496,7 @@ impl OverlayApp {
             window: None,
             bitmap: None,
             monitor_logical: ScreenRect::<Logical>::new(Point::<Logical>::new(0, 0), 0, 0),
+            monitor_origin_physical: (0, 0),
             dpi: 1.0,
             last_cursor: Point::<Logical>::new(0, 0),
         }
@@ -516,10 +535,18 @@ impl ApplicationHandler<UserMessage> for OverlayApp {
         let mon_size = monitor.size();
         let mon_pos = monitor.position();
         self.dpi = window.scale_factor() as f32;
+        self.monitor_origin_physical = (mon_pos.x, mon_pos.y);
         self.monitor_logical = ScreenRect::<Logical>::new(
             Point::<Logical>::new(0, 0),
             (mon_size.width as f32 / self.dpi).round() as u32,
             (mon_size.height as f32 / self.dpi).round() as u32,
+        );
+        tracing::info!(
+            mon_pos = ?mon_pos,
+            mon_size = ?mon_size,
+            dpi = self.dpi,
+            monitor_logical = ?self.monitor_logical,
+            "bound to monitor",
         );
 
         let bitmap =
@@ -587,7 +614,7 @@ impl ApplicationHandler<UserMessage> for OverlayApp {
         // poll the cursor and update `last_cursor` so resuming snaps
         // to the user's *current* cursor position rather than the
         // stale one from when pause was pressed.
-        if let Some(pos) = poll_cursor_logical(self.dpi) {
+        if let Some(pos) = poll_cursor_logical(self.monitor_origin_physical, self.dpi) {
             if pos != self.last_cursor {
                 self.last_cursor = pos;
                 self.repaint();
@@ -622,6 +649,15 @@ impl OverlayApp {
         } else {
             OverlayFrame::empty()
         };
+
+        tracing::trace!(
+            lifecycle = ?self.state.lifecycle,
+            cursor = ?self.last_cursor,
+            monitor = ?self.monitor_logical,
+            layers = frame.layers.len(),
+            first_layer = ?frame.layers.first(),
+            "repaint",
+        );
 
         bitmap.clear_transparent();
         for layer in &frame.layers {
