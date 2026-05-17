@@ -141,7 +141,7 @@ tracing-error      = "0.2"
 clap = { version = "4.6", features = ["derive", "wrap_help", "env", "color", "cargo"] }
 
 # --- testing ---
-assert_cmd = "2.0"
+assert_cmd = "2.2"
 predicates = "3.1"
 insta      = { version = "1.47", features = ["yaml", "json", "filters"] }
 tempfile   = "3.10"
