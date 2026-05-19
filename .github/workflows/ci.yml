@@ -166,13 +166,18 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab # v2.7.5
       - uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
         with:
           tool: cargo-deny
+      # Resolve workspace crates first so cargo-deny's --offline pass can
+      # read them from the local registry cache.
+      - run: cargo fetch --locked
       # Workaround for upstream rustsec/advisory-db RUSTSEC-2026-0076.md which
       # wraps its TOML frontmatter in triple-backtick fences and cannot be
       # parsed by cargo-deny / cargo-audit. Pre-fetch the db to the expected
-      # cache path and drop the malformed file.
+      # cache path and drop the malformed file. Then run cargo-deny --offline
+      # so it doesn't re-fetch and clobber the patch.
       - name: Pre-fetch advisory-db (RUSTSEC-2026-0076 workaround)
         run: |
           set -eux
