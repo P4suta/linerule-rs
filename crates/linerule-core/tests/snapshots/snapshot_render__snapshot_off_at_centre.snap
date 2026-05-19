@@ -1,6 +1,0 @@
----
-source: crates/linerule-core/tests/snapshot_render.rs
-description: Off mode emits zero layers
-expression: frame
----
-layers: []

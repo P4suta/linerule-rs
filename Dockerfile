@@ -1,123 +1,103 @@
-# syntax=docker/dockerfile:1.7
-# linerule dev / CI container.
-# Every cargo / clippy / nextest invocation runs in this image (ADR-0005).
-#
-# Build-time speed: the cargo-tools layer uses cargo-binstall, which
-# fetches precompiled binaries from GitHub releases. The legacy
-# `cargo install` path took ~15 min from cold; binstall is ~2 min.
-# See ADR-0008 for the full CI-speed strategy.
+# Dev image for linerule-rs. Ships every tool the Justfile recipes invoke,
+# so host machines need nothing beyond Docker (matches linerule-cs's
+# "Docker-only" stance — see ADR-0001).
 
-ARG RUST_VERSION=1.95.0
+FROM rust:1.95-bookworm AS dev
 
-########################################################################
-# toolchain — Rust stable + system deps + sccache + mold
-########################################################################
-FROM rust:${RUST_VERSION}-bookworm AS toolchain
+ARG USER_UID=1000
+ARG USER_GID=1000
+ARG NODE_MAJOR=22
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
+ENV DEBIAN_FRONTEND=noninteractive \
+    CARGO_HOME=/usr/local/cargo \
+    RUSTUP_HOME=/usr/local/rustup \
+    PATH=/usr/local/cargo/bin:/usr/local/rustup/bin:$PATH
+
+# Base packages: build tooling for cargo-xwin, jq for log-tail recipes,
+# curl/ca-certificates for fetching tarballs/.debs, git for cargo-deny,
+# graphviz for `cargo depgraph` → SVG rendering.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
         build-essential \
-        pkg-config \
-        libssl-dev \
-        libxcb1-dev \
-        libxkbcommon-dev \
-        libwayland-dev \
         clang \
-        mold \
+        lld \
+        cmake \
+        pkg-config \
+        ca-certificates \
         curl \
         git \
-        ca-certificates \
+        gnupg \
+        graphviz \
+        jq \
         unzip \
-        xz-utils \
-        locales \
-    && sed -i -e 's/# \(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
-    && sed -i -e 's/# \(ja_JP.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
-    && locale-gen
+        sudo \
+    && rm -rf /var/lib/apt/lists/*
 
-ENV LANG=en_US.UTF-8 \
-    LC_ALL=en_US.UTF-8 \
-    RUSTUP_PERMIT_COPY_RENAME=1
+# Node 22 LTS for commitlint.
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
-# mold linker for fast Linux builds (matches .cargo/config.toml).
-RUN mkdir -p /root/.cargo && printf '%s\n' \
-    '[target.x86_64-unknown-linux-gnu]' \
-    'linker = "clang"' \
-    'rustflags = ["-C", "link-arg=-fuse-ld=mold"]' \
-    > /root/.cargo/config.toml
+# Rust toolchain extras.
+RUN rustup target add x86_64-pc-windows-msvc \
+    && rustup component add rustfmt clippy rust-src
 
-# cargo-binstall — precompiled-binary installer that drops the
-# tool-install layer time by an order of magnitude. Install via
-# upstream's official script.
-RUN curl -fsSL https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-
-########################################################################
-# cargo-tools — Rust dev utilities, all binstalled
-########################################################################
-FROM toolchain AS cargo-tools
-
-# Bulk binstall — order chosen so cargo-deny / cargo-audit (heaviest
-# transitive trees) come first; if any single tool fails, binstall
-# falls back to source `cargo install` for *that one* tool only.
-RUN cargo binstall --no-confirm --locked --no-symlinks \
-        cargo-nextest \
-        cargo-llvm-cov \
+# cargo-installed tooling — single source of truth for "what runs in CI".
+RUN cargo install --locked --root /usr/local \
+        cargo-xwin \
         cargo-deny \
         cargo-audit \
-        cargo-shear \
-        cargo-semver-checks \
-        cargo-insta \
-        cargo-dist \
-        cargo-xwin \
-        cargo-edit \
-        committed \
-        typos-cli \
-        bacon \
-        release-plz \
-        git-cliff \
-        cargo-bolero \
-        sccache
+        cargo-llvm-cov \
+        cargo-nextest \
+        cargo-machete \
+        cargo-sort \
+        cargo-rdme \
+        cargo-modules \
+        cargo-depgraph \
+        just \
+        taplo-cli \
+        typos-cli
 
-# just (task runner) — upstream provides an install script.
-ARG JUST_VERSION=1.51.0
-RUN curl -fsSL https://just.systems/install.sh | bash -s -- --to /usr/local/bin --tag ${JUST_VERSION}
+# actionlint (binary release).
+RUN curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
+    | bash -s -- latest /usr/local/bin
 
-# lefthook (pre-commit manager).
-ARG LEFTHOOK_VERSION=2.1.6
-RUN curl -fsSL \
-    "https://github.com/evilmartians/lefthook/releases/download/v${LEFTHOOK_VERSION}/lefthook_${LEFTHOOK_VERSION}_Linux_x86_64.gz" \
-    | gunzip > /usr/local/bin/lefthook \
-    && chmod +x /usr/local/bin/lefthook
+# lefthook (.deb release).
+RUN ARCH="$(dpkg --print-architecture)" \
+    && curl -fsSL -o /tmp/lefthook.deb \
+        "https://github.com/evilmartians/lefthook/releases/latest/download/lefthook_${ARCH}.deb" \
+    && dpkg -i /tmp/lefthook.deb \
+    && rm /tmp/lefthook.deb
 
-########################################################################
-# dev — interactive contributor image
-########################################################################
-FROM toolchain AS dev
+# biome (Rust-backed formatter, JSON). Single binary, no Node required.
+RUN ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in \
+        amd64) BIOME_ARCH="linux-x64" ;; \
+        arm64) BIOME_ARCH="linux-arm64" ;; \
+        *) echo "unsupported arch: $ARCH" >&2 && exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/biomejs/biome/releases/latest/download/biome-${BIOME_ARCH}" \
+        -o /usr/local/bin/biome \
+    && chmod +x /usr/local/bin/biome
 
-COPY --from=cargo-tools /usr/local/cargo/bin/ /usr/local/cargo/bin/
-COPY --from=cargo-tools /usr/local/bin/      /usr/local/bin/
+# yamlfmt (Go single binary, formatter for YAML).
+RUN ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in \
+        amd64) YAMLFMT_ARCH="Linux_x86_64" ;; \
+        arm64) YAMLFMT_ARCH="Linux_arm64" ;; \
+        *) echo "unsupported arch: $ARCH" >&2 && exit 1 ;; \
+    esac \
+    && YAMLFMT_VERSION="0.13.0" \
+    && curl -fsSL "https://github.com/google/yamlfmt/releases/download/v${YAMLFMT_VERSION}/yamlfmt_${YAMLFMT_VERSION}_${YAMLFMT_ARCH}.tar.gz" \
+        | tar xz -C /usr/local/bin yamlfmt
 
-# Need the Windows MSVC target installed for `cargo xwin build` to find
-# the rustc target spec.
-RUN rustup target add x86_64-pc-windows-msvc
+# Match host UID so bind-mounted files don't end up root-owned.
+RUN groupadd --gid ${USER_GID} dev \
+    && useradd --uid ${USER_UID} --gid ${USER_GID} -m dev \
+    && echo "dev ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-ENV CARGO_HOME=/workspace/.cargo \
-    CARGO_TARGET_DIR=/workspace/target \
-    RUSTC_WRAPPER=sccache \
-    SCCACHE_DIR=/workspace/.sccache \
-    SCCACHE_CACHE_SIZE=10G \
-    CARGO_INCREMENTAL=0 \
-    RUST_BACKTRACE=1
-
-# Pre-create cache mount targets so :ro / :cached bind mounts don't
-# block the named volume mounts at runtime.
-RUN mkdir -p /workspace/target /workspace/.cargo /workspace/.xwin-cache /workspace/.sccache
+USER dev
+ENV INSIDE_CONTAINER=1
 
 WORKDIR /workspace
 CMD ["bash"]
-
-########################################################################
-# ci — same as dev; named separately so CI pins an explicit target
-########################################################################
-FROM dev AS ci

@@ -1,14 +1,11 @@
-# Cargo per-target overrides.
-#
-# The Linux build uses `mold` for fast linking (Dockerfile installs it
-# in the dev stage). The Windows cross-compile target relies on
-# `cargo-xwin`'s vendored MSVC SDK — `cargo xwin build` invokes that
-# wrapper, which sets the linker to `lld-link` automatically; we don't
-# repeat that here.
+[alias]
+xtask = "run --quiet --package xtask --"
 
-[target.x86_64-unknown-linux-gnu]
-linker     = "clang"
-rustflags  = ["-C", "link-arg=-fuse-ld=mold"]
+[build]
+# Default target stays native; CI overrides for cross checks.
 
-[net]
-git-fetch-with-cli = true
+[target.x86_64-pc-windows-msvc]
+# cargo-xwin が自動補完するため空。必要に応じて linker を上書き。
+
+[term]
+color = "auto"

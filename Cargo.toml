@@ -2,198 +2,109 @@
 resolver = "3"
 members = [
     "crates/linerule-core",
-    "crates/linerule-config",
-    "crates/linerule-platform",
-    "crates/linerule",
-    "crates/xtask",
+    "crates/linerule-platform-windows",
+    "crates/linerule-app",
+    "xtask",
+]
+default-members = [
+    "crates/linerule-core",
+    "crates/linerule-app",
 ]
 
 [workspace.package]
-version       = "0.1.0"
-edition       = "2024"
-rust-version  = "1.95.0"
-license       = "Apache-2.0 OR MIT"
-description   = "A digital reading ruler — frameless, transparent, click-through, always-on-top overlay that follows the cursor"
-repository    = "https://github.com/P4suta/linerule-rs"
-homepage      = "https://github.com/P4suta/linerule-rs"
-documentation = "https://docs.rs/linerule"
-authors       = ["linerule contributors"]
-readme        = "README.md"
-keywords      = ["reading", "overlay", "accessibility", "typoscope", "japanese"]
-categories    = ["accessibility", "gui", "visualization"]
-
-# ---------------------------------------------------------------------------
-# Workspace lints — single source of truth (feedback_workspace_lints_single_source_of_truth).
-# Per-crate `[lints.clippy]` overrides are forbidden; per-crate carve-outs go
-# through the strict-code grep gate (`scripts/strict-code.sh`) instead.
-# ---------------------------------------------------------------------------
-
-[workspace.lints.rust]
-# `deny`, not `forbid`: pure crates (`linerule-core`, `linerule-config`)
-# upgrade to `#![forbid(unsafe_code)]` at the source root for an
-# absolute compile-time gate; the `linerule-platform` crate uses
-# `#[expect(unsafe_code, reason = "Win32 FFI")]` on the FFI fns. The
-# `// SAFETY:` justification next to each block is enforced by
-# `cargo run -p xtask -- strict-code` (look-back 6 lines).
-unsafe_code      = "deny"
-non_ascii_idents = "deny"
-
-missing_debug_implementations = "warn"
-missing_copy_implementations  = "warn"
-trivial_casts                 = "warn"
-trivial_numeric_casts         = "warn"
-unused_import_braces          = "warn"
-unused_lifetimes              = "warn"
-unused_qualifications         = "warn"
-
-unreachable_pub                = "warn"
-single_use_lifetimes           = "warn"
-elided_lifetimes_in_paths      = "warn"
-redundant_lifetimes            = "warn"
-explicit_outlives_requirements = "warn"
-
-let_underscore_drop         = "warn"
-keyword_idents_2024         = "warn"
-variant_size_differences    = "warn"
-ambiguous_negative_literals = "warn"
-
-dead_code = "deny"
-
-rust_2024_compatibility = { level = "warn", priority = -1 }
-
-[workspace.lints.rustdoc]
-broken_intra_doc_links       = "deny"
-private_intra_doc_links      = "warn"
-invalid_codeblock_attributes = "warn"
-invalid_html_tags            = "warn"
-invalid_rust_codeblocks      = "warn"
-bare_urls                    = "warn"
-redundant_explicit_links     = "warn"
-unescaped_backticks          = "warn"
-
-[workspace.lints.clippy]
-pedantic = { level = "warn", priority = -1 }
-nursery  = { level = "warn", priority = -1 }
-cargo    = { level = "warn", priority = -1 }
-
-dbg_macro                  = "warn"
-todo                       = "warn"
-unimplemented              = "warn"
-clone_on_ref_ptr           = "warn"
-unnecessary_safety_comment = "warn"
-unnecessary_safety_doc     = "warn"
-missing_assert_message     = "warn"
-
-# Restriction lints — hand-picked per ADR-0006.
-str_to_string                   = "warn"
-absolute_paths                  = "warn"
-allow_attributes_without_reason = "warn"
-empty_structs_with_brackets     = "warn"
-if_then_some_else_none          = "warn"
-let_underscore_must_use         = "warn"
-mixed_read_write_in_expression  = "warn"
-rest_pat_in_fully_bound_structs = "warn"
-same_name_method                = "warn"
-semicolon_outside_block         = "warn"
-try_err                         = "warn"
-unneeded_field_pattern          = "warn"
-verbose_file_reads              = "warn"
-format_push_string              = "warn"
-unnecessary_self_imports        = "warn"
-assertions_on_result_states     = "warn"
-filetype_is_file                = "warn"
-rc_buffer                       = "warn"
-rc_mutex                        = "warn"
-lossy_float_literal             = "warn"
-suspicious_xor_used_as_pow      = "warn"
-
-# Justified carve-outs.
-module_name_repetitions = "allow"  # `linerule_core::CoreError` clearer than fighting it
-multiple_crate_versions = "allow"  # transitive collisions are not our problem
-missing_const_for_fn    = "allow"  # over-eager on builders
-redundant_pub_crate     = "allow"  # we treat `unreachable_pub` as source of truth
-
-# ---------------------------------------------------------------------------
-# Workspace-wide dependency table — single version source.
-# Versions verified against crates.io 2026-05-10.
-# ---------------------------------------------------------------------------
+edition = "2024"
+rust-version = "1.95"
+version = "0.2.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/P4suta/linerule-rs"
+authors = ["linerule contributors"]
 
 [workspace.dependencies]
-# Internal crates
-linerule-core     = { version = "0.1.0", path = "crates/linerule-core" }
-linerule-config   = { version = "0.1.0", path = "crates/linerule-config" }
-linerule-platform = { version = "0.1.0", path = "crates/linerule-platform" }
+# Win32 / COM
+windows = "0.60"
+windows-core = "0.60"
 
-# --- pure logic / serde / diagnostics ---
-crossbeam-channel = "0.5"
-smallvec   = { version = "1.13", features = ["const_generics", "const_new", "union"] }
-dirs       = "6"
-serde      = { version = "1", features = ["derive"] }
-toml       = "1"
-thiserror  = "2"
-miette     = { version = "7.6", features = ["fancy"] }
-color-eyre = "0.6"
+# CLI / config
+clap = { version = "4", features = ["derive"] }
 
-# --- observability / CLI ---
-tracing            = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-tracing-error      = "0.2"
-clap = { version = "4.6", features = ["derive", "wrap_help", "env", "color", "cargo"] }
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt", "registry"] }
+tracing-appender = "0.2"
 
-# --- testing ---
-assert_cmd = "2.0"
-predicates = "3.1"
-insta      = { version = "1.47", features = ["yaml", "json", "filters"] }
-tempfile   = "3.10"
+# Serialization / errors
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
 
-# --- platform impl (Windows real overlay stack) ---
-# Window / event loop
-winit = { version = "0.30", features = ["rwh_06"] }
-raw-window-handle = "0.6"
-# vello / peniko are reserved for v0.2 cross-platform — the Windows
-# v0.1 path is GDI + UpdateLayeredWindow (ADR-0009), no GPU 2D needed.
-# System-wide hotkeys
-global-hotkey = "0.8"
-# Win32 FFI (only consumed by linerule-platform on Windows targets)
-windows = { version = "0.62", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_UI_HiDpi",
-    "Win32_UI_Input_KeyboardAndMouse",
-] }
+# Bitflag DSL (Modifiers)
+bitflags = "2"
 
-# ---------------------------------------------------------------------------
-# Profiles
-# ---------------------------------------------------------------------------
+# Utilities
+directories = "5"
+uuid = { version = "1", features = ["v4", "fast-rng", "serde"] }
+embed-resource = "3"
+
+# xtask helpers
+cargo_metadata = "0.18"
+
+# Dev-only
+proptest = "1"
+tempfile = "3"
+
+[workspace.lints.clippy]
+all      = { level = "deny",  priority = -1 }
+pedantic = { level = "warn",  priority = -1 }
+nursery  = { level = "warn",  priority = -1 }
+cargo    = { level = "warn",  priority = -1 }
+
+# 美しさのため明示昇格
+wildcard_imports                = "deny"
+mod_module_files                = "deny"
+or_fun_call                     = "deny"
+unwrap_used                     = "deny"
+expect_used                     = "warn"
+panic                           = "warn"
+todo                            = "warn"
+unimplemented                   = "warn"
+dbg_macro                       = "deny"
+print_stdout                    = "warn"
+print_stderr                    = "warn"
+allow_attributes_without_reason = "deny"   # `#[allow]` には reason 必須
+disallowed_macros               = "deny"   # clippy.toml で禁止リスト
+disallowed_types                = "deny"   # clippy.toml で禁止リスト
+disallowed_methods              = "deny"
+
+# 例外（lint そのものの設計と本プロジェクトの方針が噛み合わないもの）
+module_name_repetitions  = "allow"   # `OverlayConfig` 等の自然な命名と衝突
+multiple_crate_versions  = "allow"   # 依存推移グラフ次第、本プロジェクトでは制御不能
+cargo_common_metadata    = "allow"   # 内部 publish=false のため
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn    = "deny"
+unreachable_pub           = "warn"
+elided_lifetimes_in_paths = "warn"
+single_use_lifetimes      = "warn"
+trivial_casts             = "warn"
+trivial_numeric_casts     = "warn"
+static_mut_refs           = "deny"   # `static mut` 経由参照を禁止
+missing_docs              = "warn"   # 全 public item に doc 必須 (CI -D warnings 下で実質 deny)
 
 [profile.release]
-lto           = "thin"
+lto = "fat"
 codegen-units = 1
-strip         = "symbols"
-panic         = "abort"
-opt-level     = 3
-
-[profile.bench]
-inherits = "release"
-strip    = "none"
-debug    = 1
+panic = "abort"
+strip = "symbols"
+opt-level = 3
+overflow-checks = false
 
 [profile.dev]
-split-debuginfo = "unpacked"
+opt-level = 0
+debug = "full"
 
-[profile.dev.package."*"]
-opt-level = 1
-
-# ---------------------------------------------------------------------------
-# cargo-dist — release pipeline metadata. `cargo dist init` populates the
-# matching .github/workflows/release.yml.
-# ---------------------------------------------------------------------------
-
-[workspace.metadata.dist]
-cargo-dist-version = "0.31.0"  # latest mainstream as of 2026-05; bumped via release-plz/Dependabot
-ci                  = ["github"]
-installers          = ["shell", "powershell"]
-targets             = ["x86_64-pc-windows-msvc"]
-pr-run-mode         = "plan"
-allow-dirty         = ["ci"]
+# 速い CI チェック用
+[profile.ci]
+inherits = "dev"
+debug = "line-tables-only"
+incremental = false

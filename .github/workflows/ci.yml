@@ -1,139 +1,231 @@
-name: CI
+# linerule-rs CI.
+#
+# Policy:
+#   - No `on: schedule`. Dependabot is the only scheduled job.
+#   - Every action is SHA-pinned; Dependabot bumps weekly.
+#   - Cross-platform jobs run on ubuntu-latest; Windows-native build /
+#     test runs on windows-latest because the platform crate is `#![cfg(windows)]`.
+#   - Coverage is reported, not gated at 100%.
+#   - `Swatinem/rust-cache` is used in place of raw `actions/cache` for cargo
+#     state — it knows the right keys for `target/`, registry, and indexes.
+
+name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
-
-# Successive pushes cancel earlier in-flight runs.
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_dispatch:
 
 permissions:
   contents: read
-  packages: read   # pull dev image from ghcr.io
+  pull-requests: write   # for coverage / dependency-review comments
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
 
 jobs:
-  lint-test-coverage:
-    name: lint + test + coverage (linux, docker)
-    runs-on: ubuntu-24.04
+  build-test-linux:
+    name: build + test (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab  # v2.7.5
+      - uses: taiki-e/install-action@cd5df4de2e75f3b819ba55f780f7bb8cd4a05a41  # v2.43.0
+        with:
+          tool: cargo-nextest
+      - name: cargo build (exclude platform-windows)
+        run: cargo build --workspace --exclude linerule-platform-windows --all-targets
+      - name: cargo nextest (exclude platform-windows)
+        run: cargo nextest run --workspace --exclude linerule-platform-windows
+
+  build-test-windows:
+    name: build + test (windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab  # v2.7.5
+      - uses: taiki-e/install-action@cd5df4de2e75f3b819ba55f780f7bb8cd4a05a41  # v2.43.0
+        with:
+          tool: cargo-nextest
+      - run: cargo build --workspace --all-targets
+      - run: cargo nextest run --workspace --run-ignored all
+
+  cross-check:
+    name: cross-check (linux → win-x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab  # v2.7.5
+      - uses: taiki-e/install-action@cd5df4de2e75f3b819ba55f780f7bb8cd4a05a41  # v2.43.0
+        with:
+          tool: cargo-xwin
+      - run: rustup target add x86_64-pc-windows-msvc
+      - run: cargo xwin check --workspace --target x86_64-pc-windows-msvc
+
+  release-build:
+    name: release build (win-x64, native)
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      # `just` is the single entry point for every recipe (ADR-0005). The
-      # ubuntu-24.04 runner does not ship it, so install before any
-      # `just <recipe>` invocation.
-      - name: Install just
-        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
-
-      # Try to pull the cached dev image from GHCR; fall back to local build.
-      - name: Login to GHCR
-        if: github.event_name == 'push' || github.repository == github.event.pull_request.head.repo.full_name
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab  # v2.7.5
+      - run: cargo build --release -p linerule-app
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          name: linerule-win-x64
+          path: target/release/linerule.exe
+          if-no-files-found: error
 
-      - name: Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
-
-      - name: Build dev image (with GHA layer cache)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        with:
-          context: .
-          target: dev
-          tags: linerule-dev:local
-          load: true
-          cache-from: |
-            type=gha,scope=docker-dev
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/linerule-dev:cache
-          cache-to: type=gha,scope=docker-dev,mode=max
-
-      - name: Cache cargo registry / git / target volumes
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: |
-            ~/.cargo-volume
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
-      - name: Lint
-        run: just lint
-      - name: Build
-        run: just build
-      - name: Test
-        run: just test
-      - name: Doc tests
-        run: just test-doc
-      - name: Coverage
-        run: just coverage
-      - name: cargo-deny
-        run: just deny
-      - name: cargo-audit
-        run: just audit
-
-  windows-smoke:
-    name: native windows smoke
-    runs-on: windows-2022
-    timeout-minutes: 30
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: taiki-e/install-action@cd5df4de2e75f3b819ba55f780f7bb8cd4a05a41  # v2.43.0
         with:
-          toolchain: 1.95.0
-          components: rustfmt, clippy
+          tool: cargo-sort,taplo-cli
+      - run: cargo fmt --all -- --check
+      - run: cargo sort --workspace --check
+      - run: taplo fmt --check
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@919333daf4640a6fca9dd8b87468dc776e46b44b # v2.7.1
-        with:
-          key: windows-2022
-
-      # Install the dev tools we need for tests as precompiled binaries.
-      - name: Install nextest + llvm-cov
-        uses: taiki-e/install-action@ec28e287910af896fd98e04056d31fa68607e7ad # v2.77.4
-        with:
-          tool: cargo-nextest,cargo-llvm-cov
-
-      - name: Build
-        run: cargo build --release --workspace
-
-      - name: Smoke test (linerule-platform)
-        run: cargo nextest run --package linerule-platform --release
-
-  cross-build-windows-from-linux:
-    name: cross-compile (linux → windows-msvc)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+  fmt-non-rust:
+    name: fmt (json / yaml)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: install biome + yamlfmt
+        run: |
+          curl -fsSL "https://github.com/biomejs/biome/releases/latest/download/biome-linux-x64" \
+            -o /usr/local/bin/biome
+          sudo chmod +x /usr/local/bin/biome
+          YAMLFMT_VERSION=0.13.0
+          curl -fsSL "https://github.com/google/yamlfmt/releases/download/v${YAMLFMT_VERSION}/yamlfmt_${YAMLFMT_VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar xz -C /usr/local/bin yamlfmt
+      - run: biome format .
+      - run: yamlfmt --lint .
 
-      - name: Install just
-        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab  # v2.7.5
+      - run: cargo clippy --workspace --all-targets --exclude linerule-platform-windows -- -D warnings
 
-      - name: Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+  dep-graph:
+    name: dep-graph (xtask)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab  # v2.7.5
+      - run: cargo xtask dep-graph
 
-      - name: Build dev image (with GHA layer cache)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+  spell-check:
+    name: typos
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: crate-ci/typos@aca895bf05aec0cb7dffa6f94495e923224d9f17  # v1.46.2
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | tar xz -C /tmp actionlint
+          /tmp/actionlint -color
+
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: taiki-e/install-action@cd5df4de2e75f3b819ba55f780f7bb8cd4a05a41  # v2.43.0
         with:
-          context: .
-          target: dev
-          tags: linerule-dev:local
-          load: true
-          cache-from: type=gha,scope=docker-dev
-          cache-to: type=gha,scope=docker-dev,mode=max
+          tool: cargo-deny
+      - run: cargo deny check advisories bans licenses sources
 
-      - name: Cross-build
-        run: just build-windows
+  cargo-machete:
+    name: cargo-machete (unused deps)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: taiki-e/install-action@cd5df4de2e75f3b819ba55f780f7bb8cd4a05a41  # v2.43.0
+        with:
+          tool: cargo-machete
+      - run: cargo machete
+
+  cargo-audit:
+    name: cargo-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: taiki-e/install-action@cd5df4de2e75f3b819ba55f780f7bb8cd4a05a41  # v2.43.0
+        with:
+          tool: cargo-audit
+      - run: cargo audit --deny warnings
+
+  coverage:
+    name: coverage (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab  # v2.7.5
+      - uses: taiki-e/install-action@cd5df4de2e75f3b819ba55f780f7bb8cd4a05a41  # v2.43.0
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      - run: rustup component add llvm-tools-preview
+      - run: cargo llvm-cov nextest --workspace --exclude linerule-platform-windows --lcov --output-path lcov.info
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage-lcov
+          path: lcov.info
+
+  dependency-review:
+    name: dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: true
+
+  conventional-commits:
+    name: conventional commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed  # v6.2.1

@@ -1,51 +1,60 @@
-# Dependabot — the ONLY scheduled job in this repo (feedback_no_cron_in_repos).
-# All other automation is event-driven via PR / push triggers.
-
 version: 2
+
+# Dependabot is the only allowed scheduled job. Bumps Cargo crates weekly
+# and pins GitHub Actions to fresh SHAs.
+#
+# Every entry pins commit-message.prefix to "build(deps)" so the
+# `conventional commits` CI gate accepts Dependabot-authored commits.
+
 updates:
   - package-ecosystem: cargo
     directory: "/"
     schedule:
       interval: weekly
-      day: monday
-      time: "06:00"
-      timezone: Asia/Tokyo
     open-pull-requests-limit: 10
     commit-message:
-      prefix: "chore(deps)"
-    labels:
-      - dependencies
-      - rust
+      prefix: "build(deps)"
     groups:
-      patch:
-        update-types: [patch]
-      minor:
-        update-types: [minor]
+      tracing:
+        patterns:
+          - "tracing*"
+      serde:
+        patterns:
+          - "serde*"
+      test:
+        patterns:
+          - "proptest"
+          - "tempfile"
+      windows:
+        patterns:
+          - "windows"
+          - "windows-core"
+          - "windows-*"
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
-      day: monday
-      time: "06:00"
-      timezone: Asia/Tokyo
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     commit-message:
-      prefix: "chore(actions)"
-    labels:
-      - dependencies
-      - github-actions
+      prefix: "build(deps)"
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      commitlint:
+        patterns:
+          - "@commitlint/*"
 
   - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly
-      day: monday
-      time: "06:00"
-      timezone: Asia/Tokyo
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     commit-message:
-      prefix: "chore(docker)"
-    labels:
-      - dependencies
-      - docker
+      prefix: "build(deps)"

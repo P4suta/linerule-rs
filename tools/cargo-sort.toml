@@ -1,0 +1,16 @@
+# cargo-sort configuration.
+# Sorts `[dependencies]` / `[dev-dependencies]` / `[build-dependencies]`
+# alphabetically, but preserves the workspace member order in `[workspace] members`.
+
+[package]
+order = [
+    "name",
+    "version",
+    "edition",
+    "rust-version",
+    "license",
+    "repository",
+    "authors",
+    "description",
+    "publish",
+]

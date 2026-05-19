@@ -1,0 +1,30 @@
+name: linerule-rs
+
+services:
+  dev:
+    build:
+      context: .
+      args:
+        USER_UID: "${UID:-1000}"
+        USER_GID: "${GID:-1000}"
+    working_dir: /workspace
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      INSIDE_CONTAINER: "1"
+      CARGO_TARGET_DIR: /workspace/target
+      LINERULE_LOG: "${LINERULE_LOG:-debug,wnd_proc=info,heartbeat=info,cursor_tracker=info}"
+    volumes:
+      - .:/workspace:cached
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - xwin-cache:/workspace/.xwin-cache
+      - npm-cache:/workspace/node_modules
+    init: true
+    stdin_open: true
+    tty: true
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  xwin-cache:
+  npm-cache:
