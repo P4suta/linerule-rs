@@ -26,7 +26,7 @@
 )]
 #![allow(
     clippy::redundant_pub_crate,
-    reason = "pub(crate) on submodule funcs is intent-signalling; rust's \
+    reason = "pub(crate) on submodule funcs is intent-signaling; rust's \
               unreachable_pub conflicts with clippy's redundant_pub_crate, \
               and unreachable_pub wins"
 )]

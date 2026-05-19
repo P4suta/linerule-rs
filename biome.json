@@ -21,7 +21,8 @@
       "!node_modules/**",
       "!.xwin-cache/**",
       "!.sccache/**",
-      "!artifacts/**"
+      "!artifacts/**",
+      "!package-lock.json"
     ]
   },
   "linter": { "enabled": false }

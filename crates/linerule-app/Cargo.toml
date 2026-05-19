@@ -9,18 +9,15 @@ authors.workspace = true
 description = "linerule-rs single binary: GUI overlay + CLI diagnostics."
 publish = false
 
-[lints]
-workspace = true
-
 [[bin]]
 name = "linerule"
 path = "src/main.rs"
 
 [dependencies]
-linerule-core = { path = "../linerule-core" }
 anyhow = { workspace = true }
 clap = { workspace = true }
 directories = { workspace = true }
+linerule-core = { path = "../linerule-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -33,10 +30,10 @@ linerule-platform-windows = { path = "../linerule-platform-windows" }
 
 [target.'cfg(windows)'.dependencies.windows]
 workspace = true
-features = [
-    "Win32_Foundation",
-    "Win32_System_Console",
-]
+features = ["Win32_Foundation", "Win32_System_Console"]
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = { workspace = true }
+
+[lints]
+workspace = true

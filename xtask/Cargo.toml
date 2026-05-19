@@ -9,9 +9,6 @@ authors.workspace = true
 description = "linerule-rs build automation: lint, dep-graph, ci."
 publish = false
 
-[lints]
-workspace = true
-
 [[bin]]
 name = "xtask"
 path = "src/main.rs"
@@ -20,3 +17,6 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
+
+[lints]
+workspace = true

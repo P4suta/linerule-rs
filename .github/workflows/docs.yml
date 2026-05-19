@@ -24,8 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab  # v2.7.5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: Swatinem/rust-cache@82a92a6e8fbeee089604da2575dc567ae9ddeaab # v2.7.5
       - name: cargo doc
         env:
           RUSTDOCFLAGS: -D warnings --enable-index-page -Z unstable-options
@@ -40,7 +40,7 @@ jobs:
           cat > target/doc/index.html <<'HTML'
           <!doctype html><meta http-equiv="refresh" content="0; url=linerule_core/index.html">
           HTML
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa  # v3.0.1
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: target/doc
 
@@ -54,4 +54,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@d6db90af4e83d335a3186e89b4d92dbb18f8c44d  # v4.0.5
+        uses: actions/deploy-pages@d6db90af4e83d335a3186e89b4d92dbb18f8c44d # v4.0.5

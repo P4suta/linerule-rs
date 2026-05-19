@@ -30,18 +30,77 @@ dev_log := env_var_or_default("LINERULE_LOG", "debug,wnd_proc=info,heartbeat=inf
 default:
     @just --list
 
+# ----- first-run bootstrap -----
+
+# One-shot setup for a fresh clone. Builds the dev container, installs git
+# hooks, fetches the Windows cross-compile sysroot ahead of time so the first
+# `just cross-check` doesn't appear to hang for 5 minutes downloading, and
+# runs `just doctor` to confirm every tool is reachable. Idempotent — re-run
+# any time the environment feels off.
+bootstrap:
+    @echo "==> 1/5 docker compose build (dev image)"
+    docker compose build
+    @echo "==> 2/5 docker compose up -d dev (persistent dev container)"
+    docker compose up -d dev
+    @echo "==> 3/5 lefthook install (pre-commit / commit-msg / pre-push hooks)"
+    {{lefthook}} install
+    @echo "==> 4/5 npm install (commitlint, used by commit-msg hook)"
+    {{sh}} "npm install --no-audit --no-fund"
+    @echo "==> 5/5 prefetch xwin sysroot (~500MB; one-time, cached in docker volume)"
+    {{cargo}} xwin cache xwin
+    @just doctor
+    @echo
+    @echo "🎉 bootstrap done. Try: just build / just test / just cross-check / just lint"
+
+# ----- environment health check -----
+
+# Verify every dev tool the recipes rely on is reachable inside the dev
+# container. Run when joining the project or when something starts failing
+# in a confusing way. Exits non-zero on the first missing tool so CI / scripts
+# can fail loudly rather than silently.
+doctor:
+    @echo "==> linerule-rs doctor"
+    @{{docker_run}} bash -c 'set -e; \
+        check() { printf "  %-18s " "$1"; out=$($2 2>&1 | head -1) && printf "ok    %s\n" "$out" || { printf "MISSING\n"; exit 1; }; }; \
+        check rustc          "rustc --version"; \
+        check cargo          "cargo --version"; \
+        check cargo-nextest  "cargo nextest --version"; \
+        check cargo-xwin     "cargo xwin --version"; \
+        check cargo-deny     "cargo deny --version"; \
+        check cargo-audit    "cargo audit --version"; \
+        check cargo-llvm-cov "cargo llvm-cov --version"; \
+        check cargo-machete  "cargo machete --version"; \
+        check cargo-sort     "cargo sort --version"; \
+        check cargo-rdme     "cargo rdme --version"; \
+        check cargo-modules  "cargo modules --version"; \
+        check cargo-depgraph "cargo depgraph --version"; \
+        check typos          "typos --version"; \
+        check taplo          "taplo --version"; \
+        check biome          "biome --version"; \
+        check yamlfmt        "yamlfmt --version"; \
+        check actionlint     "actionlint -version"; \
+        check lefthook       "lefthook version"; \
+        check just           "just --version"; \
+        check mold           "mold --version"; \
+        check clang          "clang --version"; \
+    '
+    @echo "==> doctor: ok"
+
 # ----- one-shot environment -----
 
 docker-build:
+    @echo "==> docker compose build"
     docker compose build
 
 shell:
     {{docker_run}} bash
 
 clean-docker:
+    @echo "==> docker compose down (volumes + local images)"
     docker compose down --volumes --rmi local
 
 dev-up:
+    @echo "==> docker compose up -d dev"
     docker compose up -d dev
     @echo "dev container is up — `just <recipe>` now uses docker exec (faster)."
 
@@ -51,16 +110,20 @@ dev-down:
 # ----- Rust workflow -----
 
 build:
+    @echo "==> cargo build --workspace --all-targets"
     {{cargo}} build --workspace --all-targets
 
 build-release:
+    @echo "==> cargo build --release --workspace"
     {{cargo}} build --release --workspace
 
 # Inner-loop alias: skips dependency resolution checks.
 b:
+    @echo "==> cargo build --workspace"
     {{cargo}} build --workspace
 
 test:
+    @echo "==> cargo nextest run --workspace --exclude linerule-platform-windows"
     {{cargo}} nextest run --workspace --exclude linerule-platform-windows
 
 # Inner-loop test alias.
@@ -68,6 +131,7 @@ t:
     {{cargo}} nextest run --workspace --exclude linerule-platform-windows --no-fail-fast
 
 test-windows:
+    @echo "==> cargo nextest run --workspace --run-ignored all"
     {{cargo}} nextest run --workspace --run-ignored all
 
 # Coverage report (advisory threshold 80%).
@@ -149,16 +213,19 @@ doc:
 
 # Aggregated lint pipeline (everything that gates merges).
 lint:
+    @echo "==> cargo xtask lint"
     {{cargo}} xtask lint
 
 # Local CI replica.
 ci:
+    @echo "==> cargo xtask ci"
     {{cargo}} xtask ci
 
 # ----- cross-compile checks -----
 
 # Compile-only check that Windows code still builds from Linux dev container.
 cross-check:
+    @echo "==> cargo xwin check --workspace --target x86_64-pc-windows-msvc"
     {{cargo}} xwin check --workspace --target x86_64-pc-windows-msvc
 
 # Iteration-quality cross build (NOT shippable — see ADR-0001 deployment notes).
@@ -198,25 +265,25 @@ hooks:
 
 # ----- lefthook delegated recipes (do not run directly) -----
 
-_hook-fmt files:
+_hook-fmt +files:
     {{cargo}} fmt -- {{files}}
 
-_hook-typos-fix files:
+_hook-typos-fix +files:
     {{typos}} --write-changes {{files}}
 
-_hook-taplo-fmt files:
+_hook-taplo-fmt +files:
     {{taplo}} fmt {{files}}
 
 _hook-cargo-sort:
     {{cargo}} sort --workspace
 
-_hook-biome-format files:
+_hook-biome-format +files:
     {{biome}} format --write {{files}}
 
-_hook-yamlfmt files:
+_hook-yamlfmt +files:
     {{yamlfmt}} {{files}}
 
-_hook-actionlint files:
+_hook-actionlint +files:
     {{actionlint}} {{files}}
 
 _hook-xtask-dep-graph:

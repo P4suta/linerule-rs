@@ -15,14 +15,15 @@
 
 use linerule_core::Rgba;
 use windows::Foundation::Numerics::Matrix3x2;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_POINT_2F, D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
-    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1,
+    D2D1_BITMAP_OPTIONS, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET,
+    D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext,
+    ID2D1Factory1,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0,
@@ -38,7 +39,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED as DXGI_ALPHA_MODE_PREMULTIPLIED_BC, DXGI_FORMAT_B8G8R8A8_UNORM,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
-use windows::core::Interface;
+use windows::core::{IUnknown, Interface};
 
 use crate::error::{Result, Win32Error};
 
@@ -77,7 +78,7 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
         D3D11CreateDevice(
             None,
             D3D_DRIVER_TYPE_HARDWARE,
-            None,
+            HMODULE::default(),
             D3D11_CREATE_DEVICE_BGRA_SUPPORT,
             Some(&[D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1]),
             D3D11_SDK_VERSION,
@@ -204,8 +205,19 @@ pub fn visual_set_content(
     visual: &IDCompositionVisual2,
     surface: Option<&IDCompositionSurface>,
 ) -> Result<()> {
-    // SAFETY: visual は valid、surface は valid な COM ハンドル or None
-    unsafe { visual.SetContent(surface) }.map_err(|e| Win32Error::BadHr {
+    // `SetContent` の P0 は `Param<IUnknown>`; `IDCompositionSurface` から
+    // `IUnknown` への upcast を明示する。`cast` は QueryInterface 経由のため
+    // 形式上 fallible だが、interface 継承上ほぼ無条件に成功する。
+    let content: Option<IUnknown> =
+        surface
+            .map(|s| s.cast::<IUnknown>())
+            .transpose()
+            .map_err(|e| Win32Error::BadHr {
+                operation: "IDCompositionSurface::cast<IUnknown>",
+                hr: e.code().0,
+            })?;
+    // SAFETY: visual は valid、content は None または有効な IUnknown 参照。
+    unsafe { visual.SetContent(content.as_ref()) }.map_err(|e| Win32Error::BadHr {
         operation: "IDCompositionVisual2::SetContent",
         hr: e.code().0,
     })
@@ -270,7 +282,7 @@ pub fn fill_surface(
         d2d_context.SetTarget(&bitmap);
         // BeginDraw on context to bind the bitmap as the render target
         d2d_context.BeginDraw();
-        // Translate so the surface offset is honoured
+        // Translate so the surface offset is honored
         d2d_context.SetTransform(&Matrix3x2 {
             M11: 1.0,
             M12: 0.0,
@@ -337,4 +349,4 @@ const _: D2D_RECT_F = D2D_RECT_F {
     bottom: 0.0,
 };
 const _: D2D_POINT_2F = D2D_POINT_2F { x: 0.0, y: 0.0 };
-const _: D2D1_BITMAP_OPTIONS_CANNOT_DRAW = D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
+const _: D2D1_BITMAP_OPTIONS = D2D1_BITMAP_OPTIONS_CANNOT_DRAW;

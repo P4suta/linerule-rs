@@ -5,6 +5,6 @@
 fn main() {
     #[cfg(target_os = "windows")]
     {
-        embed_resource::compile("app.manifest", embed_resource::NONE);
+        let _ = embed_resource::compile("app.manifest", embed_resource::NONE);
     }
 }

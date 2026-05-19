@@ -9,9 +9,6 @@ authors.workspace = true
 description = "Pure logic core for linerule-rs: ADTs, reducers, render, parsers."
 publish = false
 
-[lints]
-workspace = true
-
 [package.metadata.cargo-rdme]
 readme-path = "../../README.md"
 
@@ -24,3 +21,6 @@ tracing = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 serde_json = { workspace = true }
+
+[lints]
+workspace = true

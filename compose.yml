@@ -17,7 +17,10 @@ services:
       - .:/workspace:cached
       - cargo-registry:/usr/local/cargo/registry
       - cargo-git:/usr/local/cargo/git
-      - xwin-cache:/workspace/.xwin-cache
+      # cargo-xwin caches MSVC CRT / Windows SDK under ~/.cache/cargo-xwin/xwin.
+      # Mount a named volume there so the (~500MB) sysroot survives container
+      # rebuilds instead of being re-downloaded every time.
+      - xwin-cache:/home/dev/.cache/cargo-xwin
       - npm-cache:/workspace/node_modules
     init: true
     stdin_open: true

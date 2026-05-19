@@ -1,15 +1,12 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/linerule-app",
     "crates/linerule-core",
     "crates/linerule-platform-windows",
-    "crates/linerule-app",
     "xtask",
 ]
-default-members = [
-    "crates/linerule-core",
-    "crates/linerule-app",
-]
+default-members = ["crates/linerule-core", "crates/linerule-app"]
 
 [workspace.package]
 edition = "2024"
@@ -20,76 +17,76 @@ repository = "https://github.com/P4suta/linerule-rs"
 authors = ["linerule contributors"]
 
 [workspace.dependencies]
-# Win32 / COM
-windows = "0.60"
-windows-core = "0.60"
-
-# CLI / config
-clap = { version = "4", features = ["derive"] }
-
-# Structured logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt", "registry"] }
-tracing-appender = "0.2"
-
-# Serialization / errors
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 anyhow = "1"
-thiserror = "2"
 
 # Bitflag DSL (Modifiers)
 bitflags = "2"
 
-# Utilities
-directories = "5"
-uuid = { version = "1", features = ["v4", "fast-rng", "serde"] }
-embed-resource = "3"
-
 # xtask helpers
 cargo_metadata = "0.18"
 
+# CLI / config
+clap = { version = "4", features = ["derive"] }
+
+# Utilities
+directories = "5"
+embed-resource = "3"
+
 # Dev-only
 proptest = "1"
+
+# Serialization / errors
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tempfile = "3"
+thiserror = "2"
+
+# Structured logging
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt", "registry"] }
+uuid = { version = "1", features = ["v4", "fast-rng", "serde"] }
+# Win32 / COM
+windows = "0.60"
+windows-core = "0.60"
 
 [workspace.lints.clippy]
-all      = { level = "deny",  priority = -1 }
-pedantic = { level = "warn",  priority = -1 }
-nursery  = { level = "warn",  priority = -1 }
-cargo    = { level = "warn",  priority = -1 }
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
 
 # 美しさのため明示昇格
-wildcard_imports                = "deny"
-mod_module_files                = "deny"
-or_fun_call                     = "deny"
-unwrap_used                     = "deny"
-expect_used                     = "warn"
-panic                           = "warn"
-todo                            = "warn"
-unimplemented                   = "warn"
-dbg_macro                       = "deny"
-print_stdout                    = "warn"
-print_stderr                    = "warn"
-allow_attributes_without_reason = "deny"   # `#[allow]` には reason 必須
-disallowed_macros               = "deny"   # clippy.toml で禁止リスト
-disallowed_types                = "deny"   # clippy.toml で禁止リスト
-disallowed_methods              = "deny"
+wildcard_imports = "deny"
+mod_module_files = "deny"
+or_fun_call = "deny"
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "deny"
+print_stdout = "warn"
+print_stderr = "warn"
+allow_attributes_without_reason = "deny" # `#[allow]` には reason 必須
+disallowed_macros = "deny"               # clippy.toml で禁止リスト
+disallowed_types = "deny"                # clippy.toml で禁止リスト
+disallowed_methods = "deny"
 
 # 例外（lint そのものの設計と本プロジェクトの方針が噛み合わないもの）
-module_name_repetitions  = "allow"   # `OverlayConfig` 等の自然な命名と衝突
-multiple_crate_versions  = "allow"   # 依存推移グラフ次第、本プロジェクトでは制御不能
-cargo_common_metadata    = "allow"   # 内部 publish=false のため
+module_name_repetitions = "allow" # `OverlayConfig` 等の自然な命名と衝突
+multiple_crate_versions = "allow" # 依存推移グラフ次第、本プロジェクトでは制御不能
+cargo_common_metadata = "allow"   # 内部 publish=false のため
 
 [workspace.lints.rust]
-unsafe_op_in_unsafe_fn    = "deny"
-unreachable_pub           = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+unreachable_pub = "warn"
 elided_lifetimes_in_paths = "warn"
-single_use_lifetimes      = "warn"
-trivial_casts             = "warn"
-trivial_numeric_casts     = "warn"
-static_mut_refs           = "deny"   # `static mut` 経由参照を禁止
-missing_docs              = "warn"   # 全 public item に doc 必須 (CI -D warnings 下で実質 deny)
+single_use_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+static_mut_refs = "deny"           # `static mut` 経由参照を禁止
+missing_docs = "warn"              # 全 public item に doc 必須 (CI -D warnings 下で実質 deny)
 
 [profile.release]
 lto = "fat"
