@@ -2,13 +2,7 @@
 # https://taplo.tamasfe.dev/configuration/file.html
 
 include = ["**/*.toml"]
-exclude = [
-    "target/**",
-    "artifacts/**",
-    ".xwin-cache/**",
-    ".sccache/**",
-    "node_modules/**",
-]
+exclude = ["target/**", "artifacts/**", ".xwin-cache/**", ".sccache/**", "node_modules/**"]
 
 [formatting]
 align_entries = false

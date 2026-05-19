@@ -31,15 +31,15 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Allow path-based deps (workspace internals) to look like wildcards — they
+# don't carry semver implications inside the same workspace.
+allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
 # Transitive lazy_static / once_cell from upstream crates is unavoidable;
 # the policy lives in `xtask strict-code` (our own code only).
-deny = [
-    { name = "openssl" },
-    { name = "openssl-sys" },
-]
+deny = [{ name = "openssl" }, { name = "openssl-sys" }]
 skip-tree = []
 
 [sources]

@@ -1,0 +1,40 @@
+# Release Please: drives release PRs and tags from Conventional Commits.
+#
+# Flow:
+#   1. Push lands on main → action inspects commits since the last release.
+#   2. If user-visible changes are detected (feat / fix / perf / refactor),
+#      a "release PR" is opened or updated. It bumps the workspace version,
+#      updates CHANGELOG.md, and synchronizes Cargo.lock.
+#   3. Merging that PR pushes a `vX.Y.Z` tag and creates a GitHub Release
+#      with auto-generated notes.
+#
+# Conventional-commit type → SemVer bump:
+#   feat:           minor
+#   fix / perf:     patch
+#   ! / BREAKING:   major
+
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release please
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: googleapis/release-please-action@a02a34c4d625f9be7cb89156071d8567266a2445 # v4.3.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.GITHUB_TOKEN }}

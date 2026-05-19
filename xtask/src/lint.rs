@@ -17,7 +17,10 @@ pub(crate) fn run() -> Result<()> {
         ),
         ("taplo", vec!["taplo", "fmt", "--check"]),
         ("biome", vec!["biome", "format", "."]),
-        ("yamlfmt", vec!["yamlfmt", "--lint", "."]),
+        // Don't pass "." — that bypasses the include/exclude in .yamlfmt and
+        // makes yamlfmt walk node_modules/. Letting it pick up files from the
+        // include patterns gives the same coverage minus the noise.
+        ("yamlfmt", vec!["yamlfmt", "--lint"]),
         (
             "clippy",
             vec![
@@ -44,7 +47,10 @@ pub(crate) fn run() -> Result<()> {
         ),
         ("typos", vec!["typos"]),
         ("actionlint", vec!["actionlint"]),
-        ("cargo-machete", vec!["cargo", "machete"]),
+        // Call cargo-machete directly, not via `cargo machete`. The cargo
+        // subcommand path passes "machete" as argv[1] to the binary which
+        // older cargo-machete versions misinterpret as a target path.
+        ("cargo-machete", vec!["cargo-machete"]),
         ("dep-graph", vec!["cargo", "xtask", "dep-graph"]),
     ];
 
