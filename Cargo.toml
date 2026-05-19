@@ -49,6 +49,7 @@ uuid = { version = "1", features = ["v4", "fast-rng", "serde"] }
 # Win32 / COM
 windows = "0.60"
 windows-core = "0.60"
+windows-numerics = "0.1"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

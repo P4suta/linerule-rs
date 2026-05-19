@@ -23,7 +23,8 @@ taplo := if inside == "1" { "taplo" } else { docker_run + " taplo" }
 biome := if inside == "1" { "biome" } else { docker_run + " biome" }
 yamlfmt := if inside == "1" { "yamlfmt" } else { docker_run + " yamlfmt" }
 sh := if inside == "1" { "bash -lc" } else { docker_run + " bash -lc" }
-npx := if inside == "1" { "npx --no" } else { docker_run + " npx --no" }
+bun := if inside == "1" { "bun" } else { docker_run + " bun" }
+bunx := if inside == "1" { "bunx" } else { docker_run + " bunx" }
 
 dev_log := env_var_or_default("LINERULE_LOG", "debug,wnd_proc=info,heartbeat=info,cursor_tracker=info")
 
@@ -32,22 +33,25 @@ default:
 
 # ----- first-run bootstrap -----
 
-# One-shot setup for a fresh clone. Builds the dev container, installs git
-# hooks, fetches the Windows cross-compile sysroot ahead of time so the first
-# `just cross-check` doesn't appear to hang for 5 minutes downloading, and
-# runs `just doctor` to confirm every tool is reachable. Idempotent — re-run
-# any time the environment feels off.
+# One-shot setup for a fresh clone. Pulls the prebuilt dev image (or builds
+# locally if absent), brings up the persistent dev container, installs git
+# hooks, restores the commitlint bun packages, and runs `just doctor` to
+# confirm every tool is reachable. Idempotent — re-run any time the
+# environment feels off.
+#
+# The Windows cross-compile sysroot (MSVC CRT + Windows SDK, ~500 MB) is
+# baked into the dev image, so the first `just cross-check` is instant.
 bootstrap:
-    @echo "==> 1/5 docker compose build (dev image)"
-    docker compose build
-    @echo "==> 2/5 docker compose up -d dev (persistent dev container)"
+    @echo "==> 1/4 fetch dev image (try ghcr.io, fall back to local build)"
+    @docker compose pull 2>/dev/null && echo "  (pulled prebuilt image from ghcr.io)" \
+        || (echo "  (no published image, building locally with GITHUB_TOKEN if available)" && \
+            GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}" docker compose build)
+    @echo "==> 2/4 docker compose up -d dev (persistent dev container)"
     docker compose up -d dev
-    @echo "==> 3/5 lefthook install (pre-commit / commit-msg / pre-push hooks)"
+    @echo "==> 3/4 lefthook install (pre-commit / commit-msg / pre-push hooks)"
     {{lefthook}} install
-    @echo "==> 4/5 npm install (commitlint, used by commit-msg hook)"
-    {{sh}} "npm install --no-audit --no-fund"
-    @echo "==> 5/5 prefetch xwin sysroot (~500MB; one-time, cached in docker volume)"
-    {{cargo}} xwin cache xwin
+    @echo "==> 4/4 bun install (commitlint, used by commit-msg hook)"
+    {{bun}} install
     @just doctor
     @echo
     @echo "🎉 bootstrap done. Try: just build / just test / just cross-check / just lint"
@@ -83,14 +87,15 @@ doctor:
         check just           "just --version"; \
         check mold           "mold --version"; \
         check clang          "clang --version"; \
+        check bun            "bun --version"; \
     '
     @echo "==> doctor: ok"
 
 # ----- one-shot environment -----
 
 docker-build:
-    @echo "==> docker compose build"
-    docker compose build
+    @echo "==> docker compose build (GITHUB_TOKEN auto-loaded from gh CLI if available)"
+    GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}" docker compose build
 
 shell:
     {{docker_run}} bash
@@ -261,7 +266,7 @@ crash-latest:
 
 hooks:
     {{lefthook}} install
-    {{sh}} "npm install --no-audit --no-fund"
+    {{bun}} install
 
 # ----- lefthook delegated recipes (do not run directly) -----
 
@@ -294,4 +299,4 @@ _hook-docs-drift:
     {{sh}} "git diff --quiet docs/ README.md || (echo 'docs drift detected — run \\`just docs\\` and commit' >&2; exit 1)"
 
 _hook-commitlint msg_path:
-    {{npx}} -- commitlint --edit {{msg_path}}
+    {{bunx}} commitlint --edit {{msg_path}}

@@ -27,14 +27,23 @@ just bootstrap      # 一発セットアップ: docker build + git hooks + xwin 
 
 `just bootstrap` がやること:
 
-1. `docker compose build` — 開発コンテナ（rust:1.95 + cargo-binstall + mold linker + 全 lint ツール）をビルド
+1. **dev image を取得** — `docker compose pull` で `ghcr.io/p4suta/linerule-rs-dev:latest` を取りに行き、無ければ `docker compose build` にフォールバック（フォールバック時は `gh auth token` から `GITHUB_TOKEN` を自動拾って cargo-binstall の api.github.com レートリミット回避）。CI (`.github/workflows/dev-image.yml`) が週次 + Dockerfile 変更時にイメージを更新するので、通常は ~30s の pull
 2. `docker compose up -d dev` — 永続コンテナを立てて以降の `just <recipe>` を高速化
 3. `lefthook install` — pre-commit / commit-msg / pre-push git hooks を `.git/hooks/` に配置
-4. `npm install` — commit-msg hook が使う commitlint を入れる
-5. `cargo xwin cache xwin` — Windows クロスコンパイル用 MSVC CRT / Windows SDK（~500MB）を先に取得。次回以降の `just cross-check` が即座に通る
-6. `just doctor` — 全ツールの疎通確認
+4. `bun install` — commit-msg hook が使う commitlint を入れる（npm ではなく [Bun](https://bun.sh/) を採用、爆速）
+5. `just doctor` — 全ツールの疎通確認
+
+Windows クロスコンパイル用の MSVC CRT / Windows SDK（~500 MB）は dev image に焼き込まれているので、初回の `just cross-check` も即座に通る。
 
 困ったら `just doctor` を打てば、どのツールが落ちているかすぐ分かる。
+
+#### 高速化の根拠（測定済み）
+
+| 構成 | フレッシュクローン → cross-check 通る状態まで |
+|---|---|
+| Token 無しで build（cargo-binstall が api.github.com 60/h で 403 → 120s × N retry → source fallback、その後 xwin 7m download） | **約 20 分** |
+| Token 有りで build（cargo-binstall は prebuilt、xwin sysroot を image に焼き込み済み） | **約 2.4 分** |
+| ghcr.io pull（CI がビルドして push、xwin sysroot 込みで ~1.7 GB pull） | **約 30 秒** |
 
 ### ビルド・テスト・リント
 

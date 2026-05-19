@@ -14,7 +14,6 @@
 )]
 
 use linerule_core::Rgba;
-use windows::Foundation::Numerics::Matrix3x2;
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_POINT_2F, D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
@@ -40,6 +39,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::core::{IUnknown, Interface};
+use windows_numerics::Matrix3x2;
 
 use crate::error::{Result, Win32Error};
 
@@ -47,13 +47,21 @@ use crate::error::{Result, Win32Error};
 /// 所有される。 各フィールドは `windows` crate の COM type で、`Drop` で
 /// 自動 Release される。
 pub struct DcompPipeline {
+    /// D3D11 デバイス。BGRA + ハードウェアドライバ。D2D とリソースを共有する。
     pub d3d11: ID3D11Device,
+    /// D3D11 デバイスを `IDXGIDevice` にキャストしたもの。D2D ファクトリに渡す。
     pub dxgi: IDXGIDevice,
+    /// D2D1 ファクトリ。シングルスレッド設定。
     pub d2d_factory: ID2D1Factory1,
+    /// D2D デバイス。`d2d_factory.CreateDevice(&dxgi)` で得る。
     pub d2d_device: ID2D1Device,
+    /// D2D デバイスコンテキスト。`fill_surface` で `BeginDraw` / `Clear` 等を呼ぶ。
     pub d2d_context: ID2D1DeviceContext,
+    /// DirectComposition デスクトップデバイス。`CreateSurface` / `CreateVisual` の主体。
     pub dcomp: IDCompositionDesktopDevice,
+    /// HWND と紐づいた composition target。Drop で composition が切り離される。
     pub target: IDCompositionTarget,
+    /// ルートビジュアル。各 layer の `IDCompositionVisual2` を子として持つ。
     pub root: IDCompositionVisual2,
 }
 

@@ -509,6 +509,7 @@ dependencies = [
  "tracing-subscriber",
  "windows",
  "windows-core",
+ "windows-numerics",
 ]
 
 [[package]]

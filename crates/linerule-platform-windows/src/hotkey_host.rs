@@ -18,6 +18,7 @@ use crate::win32_ffi::{self, hotkey as hotkey_ffi};
 /// channel に転送する。Drop で全 hotkey の `UnregisterHotKey` + `DestroyWindow`。
 pub struct HotkeyHost {
     hwnd: HWND,
+    #[allow(dead_code, reason = "保持するだけで Drop による Receiver 切断を防ぐ")]
     sender: Sender<OverlayAction>,
     receiver: Receiver<OverlayAction>,
     /// hotkey id → action / chord の双方向マップ
@@ -59,7 +60,7 @@ impl HotkeyHost {
 
     fn register_pair(&mut self, id: i32, spec: &str, action: OverlayAction) -> Result<()> {
         let chord = linerule_core::input::chord::parse(spec)
-            .map_err(|e| Win32Error::BadHr {
+            .map_err(|_e| Win32Error::BadHr {
                 operation: "ChordParser::parse",
                 hr: -1,
             })

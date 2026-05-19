@@ -16,7 +16,6 @@ FROM rust:1.95-bookworm AS dev
 
 ARG USER_UID=1000
 ARG USER_GID=1000
-ARG NODE_MAJOR=22
 
 ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_HOME=/usr/local/cargo \
@@ -44,10 +43,13 @@ RUN apt-get update \
         unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Node 22 LTS for commitlint.
-RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Bun (single-binary JS runtime + package manager). Replaces Node + npm
+# for commitlint — fast install, no node_modules permission soup, single
+# binary release.
+ENV BUN_INSTALL=/usr/local/bun
+ENV PATH=$BUN_INSTALL/bin:$PATH
+RUN curl -fsSL https://bun.sh/install | bash \
+    && bun --version
 
 # Rust toolchain extras.
 RUN rustup target add x86_64-pc-windows-msvc \
@@ -60,8 +62,21 @@ RUN curl -fsSL https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/
 
 # Rust tooling — prefer prebuilt binaries via cargo-binstall, fall back
 # automatically if no binary release is published for a given crate.
+#
+# IMPORTANT: cargo-binstall queries api.github.com to locate prebuilts;
+# unauthenticated requests hit the 60/hr rate limit, get 403, and binstall
+# waits 120 s × N retries before falling back to compiling from source —
+# turning a 1-minute step into 10+. Pass GITHUB_TOKEN via BuildKit secret
+# so the token never gets baked into the image:
+#
+#   GITHUB_TOKEN=$(gh auth token) docker compose build
+#
+# Measured: without token = ~12 min (rate-limited + source compile);
+#           with token    = ~1–2 min (prebuilts; few outliers compile).
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=secret,id=github-token,required=false \
+    GITHUB_TOKEN="$(cat /run/secrets/github-token 2>/dev/null || true)" \
     cargo binstall --no-confirm --no-symlinks \
         cargo-xwin \
         cargo-deny \
@@ -81,15 +96,25 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 RUN curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
     | bash -s -- latest /usr/local/bin
 
-# lefthook (.deb release). The asset name embeds the version, so resolve the
-# latest tag via the GitHub API first.
-RUN ARCH="$(dpkg --print-architecture)" \
-    && LEFTHOOK_VERSION="$(curl -fsSL https://api.github.com/repos/evilmartians/lefthook/releases/latest \
-        | sed -n 's/.*\"tag_name\": *\"v\([^\"]*\)\".*/\1/p')" \
-    && curl -fsSL -o /tmp/lefthook.deb \
-        "https://github.com/evilmartians/lefthook/releases/download/v${LEFTHOOK_VERSION}/lefthook_${LEFTHOOK_VERSION}_${ARCH}.deb" \
-    && dpkg -i /tmp/lefthook.deb \
-    && rm /tmp/lefthook.deb
+# lefthook (.deb release). The asset name embeds the version, so resolve
+# the latest tag via the GitHub API first. Auth via GITHUB_TOKEN secret to
+# avoid the unauthenticated 60/hr api.github.com rate limit (same fix that
+# rescues the cargo-binstall step above).
+RUN --mount=type=secret,id=github-token,required=false bash -eu -c '\
+    arch="$(dpkg --print-architecture)"; \
+    token="$(cat /run/secrets/github-token 2>/dev/null || true)"; \
+    if [ -n "$token" ]; then \
+        version_json="$(curl -fsSL -H "Authorization: Bearer $token" https://api.github.com/repos/evilmartians/lefthook/releases/latest)"; \
+    else \
+        version_json="$(curl -fsSL https://api.github.com/repos/evilmartians/lefthook/releases/latest)"; \
+    fi; \
+    version="$(echo "$version_json" | sed -n "s/.*\"tag_name\": *\"v\([^\"]*\)\".*/\1/p")"; \
+    test -n "$version" || { echo "ERROR: could not resolve lefthook latest tag (api.github.com rate-limited?)" >&2; exit 1; }; \
+    echo "lefthook: v$version"; \
+    curl -fsSL -o /tmp/lefthook.deb "https://github.com/evilmartians/lefthook/releases/download/v${version}/lefthook_${version}_${arch}.deb"; \
+    dpkg -i /tmp/lefthook.deb; \
+    rm /tmp/lefthook.deb \
+'
 
 # biome (Rust-backed formatter, JSON). Single binary, no Node required.
 RUN ARCH="$(dpkg --print-architecture)" \
@@ -126,6 +151,12 @@ RUN groupadd --gid ${USER_GID} dev \
 
 USER dev
 ENV INSIDE_CONTAINER=1
+
+# Pre-cache the Windows cross-compilation sysroot (MSVC CRT + Windows SDK,
+# ~500 MB) inside the image so the first `just cross-check` doesn't sit on
+# a silent 7-minute microsoft.com download. Runs as dev so the cache lands
+# under /home/dev/.cache/cargo-xwin — the path cargo-xwin uses at runtime.
+RUN cargo xwin cache xwin
 
 WORKDIR /workspace
 CMD ["bash"]
