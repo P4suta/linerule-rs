@@ -30,6 +30,20 @@ pub const MOD_WIN: u32 = 0x0008;
 ///
 /// The function is total: every variant of [`KeyCode`] and every combination
 /// of [`Modifiers`] flags has a deterministic mapping.
+///
+/// # Examples
+///
+/// ```
+/// use linerule_core::input::chord::{ChordSpec, KeyCode, Letter, Modifiers};
+/// use linerule_core::input::win32_vk::{chord_to_win32, MOD_ALT, MOD_CONTROL};
+/// let chord = ChordSpec::new(
+///     Modifiers::CTRL | Modifiers::ALT,
+///     KeyCode::Letter(Letter::from_ascii(b'R').unwrap()),
+/// );
+/// let (mods, vk) = chord_to_win32(chord);
+/// assert_eq!(mods, MOD_CONTROL | MOD_ALT);
+/// assert_eq!(vk, 0x52); // ASCII 'R'
+/// ```
 #[must_use]
 pub const fn chord_to_win32(chord: ChordSpec) -> (u32, u32) {
     let mut mods = 0u32;

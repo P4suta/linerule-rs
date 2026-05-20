@@ -11,6 +11,27 @@ use crate::{
 
 /// Apply `action` to `state`, returning the new state and a delta describing
 /// which fields changed.
+///
+/// # Examples
+///
+/// `CycleMode` advances through Off → Horizontal → Vertical → Off:
+///
+/// ```
+/// use linerule_core::{Mode, OverlayAction, State, state::reduce};
+/// let (next, delta) = reduce::apply(State::DEFAULT, OverlayAction::CycleMode);
+/// assert_eq!(next.mode, Mode::Horizontal);
+/// assert!(delta.is_any());
+/// ```
+///
+/// `Quit` is a pure no-op at the reducer layer (the tick pipeline turns it
+/// into a `TickEffect::Quit`):
+///
+/// ```
+/// use linerule_core::{OverlayAction, State, state::reduce};
+/// let (next, delta) = reduce::apply(State::DEFAULT, OverlayAction::Quit);
+/// assert_eq!(next, State::DEFAULT);
+/// assert!(!delta.is_any());
+/// ```
 #[must_use]
 pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
     use OverlayAction as A;

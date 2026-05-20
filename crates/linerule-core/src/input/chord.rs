@@ -186,6 +186,24 @@ pub enum ChordError {
 ///
 /// # Errors
 /// See [`ChordError`].
+///
+/// # Examples
+///
+/// ```
+/// use linerule_core::input::chord;
+/// let spec = chord::parse("Ctrl+Alt+R").expect("default chord");
+/// // The parsed form round-trips back to the canonical string:
+/// assert_eq!(spec.display(), "Ctrl+Alt+R");
+/// ```
+///
+/// Modifier names accept aliases (`opt` for `alt`, `cmd` for `meta`, …):
+///
+/// ```
+/// use linerule_core::input::chord;
+/// let a = chord::parse("Ctrl+Alt+H").expect("default");
+/// let b = chord::parse("control+option+H").expect("aliased");
+/// assert_eq!(a, b);
+/// ```
 pub fn parse(input: &str) -> Result<ChordSpec, ChordError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
