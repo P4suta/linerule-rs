@@ -2,7 +2,15 @@
 
 Rust 製の Windows 用 reading ruler（読書補助オーバーレイ）。透明 click-through ウィンドウで画面上に水平／垂直のスリットを表示し、視線追跡を助ける。
 
-> ⚠️ 開発中。Phase D（DComp + D2D + D3D11 描画パイプライン）まで実装。Phase E 以降は未実装。
+実機での操作:
+
+- `Ctrl+Alt+R`: モード切替（Off → Horizontal → Vertical → Off）
+- `Ctrl+Alt+H`: 表示／非表示トグル
+- `Ctrl+Alt+]` / `Ctrl+Alt+[`: スリット厚さ ±
+- `Ctrl+Alt+=` / `Ctrl+Alt+-`: 不透明度 ±
+- `Ctrl+Alt+Q`: 終了
+
+HUD パネル（画面右上）に Mode / Thickness / Opacity / Refresh Hz が常時表示される。multi-monitor 環境では virtual screen 全体に overlay が広がる。
 
 ## 構成
 

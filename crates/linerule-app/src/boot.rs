@@ -52,10 +52,21 @@ pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
 #[cfg(target_os = "windows")]
 fn run_overlay() -> Result<()> {
     use linerule_core::UserConfig;
-    use linerule_platform_windows::{OverlayWindow, RenderClock, monitor_info, run_message_pump};
+    use linerule_platform_windows::{
+        OverlayWindow, RenderClock, monitor_info, run_message_pump, set_dpi_aware,
+    };
+
+    // 最初に DPI awareness を Per-Monitor V2 に設定する。Window 作成前に呼ぶ
+    // 必要があるため `OverlayWindow::new` より前に置く。失敗しても fatal には
+    // せず log のみ（既に dpi awareness が manifested 等のケース）。
+    if let Err(e) = set_dpi_aware() {
+        tracing::warn!(error = %e, "SetProcessDpiAwarenessContext failed; continuing with default awareness");
+    }
 
     let config = UserConfig::DEFAULT;
-    let monitor = monitor_info::primary_bounds()?;
+    // virtual screen bounds (全 monitor を覆う矩形) を使い、multi-monitor 環境で
+    // overlay HWND がモニタ境界を跨いで slit を引けるようにする。
+    let monitor = monitor_info::virtual_screen_bounds()?;
 
     // Drop order が重要: pacer (`_clock`) は overlay HWND に `PostMessageW` を
     // 投げ続けるので、overlay HWND が破棄される前に pacer を止める必要がある。
