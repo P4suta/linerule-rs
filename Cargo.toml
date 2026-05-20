@@ -47,9 +47,9 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt", "registry"] }
 uuid = { version = "1", features = ["v4", "fast-rng", "serde"] }
 # Win32 / COM
-windows = "0.60"
-windows-core = "0.60"
-windows-numerics = "0.1"
+windows = "0.62"
+windows-core = "0.62"
+windows-numerics = "0.3"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
