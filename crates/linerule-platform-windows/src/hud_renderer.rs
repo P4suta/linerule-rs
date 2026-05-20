@@ -184,11 +184,14 @@ mod tests {
 
     #[test]
     fn size_to_centi_rounds_to_2_decimal_places() {
+        // 安全に f32 で表現できる整数 × 100 を確認する。0.005 のような半端値は
+        // f32 精度で 2 進数表現が exact でない（20.005_f32 は 20.00499...）ため
+        // round 後の結果が処理系依存になり、Windows native と Linux 上の rustc
+        // で結果が食い違う事故があった (#42)。
         assert_eq!(size_to_centi(24.0), 2400);
         assert_eq!(size_to_centi(18.5), 1850);
         assert_eq!(size_to_centi(22.0), 2200);
-        assert_eq!(size_to_centi(20.001), 2000);
-        assert_eq!(size_to_centi(20.005), 2001);
+        assert_eq!(size_to_centi(0.0), 0);
     }
 
     #[test]

@@ -241,6 +241,24 @@ pub fn screen_height() -> i32 {
     unsafe { GetSystemMetrics(SM_CYSCREEN) }
 }
 
+/// virtual screen 全体の bounds (`SM_XVIRTUALSCREEN` / `SM_YVIRTUALSCREEN` /
+/// `SM_CXVIRTUALSCREEN` / `SM_CYVIRTUALSCREEN`) を `(left, top, width, height)`
+/// で返す。multi-monitor 環境ではすべての monitor を覆う矩形。
+pub fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    };
+    // SAFETY: 4 連の read-only API call。
+    unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    }
+}
+
 // ---- WndProc entry point ---------------------------------------------------
 
 /// linerule overlay の WndProc 本体。
@@ -315,6 +333,15 @@ pub fn primary_monitor() -> HMONITOR {
     unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) }
 }
 
+/// `MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST)` の薄い safe wrapper。
+/// 任意座標から最も近い monitor を返す（cursor が monitor 外に出ても OK）。
+pub fn monitor_from_point(x: i32, y: i32) -> HMONITOR {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST;
+    // SAFETY: 任意 i32 座標を受け付ける read-only API。
+    unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) }
+}
+
 /// `GetMonitorInfoW` の薄い safe wrapper。
 pub fn get_monitor_info(hmonitor: HMONITOR) -> Result<MONITORINFO> {
     use windows::Win32::Graphics::Gdi::GetMonitorInfoW;
@@ -328,6 +355,31 @@ pub fn get_monitor_info(hmonitor: HMONITOR) -> Result<MONITORINFO> {
         return Err(last_error("GetMonitorInfoW"));
     }
     Ok(info)
+}
+
+// ---- DPI awareness ---------------------------------------------------------
+
+/// `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)`
+/// の薄い safe wrapper。プロセス起動時に 1 回だけ呼ぶ。
+///
+/// V2 awareness は per-monitor DPI を尊重し、`WM_DPICHANGED` をオーバーレイ
+/// HWND が受け取れるようにする (Windows 10 1703+ 必須)。失敗時 (既に dpi awareness
+/// が設定済み等) でも fatal にはせず、log のみ。
+///
+/// # Errors
+/// `SetProcessDpiAwarenessContext` が `FALSE` を返したとき。
+pub fn set_dpi_aware() -> Result<()> {
+    use windows::Win32::UI::HiDpi::{
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+    };
+    // SAFETY: DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 は windows-rs 提供の
+    // 定数。本 API は冪等で、起動直後の 1 回だけ呼ぶ前提。
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }.map_err(
+        |e| PlatformError::BadHr {
+            operation: "SetProcessDpiAwarenessContext",
+            hr: e.code().0,
+        },
+    )
 }
 
 // ---- display settings (refresh rate) ---------------------------------------
