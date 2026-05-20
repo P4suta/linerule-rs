@@ -29,11 +29,21 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
         console::ensure_console_attached();
     }
 
+    dispatch_command(cli)
+}
+
+/// `boot()` から global subscriber 初期化と panic hook 設置を取り除いた本体。
+/// テストで `#[traced_test]` を当てる用。
+///
+/// # Errors
+/// 各サブコマンドが失敗したとき。
+pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
     match cli.command.unwrap_or(Command::Run) {
         Command::Run => run_overlay(),
         Command::Diagnostics { dry_run } => diagnostics(dry_run),
         Command::Version => {
             println!("linerule {}", env!("CARGO_PKG_VERSION"));
+            tracing::info!(version = env!("CARGO_PKG_VERSION"), "linerule version");
             Ok(())
         },
     }
@@ -61,6 +71,7 @@ fn run_overlay() -> Result<()> {
 fn diagnostics(_dry_run: bool) -> Result<()> {
     let data_dir = logging::data_dir()?;
     println!("linerule data dir: {}", data_dir.display());
+    tracing::info!(data_dir = %data_dir.display(), "linerule data dir");
     if data_dir.exists() {
         for entry in std::fs::read_dir(&data_dir)? {
             let entry = entry?;
@@ -70,4 +81,49 @@ fn diagnostics(_dry_run: bool) -> Result<()> {
         println!("  (directory does not exist yet — no events / crashes)");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Log-assertion tests for `dispatch_command`. These exercise the post-
+    //! initialization code path under a `#[traced_test]`-installed subscriber,
+    //! letting us assert that key user-visible events are actually emitted.
+
+    use super::*;
+    use clap::Parser;
+    use tracing_test::traced_test;
+
+    fn parse(args: &[&str]) -> Cli {
+        let mut tokens = vec!["linerule"];
+        tokens.extend_from_slice(args);
+        Cli::try_parse_from(tokens).expect("clap should parse the fixture")
+    }
+
+    #[traced_test]
+    #[test]
+    fn version_dispatch_emits_info_with_package_version() {
+        dispatch_command(parse(&["version"])).expect("version subcommand");
+        let pkg = env!("CARGO_PKG_VERSION");
+        assert!(
+            logs_contain(pkg),
+            "info event should include CARGO_PKG_VERSION"
+        );
+        assert!(
+            logs_contain("linerule version"),
+            "version event should carry the `linerule version` message"
+        );
+    }
+
+    #[traced_test]
+    #[test]
+    fn diagnostics_dispatch_emits_data_dir_event() {
+        // diagnostics() touches the OS data dir but tolerates missing
+        // directories. We just check that the data-dir info event fired
+        // before any I/O failure.
+        let _ = dispatch_command(parse(&["diagnostics", "--dry-run"]));
+        assert!(
+            logs_contain("linerule data dir"),
+            "diagnostics should log the data dir"
+        );
+    }
 }
