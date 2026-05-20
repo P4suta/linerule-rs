@@ -57,3 +57,66 @@ impl OverlayWndState {
         self.click_count.fetch_add(1, Ordering::Relaxed) + 1
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_state() -> OverlayWndState {
+        OverlayWndState::new(Span::none())
+    }
+
+    #[test]
+    fn nchit_first_three_samples_are_emitted() {
+        let s = fresh_state();
+        assert_eq!(s.tick_nchit(), Some(1));
+        assert_eq!(s.tick_nchit(), Some(2));
+        assert_eq!(s.tick_nchit(), Some(3));
+    }
+
+    #[test]
+    fn nchit_samples_4_through_199_are_suppressed() {
+        let s = fresh_state();
+        // Burn the first 3 samples.
+        let _ = s.tick_nchit();
+        let _ = s.tick_nchit();
+        let _ = s.tick_nchit();
+        // Hits 4..=199 must all be suppressed.
+        for n in 4..=199 {
+            assert_eq!(s.tick_nchit(), None, "n={n} should be suppressed");
+        }
+    }
+
+    #[test]
+    fn nchit_sample_emitted_every_200() {
+        let s = fresh_state();
+        for _ in 1..=199 {
+            let _ = s.tick_nchit();
+        }
+        assert_eq!(s.tick_nchit(), Some(200));
+        for n in 201..=399 {
+            assert_eq!(s.tick_nchit(), None, "n={n} should be suppressed");
+        }
+        assert_eq!(s.tick_nchit(), Some(400));
+    }
+
+    #[test]
+    fn click_counter_increments_monotonically() {
+        let s = fresh_state();
+        assert_eq!(s.tick_click(), 1);
+        assert_eq!(s.tick_click(), 2);
+        assert_eq!(s.tick_click(), 3);
+    }
+
+    #[test]
+    fn click_counter_independent_from_nchit_counter() {
+        let s = fresh_state();
+        let _ = s.tick_nchit();
+        let _ = s.tick_nchit();
+        let _ = s.tick_click();
+        // Next nchit is the 3rd, not the 5th.
+        assert_eq!(s.tick_nchit(), Some(3));
+        // Next click is the 2nd, not the 5th.
+        assert_eq!(s.tick_click(), 2);
+    }
+}

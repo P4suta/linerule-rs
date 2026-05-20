@@ -11,3 +11,28 @@ pub const HTTRANSPARENT: i32 = -1;
 /// UI thread に vsync tick を通知するために使う。Phase C ではまだ送信側がいない
 /// ので定数だけ置く。
 pub const WM_APP_TICK: u32 = 0x8001;
+
+#[cfg(test)]
+mod tests {
+    //! Pin the message constants against the Win32 SDK values.
+
+    use super::*;
+
+    /// `HTTRANSPARENT` is documented as `(LRESULT)-1` in winuser.h.
+    #[test]
+    fn httransparent_is_negative_one() {
+        assert_eq!(HTTRANSPARENT, -1);
+    }
+
+    /// Custom `WM_APP_*` messages must sit inside the documented
+    /// `WM_APP` (0x8000) … 0xBFFF window.
+    #[test]
+    fn wm_app_tick_is_inside_wm_app_band() {
+        const WM_APP: u32 = 0x8000;
+        const WM_APP_END: u32 = 0xBFFF;
+        assert!(
+            (WM_APP..=WM_APP_END).contains(&WM_APP_TICK),
+            "WM_APP_TICK = {WM_APP_TICK:#x} outside [{WM_APP:#x}, {WM_APP_END:#x}]"
+        );
+    }
+}

@@ -142,3 +142,36 @@ pub(crate) fn decompose(layer: Layer) -> (ScreenRect<Logical>, Rgba) {
     let Brush::Solid(color) = layer.brush;
     (rect, color)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use linerule_core::Point;
+
+    #[test]
+    fn decompose_round_trips_layer_into_constructor_args() {
+        let rect = ScreenRect::new(Point::new(100, 50), 800, 400);
+        let color = Rgba::new(0x12, 0x34, 0x56, 0x78);
+        let layer = Layer::solid_rect(rect, color);
+        let (back_rect, back_color) = decompose(layer);
+        assert_eq!(back_rect, rect);
+        assert_eq!(back_color, color);
+    }
+
+    #[test]
+    fn decompose_preserves_zero_alpha_color() {
+        let rect = ScreenRect::new(Point::new(0, 0), 1, 1);
+        let color = Rgba::new(0xFF, 0xFF, 0xFF, 0x00);
+        let (_, c) = decompose(Layer::solid_rect(rect, color));
+        assert_eq!(c.a, 0);
+    }
+
+    #[test]
+    fn decompose_preserves_origin_point() {
+        let rect = ScreenRect::new(Point::new(-500, -200), 100, 100);
+        let color = Rgba::DEFAULT_MASK;
+        let (r, _) = decompose(Layer::solid_rect(rect, color));
+        assert_eq!(r.left(), -500);
+        assert_eq!(r.top(), -200);
+    }
+}
