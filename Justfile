@@ -122,13 +122,6 @@ build-release:
     @echo "==> cargo build --release --workspace"
     {{cargo}} build --release --workspace
 
-# 配布可能 Debug Build。CI の `debug-build (win-x64, native, PDB)` と同じ
-# `[profile.dist-dev]` をローカルで生成し、`target/dist-dev/linerule.{exe,pdb}`
-# が出る。Linux からでも `cargo xwin` 経由でクロスビルドできる場合あり。
-build-debug:
-    @echo "==> cargo build --profile dist-dev -p linerule-app"
-    {{cargo}} build --profile dist-dev -p linerule-app
-
 # Inner-loop alias: skips dependency resolution checks.
 b:
     @echo "==> cargo build --workspace"
@@ -276,23 +269,30 @@ publish-windows-native:
     {{cargo}} build --release -p linerule-app --target x86_64-pc-windows-msvc
 
 # ----- diagnostics -----
+#
+# Phase J (ADR-0011) 以降、ログは `linerule.exe` と同じディレクトリに出る
+# portable 運用。これらの recipes は dev profile (`target/debug/linerule.exe`)
+# を起動した場合の出力先 `target/debug/` を assume する。`target/release/` の
+# log/crash を見たいときは LOG_DIR=target/release just <recipe> で上書きできる。
+
+log_dir := env_var_or_default("LOG_DIR", "target/debug")
 
 # Tail today's events file with subsystem filter.
 logs-tail subsystem="*":
-    {{sh}} "tail -F \"$APPDATA/linerule\"/events.jsonl.* 2>/dev/null | jq -c 'select(.target | test(\"{{subsystem}}\"))'"
+    {{sh}} "tail -F {{log_dir}}/events.jsonl.* 2>/dev/null | jq -c 'select(.target | test(\"{{subsystem}}\"))'"
 
 # Pretty-print today's events.
 logs-pretty:
-    {{sh}} "cat \"$APPDATA/linerule\"/events.jsonl.* | jq -C ."
+    {{sh}} "cat {{log_dir}}/events.jsonl.* | jq -C ."
 
 logs-clear:
-    {{sh}} "rm -f \"$APPDATA/linerule\"/events.jsonl.*"
+    {{sh}} "rm -f {{log_dir}}/events.jsonl.*"
 
 crash-list:
-    {{sh}} "ls -1t \"$APPDATA/linerule\"/crash-*.json 2>/dev/null"
+    {{sh}} "ls -1t {{log_dir}}/crash-*.json 2>/dev/null"
 
 crash-latest:
-    {{sh}} "ls -1t \"$APPDATA/linerule\"/crash-*.json 2>/dev/null | head -1 | xargs -r cat | jq -C ."
+    {{sh}} "ls -1t {{log_dir}}/crash-*.json 2>/dev/null | head -1 | xargs -r cat | jq -C ."
 
 # ----- git hooks -----
 

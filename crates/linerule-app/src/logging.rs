@@ -3,14 +3,17 @@
 //! `LINERULE_LOG` 環境変数で subsystem ごとのレベルを制御
 //! (`debug,wnd_proc=info,heartbeat=info` 等)。出力先は:
 //! - stderr (CLI モードのとき): human-readable
-//! - `%APPDATA%\linerule\events.jsonl.YYYY-MM-DD`: machine-readable JSON Lines
+//! - `<linerule.exe と同じ dir>/events.jsonl.YYYY-MM-DD`: machine-readable JSON Lines
+//!
+//! 「薄い読書ツール」志向のため、`%APPDATA%` / `ProjectDirs` を使わず exe と
+//! 同階層に直接吐く portable 運用 (ADR-0011)。書き込み権限が無い場合 (Program
+//! Files 配下に置かれた場合等) は `init()` が `Err` を返す。
 
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
@@ -22,9 +25,10 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// `main` の寿命まで保持する必要がある（drop で background writer が flush）。
 ///
 /// # Errors
-/// `%APPDATA%\linerule\` を作れない、あるいは file appender 初期化失敗時。
+/// exe path が解決できない、ログ dir を作れない、あるいは file appender 初期化
+/// 失敗時。
 pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
-    let log_dir = data_dir().context("resolving %APPDATA%\\linerule")?;
+    let log_dir = data_dir().context("resolving log dir next to linerule.exe")?;
     std::fs::create_dir_all(&log_dir)
         .with_context(|| format!("creating log dir {}", log_dir.display()))?;
 
@@ -60,14 +64,19 @@ pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
     Ok(guard)
 }
 
-/// `%APPDATA%\linerule\` 相当の path を返す。
+/// 現在実行中の `linerule.exe` と同じディレクトリを返す。`events.jsonl.*` と
+/// `crash-*.json` の両方がここに置かれる (ADR-0011)。
 ///
 /// # Errors
-/// `ProjectDirs` がプラットフォーム情報を取得できないとき。
+/// `std::env::current_exe()` が失敗した場合、または exe path に parent が無い
+/// 場合 (= 根本的に Win32 環境が壊れているケース)。
 pub(crate) fn data_dir() -> Result<PathBuf> {
-    let pd = ProjectDirs::from("rs", "linerule", "linerule")
-        .context("ProjectDirs::from returned None")?;
-    Ok(pd.data_dir().to_path_buf())
+    let exe = std::env::current_exe().context("std::env::current_exe failed")?;
+    let dir = exe
+        .parent()
+        .context("current_exe path has no parent directory")?
+        .to_path_buf();
+    Ok(dir)
 }
 
 // Hidden import 警告抑止（Subscriber は将来 builder 経由でも使うため）。
@@ -88,18 +97,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn data_dir_contains_linerule_project_segment() {
-        let p = data_dir().expect("ProjectDirs resolves on Linux + Windows");
-        let s = p.to_string_lossy();
-        assert!(
-            s.to_lowercase().contains("linerule"),
-            "expected `linerule` in path, got `{s}`"
+    fn data_dir_matches_current_exe_parent() {
+        // ADR-0011: ログは exe と同じ階層に置く portable 運用。
+        let p = data_dir().expect("current_exe resolves under cargo nextest");
+        let expected = std::env::current_exe()
+            .expect("current_exe resolves under cargo nextest")
+            .parent()
+            .expect("test runner exe has a parent dir")
+            .to_path_buf();
+        assert_eq!(
+            p, expected,
+            "data_dir must return current_exe()'s parent, got {p:?} vs {expected:?}"
         );
     }
 
     #[test]
     fn data_dir_is_absolute() {
-        let p = data_dir().expect("ProjectDirs resolves");
+        let p = data_dir().expect("current_exe resolves");
         assert!(p.is_absolute(), "data dir must be absolute, got {p:?}");
     }
 
