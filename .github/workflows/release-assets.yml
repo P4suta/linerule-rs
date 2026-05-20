@@ -1,0 +1,67 @@
+# GitHub Release が published されたタイミングで、windows-latest 上で
+# `cargo build --release` と `cargo build --profile dist-dev` を走らせ、
+# 生成された EXE / PDB を `gh release upload --clobber` で当該 Release に
+# 添付する。
+#
+# Trigger:
+#   - release: types: [published]       # release-please-action が tag + release を作るタイミング
+#   - workflow_dispatch (inputs.tag)    # 過去 release への遡及 attach / 失敗時の手動 retry 用
+#
+# 設計判断は docs/adr/0010-release-assets-workflow.md を参照。
+
+name: release-assets
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach assets to (e.g. v0.2.13)"
+        required: true
+
+permissions:
+  contents: write # gh release upload に必要
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+jobs:
+  attach:
+    name: build and attach Windows EXE + PDB
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: cargo build --release (shipping profile, panic=abort, strip=symbols)
+        run: cargo build --release -p linerule-app
+
+      - name: cargo build --profile dist-dev (debug profile, PDB, panic=unwind)
+        run: cargo build --profile dist-dev -p linerule-app
+
+      - name: rename artifacts with tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.release.tag_name || inputs.tag }}"
+          Copy-Item target/release/linerule.exe         "linerule-${tag}-win-x64.exe"
+          Copy-Item target/dist-dev/linerule.exe        "linerule-${tag}-win-x64-debug.exe"
+          Copy-Item target/dist-dev/linerule.pdb        "linerule-${tag}-win-x64-debug.pdb"
+
+      - name: upload assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |-
+          $tag = "${{ github.event.release.tag_name || inputs.tag }}"
+          # `--clobber` で 2 回目以降の upload を冪等にする (manual retry / race condition 対策)
+          gh release upload $tag `
+            "linerule-${tag}-win-x64.exe" `
+            "linerule-${tag}-win-x64-debug.exe" `
+            "linerule-${tag}-win-x64-debug.pdb" `
+            --clobber
