@@ -164,8 +164,8 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
             },
             TickEffect::RefreshHud(s) => {
                 let hz = crate::render_timing::refresh_rate_hz();
-                let mut frame = hud_frame(s, *state.hud_config(), state.monitor(), hz);
-                append_conflict_rows(state, &mut frame);
+                let notifications = build_notifications(state);
+                let frame = hud_frame(s, *state.hud_config(), state.monitor(), hz, &notifications);
                 apply_hud_frame(state, &frame)?;
             },
             TickEffect::SetHudOpacity { state: s, cursor } => {
@@ -213,44 +213,34 @@ fn apply_hud_frame(state: &OverlayWndState, frame: &HudFrame) -> Result<()> {
     Ok(())
 }
 
-/// `OverlayWndState` の hotkey 競合一覧を HUD の追加行として `frame.rows`
-/// に append する（PR 2 で `RegisterHotKey` 失敗をユーザーに見せるため）。
-fn append_conflict_rows(state: &OverlayWndState, frame: &mut HudFrame) {
+/// `OverlayWndState` の hotkey 競合一覧 + 即時 toast を `HudNotification` の
+/// 列に変換する。`hud_frame()` 側でレイアウト計算する純粋関数フローに統合
+/// する (旧 `append_conflict_rows` の責務移譲、ADR-0009)。
+fn build_notifications(state: &OverlayWndState) -> Vec<linerule_core::HudNotification> {
     let conflicts = state.hotkey_conflicts();
-    if conflicts.is_empty() {
-        return;
-    }
-    let hud = state.hud_config();
-    let panel_left = frame.panel_left + hud.padding.edge;
-    let mut y = frame
-        .rows
-        .last()
-        .map(|r| r.origin_y + r.font_size + hud.padding.section)
-        .unwrap_or(frame.panel_top + hud.padding.edge);
-    frame.rows.push(linerule_core::HudRow {
-        origin_x: panel_left,
-        origin_y: y,
-        text: format!("Hotkey conflicts: {}", conflicts.len()),
-        font_size: hud.fonts.body,
-        font: linerule_core::HudFontKey::Title,
-        color: hud.colors.hint,
-    });
-    y += hud.fonts.body + hud.padding.row;
-    for c in conflicts.iter().take(6) {
-        let reason = match &c.reason {
-            crate::overlay_state::HotkeyFailure::ChordParse(_) => "parse error",
-            crate::overlay_state::HotkeyFailure::RegisterHotKey { .. } => "already in use",
-        };
-        frame.rows.push(linerule_core::HudRow {
-            origin_x: panel_left,
-            origin_y: y,
-            text: format!("  {} → {}", c.spec, reason),
-            font_size: hud.fonts.telemetry,
-            font: linerule_core::HudFontKey::Mono,
-            color: hud.colors.subtle,
+    let mut out = Vec::with_capacity(conflicts.len() + 1);
+    if !conflicts.is_empty() {
+        out.push(linerule_core::HudNotification {
+            class: linerule_core::NotificationClass::Warn,
+            message: format!("Hotkey conflicts: {}", conflicts.len()),
+            until_ms: i64::MAX,
         });
-        y += hud.fonts.telemetry + hud.padding.row;
+        for c in conflicts.iter().take(6) {
+            let reason = match &c.reason {
+                crate::overlay_state::HotkeyFailure::ChordParse(_) => "parse error",
+                crate::overlay_state::HotkeyFailure::RegisterHotKey { .. } => "already in use",
+            };
+            out.push(linerule_core::HudNotification {
+                class: linerule_core::NotificationClass::Warn,
+                message: format!("  {} → {}", c.spec, reason),
+                until_ms: i64::MAX,
+            });
+        }
     }
+    // 短寿命 runtime notifications (push_notification 経由) は OverlayWndState 側
+    // で expire 済みを除去した snapshot を取得して結合する。
+    out.extend(state.live_notifications());
+    out
 }
 
 /// HUD パネルの bounds (logical px) を `hud_frame` と同じロジックで計算する。

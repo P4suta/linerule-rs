@@ -52,6 +52,7 @@ pub type Result<T, E = LineruleError> = core::result::Result<T, E>;
 pub use geometry::{CoordSpace, Logical, Physical, Point, ScreenRect};
 pub use input::{ChordError, ChordSpec, Direction, HotkeyMap, KeyCode, Letter, Modifiers};
 pub use render::{
-    Brush, Geometry, HudFontKey, HudFrame, HudRow, Layer, OverlayFrame, frame, hud_frame,
+    Brush, Geometry, HudFontKey, HudFrame, HudNotification, HudRow, Layer, NotificationClass,
+    OverlayFrame, frame, hud_frame,
 };
 pub use state::{Mode, OverlayAction, State, StateDelta};
