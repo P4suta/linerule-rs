@@ -71,11 +71,47 @@ pub enum HudFontKey {
     Mono,
 }
 
-/// `State` + `HudConfig` + monitor + refresh Hz から HUD frame を組み立てる。
+/// HUD の panel 下端に表示する短寿命メッセージ。`Recoverable` な runtime error /
+/// hotkey 競合 / device-lost rebuild 等の即時通知を出す経路。
+///
+/// `until_ms` は monotonic 時刻 (ms) — `now_ms >= until_ms` で `drain_expired_*`
+/// により消去される。永続表示したい場合は `i64::MAX` を渡す (hotkey conflict
+/// は config 経由なので永続)。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct HudNotification {
+    /// メッセージの種類。色分け表示に使う。
+    pub class: NotificationClass,
+    /// 表示文字列 (例: `"Ctrl+Alt+R → already in use"`)。
+    pub message: String,
+    /// この notification が消える時刻 (ms, monotonic)。
+    pub until_ms: i64,
+}
+
+/// [`HudNotification`] の種類。HUD palette とのマッピング:
+///
+/// - `Info` → `HudColors::accent`
+/// - `Warn` → `HudColors::hint`
+/// - `Error` → `Rgba::new(0xFF, 0x6B, 0x6B, 0xFF)` (palette 外、`hint` より強い赤)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationClass {
+    /// 情報通知 (例: `"DPI changed to 150%"`)。
+    Info,
+    /// 警告 (例: hotkey 競合)。
+    Warn,
+    /// エラー (例: device-lost rebuild 失敗)。
+    Error,
+}
+
+/// `State` + `HudConfig` + monitor + refresh Hz + notifications から HUD frame を
+/// 組み立てる。
 ///
 /// 配置はパネル右上にアンカー（モニタ右上から `geometry.margin` だけ離れた位置）。
 /// 行は上から順に: title / status (Mode) / body (Thickness, Opacity) / divider /
-/// telemetry (Refresh Hz)。
+/// telemetry (Refresh Hz) / 続けて notifications を 1 件 1 行で append。
+///
+/// `notifications` は呼び出し側で expire 済みを除去した snapshot を渡す前提
+/// (`hud_frame` 自体は時刻判定をしない、純粋にレイアウトのみ)。
 ///
 /// # Examples
 ///
@@ -83,7 +119,7 @@ pub enum HudFontKey {
 /// use linerule_core::{HudConfig, Point, ScreenRect, State, hud_frame};
 ///
 /// let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
-/// let frame = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor, 144);
+/// let frame = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor, 144, &[]);
 /// // 右上アンカー: パネル右端は monitor 右端から margin だけ左
 /// let expected_right = 1920.0 - HudConfig::DEFAULT.geometry.margin;
 /// assert!((frame.panel_left + frame.panel_width - expected_right).abs() < 0.5);
@@ -96,6 +132,7 @@ pub fn hud_frame(
     hud: HudConfig,
     monitor: ScreenRect<Logical>,
     refresh_hz: u32,
+    notifications: &[HudNotification],
 ) -> HudFrame {
     let panel_width = hud.geometry.width;
     let panel_height = hud.geometry.height;
@@ -171,6 +208,21 @@ pub fn hud_frame(
         font: HudFontKey::Mono,
         color: hud.colors.accent,
     });
+    y += hud.fonts.telemetry + hud.padding.section;
+
+    // Notifications (短寿命 toast or 永続 conflict 表示)。
+    // 行間は `padding.row`、 font は telemetry size を使う (status より控えめ)。
+    for notification in notifications {
+        rows.push(HudRow {
+            origin_x: x,
+            origin_y: y,
+            text: notification.message.clone(),
+            font_size: hud.fonts.telemetry,
+            font: HudFontKey::Title,
+            color: notification_color(notification.class, hud),
+        });
+        y += hud.fonts.telemetry + hud.padding.row;
+    }
 
     HudFrame {
         panel_left,
@@ -180,6 +232,15 @@ pub fn hud_frame(
         background: hud.colors.background,
         opacity: hud.base_opacity,
         rows,
+    }
+}
+
+/// [`NotificationClass`] を [`HudConfig::colors`] のパレットに mapping する。
+const fn notification_color(class: NotificationClass, hud: HudConfig) -> Rgba {
+    match class {
+        NotificationClass::Info => hud.colors.accent,
+        NotificationClass::Warn => hud.colors.hint,
+        NotificationClass::Error => Rgba::new(0xFF, 0x6B, 0x6B, 0xFF),
     }
 }
 
@@ -207,7 +268,7 @@ mod tests {
 
     #[test]
     fn panel_anchored_top_right_with_margin() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60);
+        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[]);
         let expected_right = 1920.0_f32 - HudConfig::DEFAULT.geometry.margin;
         assert!((f.panel_left + f.panel_width - expected_right).abs() < 0.5);
         assert!((f.panel_top - HudConfig::DEFAULT.geometry.margin).abs() < 0.5);
@@ -215,7 +276,7 @@ mod tests {
 
     #[test]
     fn default_state_rows_are_present_and_ordered_top_to_bottom() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 144);
+        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 144, &[]);
         assert!(
             f.rows.len() >= 5,
             "expected at least 5 rows, got {}",
@@ -235,7 +296,7 @@ mod tests {
     fn mode_label_reflects_state() {
         let mut s = State::DEFAULT;
         s.mode = Mode::Horizontal;
-        let f = hud_frame(s, HudConfig::DEFAULT, monitor(), 60);
+        let f = hud_frame(s, HudConfig::DEFAULT, monitor(), 60, &[]);
         assert!(
             f.rows.iter().any(|r| r.text == "Mode: Horizontal"),
             "rows: {:?}",
@@ -248,7 +309,7 @@ mod tests {
         let mut s = State::DEFAULT;
         s.mode = Mode::Horizontal;
         s.visible = false;
-        let f = hud_frame(s, HudConfig::DEFAULT, monitor(), 60);
+        let f = hud_frame(s, HudConfig::DEFAULT, monitor(), 60, &[]);
         assert!(
             f.rows.iter().any(|r| r.text == "Mode: Hidden"),
             "rows: {:?}",
@@ -258,7 +319,7 @@ mod tests {
 
     #[test]
     fn refresh_hz_appears_in_telemetry_row_with_mono_font() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 144);
+        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 144, &[]);
         let telemetry = f
             .rows
             .iter()
@@ -270,13 +331,13 @@ mod tests {
 
     #[test]
     fn opacity_reflects_base_opacity_from_config() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60);
+        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[]);
         assert!((f.opacity - HudConfig::DEFAULT.base_opacity).abs() < f32::EPSILON);
     }
 
     #[test]
     fn rows_fit_within_panel_horizontally() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60);
+        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[]);
         let panel_right = f.panel_left + f.panel_width;
         for r in &f.rows {
             assert!(
@@ -292,5 +353,56 @@ mod tests {
                 panel_right
             );
         }
+    }
+
+    #[test]
+    fn notifications_appended_below_telemetry_row() {
+        let warn = HudNotification {
+            class: NotificationClass::Warn,
+            message: "Ctrl+Alt+R → already in use".to_string(),
+            until_ms: i64::MAX,
+        };
+        let info = HudNotification {
+            class: NotificationClass::Info,
+            message: "Device rebuilt".to_string(),
+            until_ms: 1_000,
+        };
+        let f = hud_frame(
+            State::DEFAULT,
+            HudConfig::DEFAULT,
+            monitor(),
+            60,
+            &[warn, info],
+        );
+        // baseline 5 rows + 2 notifications = 7 rows or more
+        assert!(f.rows.len() >= 7, "rows: {:?}", f.rows);
+        let n1 = &f.rows[f.rows.len() - 2];
+        let n2 = &f.rows[f.rows.len() - 1];
+        assert_eq!(n1.text, "Ctrl+Alt+R → already in use");
+        assert_eq!(n2.text, "Device rebuilt");
+        assert!(n2.origin_y > n1.origin_y);
+    }
+
+    #[test]
+    fn notification_color_maps_per_class() {
+        let hud = HudConfig::DEFAULT;
+        assert_eq!(
+            notification_color(NotificationClass::Info, hud),
+            hud.colors.accent
+        );
+        assert_eq!(
+            notification_color(NotificationClass::Warn, hud),
+            hud.colors.hint
+        );
+        // Error is palette-external, biased red
+        let err = notification_color(NotificationClass::Error, hud);
+        assert!(err.r > err.g && err.r > err.b);
+    }
+
+    #[test]
+    fn empty_notifications_preserve_default_row_count() {
+        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[]);
+        // baseline 5 rows (title + status + thickness + opacity + telemetry)
+        assert_eq!(f.rows.len(), 5);
     }
 }

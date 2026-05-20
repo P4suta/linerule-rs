@@ -8,7 +8,7 @@
 pub mod hud_frame;
 pub mod overlay_frame;
 
-pub use hud_frame::{HudFontKey, HudFrame, HudRow, hud_frame};
+pub use hud_frame::{HudFontKey, HudFrame, HudNotification, HudRow, NotificationClass, hud_frame};
 pub use overlay_frame::{Brush, Geometry, Layer, OverlayFrame};
 
 use crate::{

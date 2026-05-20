@@ -33,7 +33,10 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
 use linerule_core::input::tick::TickWorld;
-use linerule_core::{ChordError, ChordSpec, HudConfig, Logical, OverlayAction, ScreenRect};
+use linerule_core::{
+    ChordError, ChordSpec, HudConfig, HudNotification, Logical, NotificationClass, OverlayAction,
+    ScreenRect,
+};
 use tracing::Span;
 
 use crate::composition_renderer::CompositionRenderer;
@@ -93,9 +96,13 @@ pub struct OverlayWndState {
     monitor: ScreenRect<Logical>,
     /// HUD の見た目・タイミング設定。
     hud_config: HudConfig,
-    /// `RegisterHotKey` / chord parse に失敗した chord のリスト。PR 2 で HUD に
-    /// 列挙される。
+    /// `RegisterHotKey` / chord parse に失敗した chord のリスト。HUD に
+    /// `NotificationClass::Warn` で永続表示する。
     hotkey_conflicts: RefCell<Vec<HotkeyConflict>>,
+    /// 短寿命 runtime toast (device-lost rebuild / DPI change 等の通知)。
+    /// `push_notification` で追加、`live_notifications` で expire を除いた
+    /// snapshot を取り出す。tick 開始時に expire 済みを drain する想定。
+    notifications: RefCell<Vec<HudNotification>>,
     /// プロセス起動時刻。`tick::step` に渡す `now_ms` を計算するための原点。
     start_time: Instant,
 }
@@ -118,8 +125,29 @@ impl OverlayWndState {
             monitor,
             hud_config,
             hotkey_conflicts: RefCell::new(Vec::new()),
+            notifications: RefCell::new(Vec::new()),
             start_time: Instant::now(),
         }
+    }
+
+    /// 短寿命 toast を queue する。`lifetime_ms` 経過後に `live_notifications`
+    /// で除去される。永続させたい場合は `i64::MAX` を渡す。
+    pub fn push_notification(&self, class: NotificationClass, message: String, lifetime_ms: i64) {
+        let until_ms = self.now_ms().saturating_add(lifetime_ms);
+        self.notifications.borrow_mut().push(HudNotification {
+            class,
+            message,
+            until_ms,
+        });
+    }
+
+    /// `now_ms` 時点で expire していない toast の snapshot を返す。expire 済みは
+    /// 同時に内部から除去する (`retain` で eviction)。
+    pub fn live_notifications(&self) -> Vec<HudNotification> {
+        let now = self.now_ms();
+        let mut q = self.notifications.borrow_mut();
+        q.retain(|n| now < n.until_ms);
+        q.clone()
     }
 
     /// この HWND の tracing span を借りる。
