@@ -47,7 +47,7 @@ pub(crate) fn run() -> Result<()> {
             if !dep.name.starts_with(INTERNAL_PREFIX) {
                 continue;
             }
-            if dep.name == pkg.name {
+            if pkg.name == dep.name {
                 violations.push(format!("crate `{}` depends on itself", pkg.name));
                 continue;
             }
