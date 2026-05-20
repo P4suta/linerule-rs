@@ -68,3 +68,72 @@ pub fn decode_last_error(code: u32) -> &'static str {
         _ => "WIN32_ERROR(other)",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_known_codes() {
+        assert_eq!(decode_last_error(0), "ERROR_SUCCESS");
+        assert_eq!(decode_last_error(2), "ERROR_FILE_NOT_FOUND");
+        assert_eq!(decode_last_error(5), "ERROR_ACCESS_DENIED");
+        assert_eq!(decode_last_error(6), "ERROR_INVALID_HANDLE");
+        assert_eq!(decode_last_error(87), "ERROR_INVALID_PARAMETER");
+        assert_eq!(decode_last_error(1400), "ERROR_INVALID_WINDOW_HANDLE");
+        assert_eq!(decode_last_error(1407), "ERROR_CANNOT_FIND_WND_CLASS");
+        assert_eq!(decode_last_error(1410), "ERROR_CLASS_ALREADY_EXISTS");
+    }
+
+    #[test]
+    fn decode_unknown_code_falls_back_to_placeholder() {
+        assert_eq!(decode_last_error(0xDEAD_BEEF), "WIN32_ERROR(other)");
+        assert_eq!(decode_last_error(999_999), "WIN32_ERROR(other)");
+    }
+
+    #[test]
+    fn display_null_handle_includes_operation() {
+        let e = Win32Error::NullHandle {
+            operation: "CreateWindowExW",
+        };
+        let s = e.to_string();
+        assert!(s.contains("CreateWindowExW"));
+        assert!(s.contains("null"));
+    }
+
+    #[test]
+    fn display_bool_false_includes_code_and_symbol() {
+        let e = Win32Error::BoolFalse {
+            operation: "RegisterClassExW",
+            code: 1410,
+            symbol: "ERROR_CLASS_ALREADY_EXISTS",
+        };
+        let s = e.to_string();
+        assert!(s.contains("RegisterClassExW"));
+        assert!(s.contains("0x582"), "should include hex code: {s}");
+        assert!(s.contains("ERROR_CLASS_ALREADY_EXISTS"));
+    }
+
+    #[test]
+    fn display_bad_hr_uses_hex_format() {
+        let e = Win32Error::BadHr {
+            operation: "D3D11CreateDevice",
+            hr: i32::from_be_bytes([0x80, 0x00, 0x00, 0x05_u8.wrapping_neg()]),
+        };
+        let s = e.to_string();
+        assert!(s.contains("D3D11CreateDevice"));
+        assert!(s.contains("0x"), "expected hex-formatted HRESULT: {s}");
+    }
+
+    #[test]
+    fn display_last_error_includes_code_symbol_pair() {
+        let e = Win32Error::LastError {
+            operation: "GetMonitorInfoW",
+            code: 6,
+            symbol: "ERROR_INVALID_HANDLE",
+        };
+        let s = e.to_string();
+        assert!(s.contains("GetMonitorInfoW"));
+        assert!(s.contains("ERROR_INVALID_HANDLE"));
+    }
+}
