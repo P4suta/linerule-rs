@@ -329,3 +329,26 @@ pub fn get_monitor_info(hmonitor: HMONITOR) -> Result<MONITORINFO> {
     }
     Ok(info)
 }
+
+// ---- display settings (refresh rate) ---------------------------------------
+
+/// `EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &mut devmode)` の薄い
+/// safe wrapper。プライマリディスプレイの現在の `DEVMODEW` を取得する。
+/// HUD telemetry が `DEVMODEW::dmDisplayFrequency` (Hz) を表示するために使う。
+///
+/// # Errors
+/// `EnumDisplaySettingsW` が FALSE を返したとき (通常起こらない)。
+pub fn enum_display_settings_current() -> Result<windows::Win32::Graphics::Gdi::DEVMODEW> {
+    use windows::Win32::Graphics::Gdi::{DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW};
+    let mut dm = DEVMODEW {
+        dmSize: u16::try_from(core::mem::size_of::<DEVMODEW>()).unwrap_or(u16::MAX),
+        ..Default::default()
+    };
+    // SAFETY: dm.dmSize は正しく設定済み、device name = NULL (PCWSTR::null) は
+    // primary display を指す Win32 仕様。out param は zero-init 済み。
+    let ok = unsafe { EnumDisplaySettingsW(PCWSTR::null(), ENUM_CURRENT_SETTINGS, &mut dm) };
+    if !ok.as_bool() {
+        return Err(last_error("EnumDisplaySettingsW"));
+    }
+    Ok(dm)
+}
