@@ -104,22 +104,27 @@ jobs:
       # respond to subcommands — bare-minimum "did clap parsing survive?"
       # gate. Run hits stdout + exit code; we don't try to invoke `run` here
       # because it blocks on the message pump.
+      #
+      # `linerule.exe` is `windows_subsystem = "windows"` (GUI), so pwsh's
+      # native call (`& $exe …`) returns immediately and `$LASTEXITCODE` is
+      # never populated. `Start-Process -Wait -PassThru` actually blocks
+      # until the process exits and exposes `ExitCode`.
       - name: smoke - linerule.exe version
         shell: pwsh
         run: |
-          $exe = "target/release/linerule.exe"
-          & $exe version
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::linerule.exe version exited with $LASTEXITCODE"
+          $proc = Start-Process -FilePath "target/release/linerule.exe" `
+            -ArgumentList "version" -Wait -PassThru -NoNewWindow
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "::error::linerule.exe version exited with $($proc.ExitCode)"
             exit 1
           }
       - name: smoke - linerule.exe diagnostics --dry-run
         shell: pwsh
         run: |
-          $exe = "target/release/linerule.exe"
-          & $exe diagnostics --dry-run
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::linerule.exe diagnostics --dry-run exited with $LASTEXITCODE"
+          $proc = Start-Process -FilePath "target/release/linerule.exe" `
+            -ArgumentList "diagnostics", "--dry-run" -Wait -PassThru -NoNewWindow
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "::error::linerule.exe diagnostics --dry-run exited with $($proc.ExitCode)"
             exit 1
           }
       - name: Upload binary artifact
