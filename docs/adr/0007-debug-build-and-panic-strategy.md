@@ -1,8 +1,14 @@
 # 0007 — Debug Build profile (`dist-dev`) と panic 戦略の非対称性
 
-**Status:** Accepted (Phase H groundwork, 2026-05-20).
+**Status:** **Superseded by [[0011-phase-j-slim-down]]** (Phase J slim-down, 2026-05-20).
 
-**See also:** [[0003-unsafe-isolation]] (`unsafe` を `win32_ffi/` に集約), [[0004-coverage-policy]] (coverage gate), Phase H plan の H1/H3。
+> 旧 Status: Accepted (Phase H groundwork, 2026-05-20).
+>
+> Phase J で「薄い読書ツール」志向への回帰のため `[profile.dist-dev]` / PDB
+> artifact / `panic = "unwind"` 非対称を撤廃した。本 ADR の判断は履歴として
+> 保持するが、現行コードベースに `dist-dev` profile は存在しない。
+
+**See also:** [[0003-unsafe-isolation]] (`unsafe` を `win32_ffi/` に集約), [[0004-coverage-policy]] (coverage gate), [[0011-phase-j-slim-down]] (本 ADR を supersede), Phase H plan の H1/H3。
 
 ## 文脈
 
