@@ -225,6 +225,20 @@ docs: docs-dep-graph docs-modules docs-readme
 doc:
     {{cargo}} doc --workspace --no-deps --open
 
+# `RUSTDOCFLAGS=-D warnings` 下で rustdoc を build。.github/workflows/docs.yml
+# (main push 時に GitHub Pages へ publish するジョブ) と同じ厳しさで warning を
+# error 扱いし、`pre-push` で push 前に検出する。
+#
+# `docker compose exec` の `-e` flag を使うため `{{docker_run}}` 展開を手で
+# 書き分ける（テンプレートは末尾に `dev` を含むため -e を直接挟めない）。
+rustdoc-check:
+    @echo "==> cargo doc --workspace --no-deps --exclude linerule-platform-windows (RUSTDOCFLAGS=-D warnings)"
+    @if [ "{{inside}}" = "1" ]; then \
+        RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude linerule-platform-windows; \
+    else \
+        docker compose exec -e RUSTDOCFLAGS="-D warnings" dev cargo doc --workspace --no-deps --exclude linerule-platform-windows; \
+    fi
+
 # Aggregated lint pipeline (everything that gates merges).
 lint:
     @echo "==> cargo xtask lint"

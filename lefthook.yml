@@ -71,9 +71,10 @@ commit-msg:
 pre-push:
   # CI のゲートと検出範囲を揃える: PR を出してから CI で初めて怒られるのを防ぐ。
   # 対応関係:
-  #   - lint        ↔ `clippy` + `fmt` + `cargo-deny` + `typos` + `actionlint` + `cargo-machete` + `dep-graph`
-  #   - test        ↔ `build + test (linux)` の `cargo nextest run` と `cargo test --doc`
-  #   - cross-check ↔ `cross-check (linux → win-x64)` (--all-targets で examples/tests も含む)
+  #   - lint          ↔ `clippy` + `fmt` + `cargo-deny` + `typos` + `actionlint` + `cargo-machete` + `dep-graph`
+  #   - test          ↔ `build + test (linux)` の `cargo nextest run` と `cargo test --doc`
+  #   - cross-check   ↔ `cross-check (linux → win-x64)` (`--all-targets` で examples/tests も含む)
+  #   - rustdoc-check ↔ `.github/workflows/docs.yml` (`RUSTDOCFLAGS=-D warnings` の rustdoc build)
   piped: true
   commands:
     lint:
@@ -85,3 +86,6 @@ pre-push:
     cross-check:
       tags: build
       run: just cross-check
+    rustdoc-check:
+      tags: docs
+      run: just rustdoc-check
