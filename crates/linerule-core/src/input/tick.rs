@@ -53,6 +53,20 @@ impl TickWorld {
         frame_seq: 0,
         last_hud_refresh_at_ms: i64::MIN,
     };
+
+    /// Initial state with a caller-supplied [`State`]. Useful for booting
+    /// the overlay directly into a non-default mode (e.g. `--initial-mode
+    /// horizontal` for CI smoke tests that need to exercise the slit
+    /// render path without sending a synthetic `Ctrl+Alt+R`).
+    #[must_use]
+    pub const fn with_initial_state(state: State) -> Self {
+        Self {
+            state,
+            last_cursor: None,
+            frame_seq: 0,
+            last_hud_refresh_at_ms: i64::MIN,
+        }
+    }
 }
 
 impl Default for TickWorld {

@@ -54,16 +54,35 @@ pub struct OverlayWindow {
 
 impl OverlayWindow {
     /// 指定した monitor bounds に重なる位置・サイズで HWND を作成する。
+    /// デフォルトの `TickWorld::INITIAL` (mode = Off) で起動する。
     ///
     /// # Errors
     /// `RegisterClassExW` / `CreateWindowExW` / `GetModuleHandleW` が失敗したとき。
     pub fn new(monitor: ScreenRect<Logical>, hud_config: HudConfig) -> Result<Self> {
+        Self::new_with_initial_world(
+            monitor,
+            hud_config,
+            linerule_core::input::tick::TickWorld::INITIAL,
+        )
+    }
+
+    /// 指定 monitor bounds + 任意 `TickWorld` で HWND を作成する。
+    /// `--initial-mode horizontal` 等の経路で起動時 mode を上書きする場合に使う。
+    ///
+    /// # Errors
+    /// `RegisterClassExW` / `CreateWindowExW` / `GetModuleHandleW` が失敗したとき。
+    pub fn new_with_initial_world(
+        monitor: ScreenRect<Logical>,
+        hud_config: HudConfig,
+        initial_world: linerule_core::input::tick::TickWorld,
+    ) -> Result<Self> {
         let _atom = window_class::ensure_registered()?;
 
-        let state_box = Box::new(OverlayWndState::new(
+        let state_box = Box::new(OverlayWndState::new_with_initial_world(
             tracing::info_span!("overlay_window", class = "linerule-rs-overlay"),
             monitor,
             hud_config,
+            initial_world,
         ));
         let state_ptr = Box::into_raw(state_box);
 

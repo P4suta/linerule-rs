@@ -136,6 +136,10 @@ pub fn destroy_window(hwnd: HWND) -> Result<()> {
 ///
 /// `ShowWindow` の戻り値 BOOL は「前回 visible だったか」を返すだけで失敗を
 /// 示さないため、戻り値は捨てる。
+#[allow(
+    clippy::disallowed_methods,
+    reason = "ShowWindow を許可する唯一の場所。caller には clippy::disallowed_methods で deny。"
+)]
 pub fn show_window_noactivate(hwnd: HWND) {
     // SAFETY: hwnd は OverlayWindow が所有する有効 HWND。SW_SHOWNOACTIVATE は
     // WinAPI 定数。本 API は失敗 HRESULT を返さない。

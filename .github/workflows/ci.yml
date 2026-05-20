@@ -138,14 +138,18 @@ jobs:
       # これで Phase I で発覚した 4 つの bug (E_NOINTERFACE / D2D
       # WRONG_STATE / commit 漏れ / ShowWindow 漏れ) はすべて動的に CI で
       # ブロックされる。
-      - name: smoke - linerule.exe run --duration-ms 3000 (GUI headless)
+      - name: smoke - linerule.exe run --initial-mode horizontal --duration-ms 3000 (GUI headless)
         shell: pwsh
         run: |
           # 過去 run の events.jsonl をクリーンアップ (誤検知防止)。
           Remove-Item "target/release/events.jsonl*" -ErrorAction SilentlyContinue
           Remove-Item "target/release/crash-*.json" -ErrorAction SilentlyContinue
+          # `--initial-mode horizontal` で HUD + slit 両方の描画パスを exercise する
+          # (Phase γ で追加; Phase α は HUD だけだった)。CompositionRenderer::apply
+          # の commit 経路まで動的に検証範囲に入れる。
           $proc = Start-Process -FilePath "target/release/linerule.exe" `
-            -ArgumentList "run", "--duration-ms", "3000" -Wait -PassThru -NoNewWindow
+            -ArgumentList "run", "--initial-mode", "horizontal", "--duration-ms", "3000" `
+            -Wait -PassThru -NoNewWindow
           if ($proc.ExitCode -ne 0) {
             Write-Host "::error::linerule.exe run exited with $($proc.ExitCode)"
             exit 1

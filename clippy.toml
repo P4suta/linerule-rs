@@ -28,4 +28,6 @@ disallowed-methods = [
     { path = "windows::Win32::Graphics::DirectComposition::IDCompositionSurface::EndDraw", reason = "対称性のため win32_ffi::graphics::end_dcomp_draw 経由で呼ぶこと。" },
     { path = "windows::Win32::Graphics::Direct2D::ID2D1RenderTarget::BeginDraw", reason = "DComp surface 経由の context は drawing mode で返る (MS Docs)。D2D BeginDraw を重ねると D2DERR_WRONG_STATE → surface stuck → DCOMPOSITION_ERROR_SURFACE_BEING_RENDERED のカスケード障害 (Phase I 続編)。SetTransform/Clear/DrawText を直接発行し end_dcomp_draw で閉じる。`ID2D1DeviceContext` は Deref<Target=ID2D1RenderTarget> 経由でこのメソッドを継承するため、親 trait の path で deny する。" },
     { path = "windows::Win32::Graphics::Direct2D::ID2D1RenderTarget::EndDraw", reason = "同上。surface.EndDraw 経由で D2D session も内部的に閉じられる。" },
+    { path = "windows::Win32::Graphics::DirectComposition::IDCompositionDesktopDevice::Commit", reason = "win32_ffi::graphics::commit() の wrapper 経由で呼ぶこと。直叩きは『commit の呼び出し場所が拡散して呼び忘れ事故が増える』ため deny (Phase I PR #60 で HudRenderer::apply が commit 呼び忘れて HUD non-visible だった事故予防)。" },
+    { path = "windows::Win32::UI::WindowsAndMessaging::ShowWindow", reason = "win32_ffi::show_window_noactivate() の wrapper 経由で呼ぶこと。直叩きは focus 奪取の事故源 (Phase I PR #60 で意図的 skip → 実環境で visible にならない事故後の予防策)。" },
 ]

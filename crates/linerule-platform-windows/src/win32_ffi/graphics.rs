@@ -368,6 +368,12 @@ pub fn fill_surface(surface: &IDCompositionSurface, color: Rgba) -> Result<()> {
 }
 
 /// `IDCompositionDesktopDevice::Commit` で visual tree をディスプレイに反映する。
+/// 本 wrapper 経由でのみ Commit を呼ぶこと (`clippy.toml::disallowed_methods`
+/// で直叩きを deny、Phase I PR #60 commit 漏れ事故の予防策)。
+#[allow(
+    clippy::disallowed_methods,
+    reason = "Commit を許可する唯一の場所。caller には clippy::disallowed_methods で deny。"
+)]
 pub fn commit(device: &IDCompositionDesktopDevice) -> Result<()> {
     // SAFETY: device valid
     unsafe { device.Commit() }.map_err(|e| PlatformError::BadHr {
