@@ -22,4 +22,8 @@ disallowed-types = [
     { path = "once_cell::sync::Lazy", reason = "use std::sync::LazyLock (stable since 1.80)" },
     { path = "once_cell::sync::OnceCell", reason = "use std::sync::OnceLock (stable since 1.70)" },
 ]
-disallowed-methods = [{ path = "std::env::set_var", reason = "boundary 以外で環境変数を変更しない" }]
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "boundary 以外で環境変数を変更しない" },
+    { path = "windows::Win32::Graphics::DirectComposition::IDCompositionSurface::BeginDraw", reason = "IDCompositionSurface::BeginDraw<T> の T は ID2D1DeviceContext 固定。win32_ffi::graphics::begin_dcomp_draw_d2d 経由で呼ぶこと (ID2D1Bitmap1 等を渡すと E_NOINTERFACE で毎 tick 描画落ちする事故防止、Phase I 実機検証)。" },
+    { path = "windows::Win32::Graphics::DirectComposition::IDCompositionSurface::EndDraw", reason = "対称性のため win32_ffi::graphics::end_dcomp_draw 経由で呼ぶこと。" },
+]

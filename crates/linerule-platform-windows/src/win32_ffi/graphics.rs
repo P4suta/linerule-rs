@@ -277,28 +277,74 @@ pub fn create_surface(
     })
 }
 
-/// 既存 surface を指定色で塗りつぶす。`BeginDraw` → `Clear` → `EndDraw` の三段。
-pub fn fill_surface(
+/// `IDCompositionSurface::BeginDraw<T>` を `T = ID2D1DeviceContext` 固定で呼ぶ
+/// 唯一の許可された wrapper。
+///
+/// DComp surface が QueryInterface で返せる D2D IID は `ID2D1DeviceContext` の
+/// みで、`ID2D1Bitmap1` 等を渡すと E_NOINTERFACE (0x80004002) で fail し毎 tick
+/// 描画が落ちる事故が過去発生した (Phase I 実機検証時)。型を 1 箇所に固定し、
+/// 新規 caller は本関数を経由する。`clippy.toml` の `disallowed-methods` で
+/// `IDCompositionSurface::BeginDraw` 直叩きを deny しているため、本 wrapper 外
+/// からの呼び出しは `just lint` で reject される。
+///
+/// 返却される `ID2D1DeviceContext` は DComp が surface tile を render target
+/// として bind 済み。caller は `BeginDraw` (D2D 側) → 描画 → `EndDraw` (D2D 側)
+/// → [`end_dcomp_draw`] (DComp surface 側) の順で叩く。`offset` は surface tile
+/// 内の左上座標で、`SetTransform` の translation に反映すること。
+///
+/// # Errors
+/// `IDCompositionSurface::BeginDraw` が失敗したとき。`operation_tag` が
+/// `PlatformError::BadHr.operation` にそのまま使われる (caller が "HUD" /
+/// "Overlay" などのスコープを示す)。
+#[allow(
+    clippy::disallowed_methods,
+    reason = "BeginDraw を許可する唯一の場所。caller には clippy::disallowed_methods で deny。"
+)]
+pub(crate) fn begin_dcomp_draw_d2d(
     surface: &IDCompositionSurface,
-    d2d_context: &ID2D1DeviceContext,
-    color: Rgba,
-) -> Result<()> {
-    // SAFETY: surface / context は valid
+    operation_tag: &'static str,
+) -> Result<(ID2D1DeviceContext, windows::Win32::Foundation::POINT)> {
     let mut offset = windows::Win32::Foundation::POINT::default();
-    let bitmap: windows::Win32::Graphics::Direct2D::ID2D1Bitmap1 =
+    // SAFETY: surface は valid、offset は zero-init out param。
+    // T = ID2D1DeviceContext は DComp surface がサポートする唯一の D2D IID。
+    let dc: ID2D1DeviceContext =
         unsafe { surface.BeginDraw(None, &mut offset) }.map_err(|e| PlatformError::BadHr {
-            operation: "IDCompositionSurface::BeginDraw",
+            operation: operation_tag,
             hr: e.code().0,
         })?;
+    Ok((dc, offset))
+}
 
-    // Premultiplied alpha:
+/// [`begin_dcomp_draw_d2d`] と pair で呼ぶ `IDCompositionSurface::EndDraw` の
+/// wrapper。 `clippy.toml` で `EndDraw` 直叩きも deny しているため、本 wrapper
+/// 外からの呼び出しは reject される。
+///
+/// # Errors
+/// `IDCompositionSurface::EndDraw` が失敗したとき。
+#[allow(
+    clippy::disallowed_methods,
+    reason = "EndDraw を許可する唯一の場所。caller には clippy::disallowed_methods で deny。"
+)]
+pub(crate) fn end_dcomp_draw(
+    surface: &IDCompositionSurface,
+    operation_tag: &'static str,
+) -> Result<()> {
+    // SAFETY: begin_dcomp_draw_d2d と pair で呼ばれる前提。surface は valid。
+    unsafe { surface.EndDraw() }.map_err(|e| PlatformError::BadHr {
+        operation: operation_tag,
+        hr: e.code().0,
+    })
+}
+
+/// 既存 surface を指定色で塗りつぶす。`BeginDraw` → `Clear` → `EndDraw` の三段。
+pub fn fill_surface(surface: &IDCompositionSurface, color: Rgba) -> Result<()> {
+    let (dc, offset) = begin_dcomp_draw_d2d(surface, "IDCompositionSurface::BeginDraw")?;
     let f = color_to_premultiplied_f(color);
+    // SAFETY: dc / surface は valid、BeginDraw 後の D2D 描画シーケンスを End で閉じる。
     unsafe {
-        d2d_context.SetTarget(&bitmap);
-        // BeginDraw on context to bind the bitmap as the render target
-        d2d_context.BeginDraw();
-        // Translate so the surface offset is honored
-        d2d_context.SetTransform(&Matrix3x2 {
+        dc.BeginDraw();
+        // surface tile の offset を transform に反映する。
+        dc.SetTransform(&Matrix3x2 {
             M11: 1.0,
             M12: 0.0,
             M21: 0.0,
@@ -306,22 +352,13 @@ pub fn fill_surface(
             M31: offset.x as f32,
             M32: offset.y as f32,
         });
-        d2d_context.Clear(Some(&f));
-        // EndDraw returns Result<()> on errors
-        d2d_context
-            .EndDraw(None, None)
-            .map_err(|e| PlatformError::BadHr {
-                operation: "ID2D1DeviceContext::EndDraw",
-                hr: e.code().0,
-            })?;
-        // Detach target
-        d2d_context.SetTarget(None);
-        surface.EndDraw().map_err(|e| PlatformError::BadHr {
-            operation: "IDCompositionSurface::EndDraw",
+        dc.Clear(Some(&f));
+        dc.EndDraw(None, None).map_err(|e| PlatformError::BadHr {
+            operation: "ID2D1DeviceContext::EndDraw",
             hr: e.code().0,
         })?;
     }
-    Ok(())
+    end_dcomp_draw(surface, "IDCompositionSurface::EndDraw")
 }
 
 /// `IDCompositionDesktopDevice::Commit` で visual tree をディスプレイに反映する。
