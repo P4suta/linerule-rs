@@ -23,7 +23,7 @@ anyhow = "1"
 bitflags = "2"
 
 # xtask helpers
-cargo_metadata = "0.18"
+cargo_metadata = "0.23"
 
 # CLI / config
 clap = { version = "4", features = ["derive"] }
