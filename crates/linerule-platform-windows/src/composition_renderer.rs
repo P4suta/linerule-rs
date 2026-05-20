@@ -113,7 +113,7 @@ impl CompositionRenderer {
         // 色変化があれば fill_surface
         if pooled.last_color != Some(color) {
             if let Some(surface) = pooled.surface.as_ref() {
-                graphics::fill_surface(surface, &self.pipeline.d2d_context, color)?;
+                graphics::fill_surface(surface, color)?;
             }
             pooled.last_color = Some(color);
         }

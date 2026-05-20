@@ -15,7 +15,6 @@ use std::collections::HashMap;
 
 use linerule_core::{HudConfig, HudFontKey, HudFrame};
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
-use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
 use windows::Win32::Graphics::DirectComposition::{
     IDCompositionDesktopDevice, IDCompositionSurface, IDCompositionVisual2,
 };
@@ -36,8 +35,6 @@ pub struct HudRenderer {
     last_opacity: f32,
     /// DWrite ファクトリ。
     dwrite_factory: IDWriteFactory,
-    /// D2D デバイスコンテキスト（CompositionRenderer の pipeline と共有）。
-    d2d_context: ID2D1DeviceContext,
     /// DComp デスクトップデバイス（surface 再生成のために clone 保持）。
     dcomp: IDCompositionDesktopDevice,
     /// `HudFontKey::Title` の family 名（HudConfig 由来）。
@@ -69,7 +66,6 @@ impl HudRenderer {
             last_size: None,
             last_opacity: -1.0, // 必ず初回に SetOpacity を呼ぶ sentinel
             dwrite_factory,
-            d2d_context: pipeline.d2d_context.clone(),
             dcomp: pipeline.dcomp.clone(),
             title_family: hud.fonts.title_family.to_string(),
             mono_family: hud.fonts.mono_family.to_string(),
@@ -122,13 +118,7 @@ impl HudRenderer {
         }
 
         let surface = self.surface.as_ref().expect("just created");
-        dwrite::draw_hud_to_surface(
-            surface,
-            &self.d2d_context,
-            frame.background,
-            frame.opacity,
-            &drawn,
-        )?;
+        dwrite::draw_hud_to_surface(surface, frame.background, frame.opacity, &drawn)?;
 
         // visual の位置を反映 (opacity は色に bake 済みなので visual 単位の
         // SetOpacity は呼ばない。理由は win32_ffi/graphics.rs のコメント参照)。

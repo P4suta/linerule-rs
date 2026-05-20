@@ -11,11 +11,8 @@
 )]
 
 use linerule_core::Rgba;
-use windows::Win32::Foundation::POINT;
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
-use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_NONE, ID2D1DeviceContext, ID2D1SolidColorBrush,
-};
+use windows::Win32::Graphics::Direct2D::{D2D1_DRAW_TEXT_OPTIONS_NONE, ID2D1SolidColorBrush};
 use windows::Win32::Graphics::DirectComposition::IDCompositionSurface;
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -101,9 +98,11 @@ pub struct HudDrawRow<'a> {
 
 /// `IDCompositionSurface` の中身を「背景クリア + 複数行テキスト描画」で更新する。
 ///
-/// `BeginDraw → SetTarget → BeginDraw → Clear → DrawText× → EndDraw → SetTarget(None)
-/// → surface.EndDraw` の D2D + dcomp 標準シーケンスを 1 関数に閉じ込め、呼び出し
-/// 側を `#![forbid(unsafe_code)]` で書けるようにする。
+/// `BeginDraw (DComp) → BeginDraw (D2D) → Clear → DrawText× → EndDraw (D2D) →
+/// EndDraw (DComp)` の標準シーケンスを 1 関数に閉じ込め、呼び出し側を
+/// `#![forbid(unsafe_code)]` で書けるようにする。DComp surface tile を render
+/// target に bind する責務は `begin_dcomp_draw_d2d` 側で完結するため、本関数では
+/// 明示的な `SetTarget` 呼び出しを行わない (ADR-0006 + graphics::fill_surface 参照)。
 ///
 /// `opacity` (0.0–1.0) は背景・各行色の alpha に乗算する形で適用される。dcomp の
 /// visual 単位 opacity を使わない理由は `graphics.rs` のコメント参照。
@@ -112,31 +111,25 @@ pub struct HudDrawRow<'a> {
 /// 各 COM 呼び出しが失敗したとき。
 pub fn draw_hud_to_surface(
     surface: &IDCompositionSurface,
-    context: &ID2D1DeviceContext,
     background: Rgba,
     opacity: f32,
     rows: &[HudDrawRow<'_>],
 ) -> Result<()> {
     let opacity = opacity.clamp(0.0, 1.0);
-    let mut offset = POINT::default();
-    // SAFETY: surface valid、offset は zero-init out param。
-    // 型注釈は BeginDraw が Interface ジェネリックなため必須 (graphics::fill_surface 参照)。
-    let bitmap: windows::Win32::Graphics::Direct2D::ID2D1Bitmap1 =
-        unsafe { surface.BeginDraw(None, &mut offset) }.map_err(|e| PlatformError::BadHr {
-            operation: "IDCompositionSurface::BeginDraw (HUD)",
-            hr: e.code().0,
-        })?;
+    let (dc, offset) = crate::win32_ffi::graphics::begin_dcomp_draw_d2d(
+        surface,
+        "IDCompositionSurface::BeginDraw (HUD)",
+    )?;
 
     let bg = color_to_premultiplied_f(scale_alpha(background, opacity));
-    // SAFETY: context / bitmap valid（直前で取得）。Begin/End はペア。
+    // SAFETY: dc / surface valid。Begin/End はペア。
     unsafe {
-        context.SetTarget(&bitmap);
-        context.BeginDraw();
+        dc.BeginDraw();
         #[allow(
             clippy::cast_precision_loss,
             reason = "DComp offset は通常 < 4096; f32 精度に余裕"
         )]
-        context.SetTransform(&Matrix3x2 {
+        dc.SetTransform(&Matrix3x2 {
             M11: 1.0,
             M12: 0.0,
             M21: 0.0,
@@ -144,18 +137,18 @@ pub fn draw_hud_to_surface(
             M31: offset.x as f32,
             M32: offset.y as f32,
         });
-        context.Clear(Some(&bg));
+        dc.Clear(Some(&bg));
 
         for row in rows {
             let brush_color = color_to_premultiplied_f(scale_alpha(row.color, opacity));
-            let brush: ID2D1SolidColorBrush = context
+            let brush: ID2D1SolidColorBrush = dc
                 .CreateSolidColorBrush(&brush_color, None)
                 .map_err(|e| PlatformError::BadHr {
                     operation: "ID2D1DeviceContext::CreateSolidColorBrush (HUD)",
                     hr: e.code().0,
                 })?;
             let wide: Vec<u16> = row.text.encode_utf16().collect();
-            context.DrawText(
+            dc.DrawText(
                 &wide,
                 row.format,
                 &row.rect,
@@ -165,20 +158,12 @@ pub fn draw_hud_to_surface(
             );
         }
 
-        context
-            .EndDraw(None, None)
-            .map_err(|e| PlatformError::BadHr {
-                operation: "ID2D1DeviceContext::EndDraw (HUD)",
-                hr: e.code().0,
-            })?;
-        context.SetTarget(None);
+        dc.EndDraw(None, None).map_err(|e| PlatformError::BadHr {
+            operation: "ID2D1DeviceContext::EndDraw (HUD)",
+            hr: e.code().0,
+        })?;
     }
-    // SAFETY: surface は valid、Begin と pair で End する。
-    unsafe { surface.EndDraw() }.map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionSurface::EndDraw (HUD)",
-        hr: e.code().0,
-    })?;
-    Ok(())
+    crate::win32_ffi::graphics::end_dcomp_draw(surface, "IDCompositionSurface::EndDraw (HUD)")
 }
 
 /// `[0, 255]` straight alpha の `Rgba` を D2D premultiplied float に変換する。
