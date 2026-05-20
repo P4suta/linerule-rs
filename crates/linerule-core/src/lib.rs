@@ -41,7 +41,7 @@ pub use config::{
     HudColors, HudConfig, HudFonts, HudGeometry, HudPadding, InputConfig, OverlayConfig,
     RenderConfig, RepeatConfig, TapStepConfig, UserConfig,
 };
-pub use diagnostics::{CoreError, LineruleError, Severity};
+pub use diagnostics::{CoreError, ErrorClass, LineruleError, Severity};
 
 /// Canonical `Result` alias for `linerule-core`.
 ///

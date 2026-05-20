@@ -7,7 +7,7 @@
 
 #![forbid(unsafe_code)]
 
-use linerule_core::ChordError;
+use linerule_core::{ChordError, ErrorClass};
 use thiserror::Error;
 
 /// `linerule-platform-windows` で扱う失敗の closed sum。
@@ -57,6 +57,37 @@ pub enum PlatformError {
 
 /// `linerule-platform-windows` の Result alias。
 pub type Result<T, E = PlatformError> = core::result::Result<T, E>;
+
+/// `Win32 / COM` 系 API の中で「失敗しても overlay 全体は継続できる」既知の
+/// recoverable operation 名のリスト。`PlatformError::class()` がここに当たれば
+/// [`ErrorClass::Recoverable`] を返す。
+///
+/// 現在は `RegisterHotKey` (既に他プロセスが押さえていた等の競合は HUD に
+/// notification を出してスキップ可能) と `UnregisterHotKey` (Drop で吸収) のみ。
+const RECOVERABLE_WIN32_OPS: &[&str] = &["RegisterHotKey", "UnregisterHotKey"];
+
+impl PlatformError {
+    /// `PlatformError` の recovery class を返す。
+    ///
+    /// - `NullHandle` / `BadHr` は HWND・COM 初期化失敗の傾向が強く [`ErrorClass::Fatal`]
+    /// - `BoolFalse` / `LastError` は `operation` 名で分岐し、`RegisterHotKey` 等
+    ///   既知の Recoverable な API なら `Recoverable`、それ以外は `Fatal`
+    /// - `Chord` は内部 [`ChordError::class()`] に委譲（実質常に `Recoverable`）
+    #[must_use]
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            Self::NullHandle { .. } | Self::BadHr { .. } => ErrorClass::Fatal,
+            Self::BoolFalse { operation, .. } | Self::LastError { operation, .. } => {
+                if RECOVERABLE_WIN32_OPS.contains(operation) {
+                    ErrorClass::Recoverable
+                } else {
+                    ErrorClass::Fatal
+                }
+            },
+            Self::Chord(e) => e.class(),
+        }
+    }
+}
 
 /// よく出る `ERROR_*` だけ static 文字列で symbolic name を返す。
 /// 不明な値は `"WIN32_ERROR(other)"` を返してログに残せるようにする。
@@ -149,5 +180,58 @@ mod tests {
         assert!(matches!(e, PlatformError::Chord(ChordError::Empty)));
         // transparent display should match the inner ChordError's display.
         assert_eq!(e.to_string(), ChordError::Empty.to_string());
+    }
+
+    #[test]
+    fn null_handle_is_fatal() {
+        let e = PlatformError::NullHandle {
+            operation: "CreateWindowExW",
+        };
+        assert_eq!(e.class(), ErrorClass::Fatal);
+    }
+
+    #[test]
+    fn bad_hr_is_fatal() {
+        let e = PlatformError::BadHr {
+            operation: "D3D11CreateDevice",
+            hr: -1,
+        };
+        assert_eq!(e.class(), ErrorClass::Fatal);
+    }
+
+    #[test]
+    fn register_hotkey_failure_is_recoverable() {
+        let e = PlatformError::BoolFalse {
+            operation: "RegisterHotKey",
+            code: 1409,
+            symbol: "ERROR_HOTKEY_ALREADY_REGISTERED",
+        };
+        assert_eq!(e.class(), ErrorClass::Recoverable);
+    }
+
+    #[test]
+    fn unregister_hotkey_failure_is_recoverable() {
+        let e = PlatformError::LastError {
+            operation: "UnregisterHotKey",
+            code: 1419,
+            symbol: "ERROR_HOTKEY_NOT_REGISTERED",
+        };
+        assert_eq!(e.class(), ErrorClass::Recoverable);
+    }
+
+    #[test]
+    fn other_bool_false_is_fatal() {
+        let e = PlatformError::BoolFalse {
+            operation: "RegisterClassExW",
+            code: 1410,
+            symbol: "ERROR_CLASS_ALREADY_EXISTS",
+        };
+        assert_eq!(e.class(), ErrorClass::Fatal);
+    }
+
+    #[test]
+    fn chord_class_delegates_to_inner_chord_error() {
+        let e: PlatformError = ChordError::Empty.into();
+        assert_eq!(e.class(), ErrorClass::Recoverable);
     }
 }
