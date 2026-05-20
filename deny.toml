@@ -1,7 +1,9 @@
-# cargo-deny configuration for the linerule workspace.
-
 [graph]
-all-features = true
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
 
 [advisories]
 version = 2
@@ -10,28 +12,38 @@ ignore = []
 
 [licenses]
 version = 2
+confidence-threshold = 0.93
 allow = [
+    "MIT",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
-    "MIT",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "BSL-1.0",
     "ISC",
-    "Unicode-3.0",
     "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
     "CC0-1.0",
     "MPL-2.0",
-    "Zlib",
 ]
-confidence-threshold = 0.9
 
 [bans]
 multiple-versions = "warn"
-wildcards         = "deny"
-highlight         = "all"
+wildcards = "deny"
+# Allow path-based deps (workspace internals) to look like wildcards — they
+# don't carry semver implications inside the same workspace.
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+# Transitive lazy_static / once_cell from upstream crates is unavoidable;
+# the policy lives in `xtask strict-code` (our own code only).
+deny = [{ name = "openssl" }, { name = "openssl-sys" }]
+skip-tree = []
 
 [sources]
 unknown-registry = "deny"
-unknown-git      = "deny"
-allow-registry   = ["https://github.com/rust-lang/crates.io-index"]
-allow-git        = []
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

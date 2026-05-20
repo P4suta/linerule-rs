@@ -1,31 +1,16 @@
-# rustfmt — STABLE options only.
-#
-# Rationale: rust-toolchain.toml pins stable. Nightly-only options
-# (`group_imports`, `imports_granularity`, `wrap_comments`,
-# `format_strings`, `normalize_doc_attributes`) would tie the repo to
-# nightly rustfmt for formatting alone — net negative trade.
-#
-# Entries that match rustfmt defaults are listed explicitly so the policy
-# is self-documenting; a future default change won't silently re-format.
-
-edition              = "2024"
-newline_style        = "Unix"
-use_small_heuristics = "Default"
-max_width            = 100
-
-# Whitespace — spaces only, never tabs.
-hard_tabs  = false
+edition = "2024"
+max_width = 100
+hard_tabs = false
 tab_spaces = 4
-
-# Concise idioms.
+newline_style = "Unix"
+reorder_imports = true
+reorder_modules = true
 use_field_init_shorthand = true
-use_try_shorthand        = true
+use_try_shorthand = true
+match_block_trailing_comma = true
 
-# Parens / ABI / fn-sig.
-remove_nested_parens = true
-force_explicit_abi   = true
-fn_params_layout     = "Tall"
-
-# Match / derive.
-match_block_trailing_comma = false
-merge_derives              = true
+# NOTE: nightly-only options (imports_granularity, group_imports, format_strings,
+# wrap_comments, normalize_comments, condense_wildcard_suffixes,
+# format_macro_matchers, normalize_doc_attributes, comment_width) are intentionally
+# omitted to keep `cargo fmt` clean on stable. Re-enable in a `rustfmt.nightly.toml`
+# overlay once stable adopts them.

@@ -1,241 +1,302 @@
-# linerule task runner — the ONE entry point for every dev / CI operation.
-# Every cargo / clippy / nextest invocation runs inside the dev container
-# (ADR-0005 Docker-only). Recipes are grouped via `[group("...")]` so
-# `just --list` reads top-down by intended user task.
-
-set shell := ["bash", "-euo", "pipefail", "-c"]
-set dotenv-load := false
-
-# --- internal helpers ---------------------------------------------------------
-
-# Interactive dev container (TTY attached). Quiet variant suppresses the
-# "Container ... Created" chatter so tight edit loops scroll less.
-_dev   := "docker compose run --rm dev"
-_quiet := "docker compose run --rm --quiet-pull dev"
-# Non-interactive variant for CI-like invocations
-_ci    := "docker compose run --rm --no-TTY ci"
-
-_BUILD_TIMEOUT := env_var_or_default("LINERULE_BUILD_TIMEOUT_S", "1800")
-
-# --- meta ---------------------------------------------------------------------
-
-# Show the categorised recipe list (default).
-[private]
-default:
-    @just --list --unsorted --list-heading $'linerule task runner — `just <recipe>`\n\n'
-
-# --- bootstrap ----------------------------------------------------------------
-
-# Build the dev container image. Wraps `docker compose build` with
-# progress=plain visibility and a hard timeout (ADR-0008 fail-fast).
-[group('bootstrap')]
-build-image:
-    @echo "==> build-image: timeout={{_BUILD_TIMEOUT}}s, progress=plain"
-    timeout --signal=KILL --kill-after=10s {{_BUILD_TIMEOUT}} \
-        docker compose build --progress=plain dev || \
-        (echo "ERROR: image build failed or exceeded {{_BUILD_TIMEOUT}}s" >&2 ; exit 1)
-
-# Internal: bail with an actionable message if the dev image isn't built yet.
-[private]
-image-ready:
-    @docker image inspect linerule-dev:local >/dev/null 2>&1 \
-        || (echo "ERROR: linerule-dev:local image not found. Run 'just build-image' first." >&2 ; exit 2)
-
-# Install lefthook git hooks (pre-commit + commit-msg + pre-push).
-[group('bootstrap')]
-hooks:
-    {{_dev}} lefthook install
-
-# Remove lefthook git hooks.
-[group('bootstrap')]
-hooks-uninstall:
-    {{_dev}} lefthook uninstall
-
-# --- developer dev loop -------------------------------------------------------
-
-# bacon file-watcher inside the dev container (default job: check).
-# Keybindings: c clippy / t test / d doc / f failing-only / q quit.
-[group('dev loop')]
-watch JOB="":
-    {{_dev}} bacon {{JOB}}
-
-# Headless bacon — pipe-friendly, no TUI.
-[group('dev loop')]
-watch-headless JOB="check":
-    {{_ci}} bacon --headless --job {{JOB}}
-
-# Fast incremental syntax/type check — sub-second after warm cache.
-# The right "did I just break something" loop, much faster than `build`.
-[group('dev loop')]
-check: image-ready
-    {{_dev}} cargo check --workspace --all-targets
-
-# Auto-fix everything that is fixable: fmt, clippy --fix, shear --fix.
-# One container session, one cargo invocation chain — no per-tool startup.
-[group('dev loop')]
-fix: image-ready
-    {{_dev}} bash -c 'set -e; \
-        cargo fmt --all; \
-        cargo clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings; \
-        cargo shear --fix || true'
-
-# Drop into an interactive dev shell.
-[group('dev loop')]
-shell: image-ready
-    {{_dev}} bash
-
-# Run the linerule CLI with arbitrary args.
-[group('dev loop')]
-run *ARGS: image-ready
-    {{_dev}} cargo run --package linerule --quiet -- {{ARGS}}
-
-# --- build / test -------------------------------------------------------------
-
-# Debug build of the whole workspace.
-[group('build / test')]
-build: image-ready
-    {{_dev}} cargo build --workspace --all-targets
-
-# Optimised release build.
-[group('build / test')]
-build-release: image-ready
-    {{_dev}} cargo build --release --workspace
-
-# Cross-compile to Windows from WSL via cargo-xwin (vendors MSVC SDK).
-[group('build / test')]
-build-windows: image-ready
-    {{_dev}} cargo xwin build --release --target x86_64-pc-windows-msvc
-
-# Extract the cross-compiled .exe from the cargo-target docker volume
-# into the host-visible `dist/` dir so it can be run from Windows
-# (e.g. `\\wsl.localhost\Ubuntu\home\yasunobu\projects\linerule\dist\linerule.exe`).
-[group('build / test')]
-windows-exe: build-windows
-    @mkdir -p dist
-    {{_dev}} bash -c 'cp target/x86_64-pc-windows-msvc/release/linerule.exe /workspace/dist/linerule.exe'
-    @ls -lh dist/linerule.exe
-    @echo "Run from Windows side: \\\\wsl.localhost\\Ubuntu$(pwd)/dist/linerule.exe"
-
-# nextest run, all targets.
-[group('build / test')]
-test *ARGS: image-ready
-    {{_dev}} cargo nextest run --workspace --all-targets {{ARGS}}
-
-# Doctests (nextest skips these by design).
-[group('build / test')]
-test-doc: image-ready
-    {{_dev}} cargo test --workspace --doc
-
-# Property-test sweep (bolero in proptest mode).
-[group('build / test')]
-prop: image-ready
-    {{_dev}} cargo nextest run --workspace -E 'test(property_)'
-
-# Snapshot tests (cargo-insta with `--review` interactivity).
-[group('build / test')]
-snap: image-ready
-    {{_dev}} cargo insta test --workspace --review
-
-# --- lint / static analysis ---------------------------------------------------
+# linerule-rs — task entry points. Routes through Docker unless INSIDE_CONTAINER=1.
 #
-# `just lint` runs every gate (fmt-check + typos + strict-code + shear +
-# clippy) as a single `bash -c` inside ONE container session — we pay
-# docker startup cost once instead of five times. Same recipe at
-# pre-commit, pre-push, and CI: lint is lint, no quick/full split.
+# Conventions:
+# - Every recipe is a thin wrapper. The intelligence lives in `cargo xtask`
+#   subcommands (`lint`, `ci`, `strict-code`, `dep-graph`).
+# - When INSIDE_CONTAINER=1, recipes run tools directly on $PATH. Outside,
+#   they delegate to `docker compose run --rm dev` (or `exec dev` if the
+#   dev service is already up — saves ≈1.5 s per invocation).
+# - Windows-only operations are explicit (`publish-windows-cross` uses
+#   `cargo-xwin` for iteration checks; shippable artifacts come from CI).
 
-[group('lint / analysis')]
-lint: image-ready
-    {{_dev}} bash -c 'set -e; \
-        cargo fmt --all -- --check; \
-        typos; \
-        cargo run --quiet --release --package xtask -- strict-code; \
-        cargo shear; \
-        cargo clippy --workspace --all-targets --all-features -- -D warnings'
+inside := env_var_or_default("INSIDE_CONTAINER", "0")
 
-# Standalone recipes — useful when iterating on one specific gate.
-[group('lint / analysis')]
-fmt: image-ready
-    {{_dev}} cargo fmt --all
+dev_running := `docker compose ps --status running --services 2>/dev/null | grep -c '^dev$' 2>/dev/null || true`
+docker_run := if dev_running == "0" { "docker compose run --rm dev" } else { "docker compose exec dev" }
 
-[group('lint / analysis')]
-fmt-check: image-ready
-    {{_dev}} cargo fmt --all -- --check
+cargo := if inside == "1" { "cargo" } else { docker_run + " cargo" }
+rustup := if inside == "1" { "rustup" } else { docker_run + " rustup" }
+typos := if inside == "1" { "typos" } else { docker_run + " typos" }
+actionlint := if inside == "1" { "actionlint" } else { docker_run + " actionlint" }
+lefthook := if inside == "1" { "lefthook" } else { docker_run + " lefthook" }
+taplo := if inside == "1" { "taplo" } else { docker_run + " taplo" }
+biome := if inside == "1" { "biome" } else { docker_run + " biome" }
+yamlfmt := if inside == "1" { "yamlfmt" } else { docker_run + " yamlfmt" }
+sh := if inside == "1" { "bash -lc" } else { docker_run + " bash -lc" }
+bun := if inside == "1" { "bun" } else { docker_run + " bun" }
+bunx := if inside == "1" { "bunx" } else { docker_run + " bunx" }
 
-[group('lint / analysis')]
-clippy: image-ready
-    {{_dev}} cargo clippy --workspace --all-targets --all-features -- -D warnings
+dev_log := env_var_or_default("LINERULE_LOG", "debug,wnd_proc=info,heartbeat=info,cursor_tracker=info")
 
-[group('lint / analysis')]
-typos: image-ready
-    {{_dev}} typos
+default:
+    @just --list
 
-[group('lint / analysis')]
-strict-code: image-ready
-    {{_dev}} cargo run --quiet --release --package xtask -- strict-code
+# ----- first-run bootstrap -----
 
-[group('lint / analysis')]
-deny: image-ready
-    {{_dev}} cargo deny check
+# One-shot setup for a fresh clone. Pulls the prebuilt dev image (or builds
+# locally if absent), brings up the persistent dev container, installs git
+# hooks, restores the commitlint bun packages, and runs `just doctor` to
+# confirm every tool is reachable. Idempotent — re-run any time the
+# environment feels off.
+#
+# The Windows cross-compile sysroot (MSVC CRT + Windows SDK, ~500 MB) is
+# baked into the dev image, so the first `just cross-check` is instant.
+bootstrap:
+    @echo "==> 1/4 fetch dev image (try ghcr.io, fall back to local build)"
+    @docker compose pull 2>/dev/null && echo "  (pulled prebuilt image from ghcr.io)" \
+        || (echo "  (no published image, building locally with GITHUB_TOKEN if available)" && \
+            GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}" docker compose build)
+    @echo "==> 2/4 docker compose up -d dev (persistent dev container)"
+    docker compose up -d dev
+    @echo "==> 3/4 lefthook install (pre-commit / commit-msg / pre-push hooks)"
+    {{lefthook}} install
+    @echo "==> 4/4 bun install (commitlint, used by commit-msg hook)"
+    {{bun}} install
+    @just doctor
+    @echo
+    @echo "🎉 bootstrap done. Try: just build / just test / just cross-check / just lint"
 
-[group('lint / analysis')]
-audit: image-ready
-    {{_dev}} cargo audit
+# ----- environment health check -----
 
-[group('lint / analysis')]
-shear: image-ready
-    {{_dev}} cargo shear
+# Verify every dev tool the recipes rely on is reachable inside the dev
+# container. Run when joining the project or when something starts failing
+# in a confusing way. Exits non-zero on the first missing tool so CI / scripts
+# can fail loudly rather than silently.
+doctor:
+    @echo "==> linerule-rs doctor"
+    @{{docker_run}} bash -c 'set -e; \
+        check() { printf "  %-18s " "$1"; out=$($2 2>&1 | head -1) && printf "ok    %s\n" "$out" || { printf "MISSING\n"; exit 1; }; }; \
+        check rustc          "rustc --version"; \
+        check cargo          "cargo --version"; \
+        check cargo-nextest  "cargo nextest --version"; \
+        check cargo-xwin     "cargo xwin --version"; \
+        check cargo-deny     "cargo deny --version"; \
+        check cargo-audit    "cargo audit --version"; \
+        check cargo-llvm-cov "cargo llvm-cov --version"; \
+        check cargo-machete  "cargo machete --version"; \
+        check cargo-sort     "cargo sort --version"; \
+        check cargo-rdme     "cargo rdme --version"; \
+        check cargo-modules  "cargo modules --version"; \
+        check cargo-depgraph "cargo depgraph --version"; \
+        check typos          "typos --version"; \
+        check taplo          "taplo --version"; \
+        check biome          "biome --version"; \
+        check yamlfmt        "yamlfmt --version"; \
+        check actionlint     "actionlint -version"; \
+        check lefthook       "lefthook version"; \
+        check just           "just --version"; \
+        check mold           "mold --version"; \
+        check clang          "clang --version"; \
+        check bun            "bun --version"; \
+    '
+    @echo "==> doctor: ok"
 
-[group('lint / analysis')]
-semver: image-ready
-    {{_dev}} cargo semver-checks
+# ----- one-shot environment -----
 
-# --- coverage -----------------------------------------------------------------
+docker-build:
+    @echo "==> docker compose build (GITHUB_TOKEN auto-loaded from gh CLI if available)"
+    GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}" docker compose build
 
-# Region-coverage gate (LLVM "regions" ≈ basic blocks; the closest C1
-# proxy that cargo-llvm-cov supports on stable — `--fail-under-branches`
-# does not exist as a CLI option, and `--branch` itself is nightly-only).
-# Floor 100% on linerule-core / linerule-config; linerule-platform Win32
-# FFI and the binary entrypoint are excluded (boundary).
-_COV_FLOOR := "100"
-_COV_IGNORE := "(target/|/main\\.rs$|crates/linerule-platform/src/windows.rs|crates/xtask/)"
+shell:
+    {{docker_run}} bash
 
-[group('coverage')]
-coverage: image-ready
-    {{_dev}} cargo llvm-cov \
-        --ignore-filename-regex '{{_COV_IGNORE}}' \
-        --fail-under-regions {{_COV_FLOOR}} \
-        nextest --workspace
+clean-docker:
+    @echo "==> docker compose down (volumes + local images)"
+    docker compose down --volumes --rmi local
 
-[group('coverage')]
-coverage-html: image-ready
-    {{_dev}} cargo llvm-cov \
-        --ignore-filename-regex '{{_COV_IGNORE}}' \
-        --html --output-dir coverage/html \
-        nextest --workspace
+dev-up:
+    @echo "==> docker compose up -d dev"
+    docker compose up -d dev
+    @echo "dev container is up — `just <recipe>` now uses docker exec (faster)."
 
-# --- release ------------------------------------------------------------------
+dev-down:
+    docker compose stop dev
 
-[group('release')]
-release-dry: image-ready
-    {{_dev}} release-plz update --dry-run
+# ----- Rust workflow -----
 
-[group('release')]
-dist-plan: image-ready
-    {{_dev}} cargo dist plan
+build:
+    @echo "==> cargo build --workspace --all-targets"
+    {{cargo}} build --workspace --all-targets
 
-# --- aggregate ----------------------------------------------------------------
+build-release:
+    @echo "==> cargo build --release --workspace"
+    {{cargo}} build --release --workspace
 
-# Local replica of the full CI pipeline. Run before push.
-[group('aggregate')]
-ci: lint build test test-doc deny audit coverage
+# Inner-loop alias: skips dependency resolution checks.
+b:
+    @echo "==> cargo build --workspace"
+    {{cargo}} build --workspace
 
-# --- cleanup ------------------------------------------------------------------
+test:
+    @echo "==> cargo nextest run --workspace --exclude linerule-platform-windows"
+    {{cargo}} nextest run --workspace --exclude linerule-platform-windows
 
-[group('cleanup')]
-clean: image-ready
-    {{_dev}} cargo clean --workspace
+# Inner-loop test alias.
+t:
+    {{cargo}} nextest run --workspace --exclude linerule-platform-windows --no-fail-fast
 
-# Tear down all compose state (destroys cached registry/target/sccache volumes)
-[group('cleanup')]
-nuke:
-    docker compose down -v --remove-orphans
+test-windows:
+    @echo "==> cargo nextest run --workspace --run-ignored all"
+    {{cargo}} nextest run --workspace --run-ignored all
+
+# Coverage report (advisory threshold 80%).
+coverage:
+    {{cargo}} llvm-cov --workspace --branch --html --output-dir artifacts/coverage
+
+# Run the overlay locally (Windows host required for actual rendering).
+run *args:
+    LINERULE_LOG={{dev_log}} {{cargo}} run -p linerule-app -- {{args}}
+
+run-release *args:
+    LINERULE_LOG={{dev_log}} {{cargo}} run --release -p linerule-app -- {{args}}
+
+# ----- lint / quality gates -----
+
+fmt:
+    {{cargo}} fmt --all
+    {{cargo}} sort --workspace
+    {{taplo}} fmt
+    {{biome}} format --write .
+    {{yamlfmt}} .
+
+fmt-check:
+    {{cargo}} fmt --all -- --check
+    {{cargo}} sort --workspace --check
+    {{taplo}} fmt --check
+    {{biome}} format .
+    {{yamlfmt}} --lint .
+
+clippy:
+    {{cargo}} clippy --workspace --all-targets -- -D warnings
+
+deny:
+    {{cargo}} deny check advisories bans licenses sources
+
+audit:
+    {{cargo}} audit --deny warnings
+
+typos:
+    {{typos}}
+
+typos-fix:
+    {{typos}} --write-changes
+
+actionlint:
+    {{actionlint}} .github/workflows/*.yml
+
+xtask-dep-graph:
+    {{cargo}} xtask dep-graph
+
+machete:
+    {{cargo}} machete
+
+# ----- auto-generated docs (commit the output; lefthook checks drift) -----
+
+# Render dependency graph SVG (requires graphviz `dot`).
+docs-dep-graph:
+    {{sh}} "{{cargo}} depgraph --workspace-only | dot -Tsvg > docs/dep-graph.svg"
+
+# Render module tree to ASCII for each in-house crate.
+docs-modules:
+    {{sh}} "{{cargo}} modules structure --package linerule-core > docs/modules/linerule-core.txt"
+    {{sh}} "{{cargo}} modules structure --package linerule-platform-windows > docs/modules/linerule-platform-windows.txt 2>/dev/null || true"
+    {{sh}} "{{cargo}} modules structure --package linerule-app > docs/modules/linerule-app.txt 2>/dev/null || true"
+    {{sh}} "{{cargo}} modules structure --package xtask > docs/modules/xtask.txt"
+
+# Sync `linerule-core` crate-level doc → README.md (marker block).
+# cargo-rdme reads `[package.metadata.cargo-rdme]` in the crate's Cargo.toml
+# to locate the README, so we just `cd` into the crate.
+docs-readme:
+    {{sh}} "cd crates/linerule-core && {{cargo}} rdme --force"
+
+# Generate all the auto-docs in one go.
+docs: docs-dep-graph docs-modules docs-readme
+
+# Open generated rustdoc locally.
+doc:
+    {{cargo}} doc --workspace --no-deps --open
+
+# Aggregated lint pipeline (everything that gates merges).
+lint:
+    @echo "==> cargo xtask lint"
+    {{cargo}} xtask lint
+
+# Local CI replica.
+ci:
+    @echo "==> cargo xtask ci"
+    {{cargo}} xtask ci
+
+# ----- cross-compile checks -----
+
+# Compile-only check that Windows code still builds from Linux dev container.
+cross-check:
+    @echo "==> cargo xwin check --workspace --target x86_64-pc-windows-msvc"
+    {{cargo}} xwin check --workspace --target x86_64-pc-windows-msvc
+
+# Iteration-quality cross build (NOT shippable — see ADR-0001 deployment notes).
+publish-windows-cross:
+    {{cargo}} xwin build --release --target x86_64-pc-windows-msvc -p linerule-app
+
+# ----- distribution -----
+
+# Native Windows build (run on a Windows host — produces the shippable binary).
+publish-windows-native:
+    {{cargo}} build --release -p linerule-app --target x86_64-pc-windows-msvc
+
+# ----- diagnostics -----
+
+# Tail today's events file with subsystem filter.
+logs-tail subsystem="*":
+    {{sh}} "tail -F \"$APPDATA/linerule\"/events.jsonl.* 2>/dev/null | jq -c 'select(.target | test(\"{{subsystem}}\"))'"
+
+# Pretty-print today's events.
+logs-pretty:
+    {{sh}} "cat \"$APPDATA/linerule\"/events.jsonl.* | jq -C ."
+
+logs-clear:
+    {{sh}} "rm -f \"$APPDATA/linerule\"/events.jsonl.*"
+
+crash-list:
+    {{sh}} "ls -1t \"$APPDATA/linerule\"/crash-*.json 2>/dev/null"
+
+crash-latest:
+    {{sh}} "ls -1t \"$APPDATA/linerule\"/crash-*.json 2>/dev/null | head -1 | xargs -r cat | jq -C ."
+
+# ----- git hooks -----
+
+hooks:
+    {{lefthook}} install
+    {{bun}} install
+
+# ----- lefthook delegated recipes (do not run directly) -----
+
+_hook-fmt +files:
+    {{cargo}} fmt -- {{files}}
+
+_hook-typos-fix +files:
+    {{typos}} --write-changes {{files}}
+
+_hook-taplo-fmt +files:
+    {{taplo}} fmt {{files}}
+
+_hook-cargo-sort:
+    {{cargo}} sort --workspace
+
+_hook-biome-format +files:
+    {{biome}} format --write {{files}}
+
+_hook-yamlfmt +files:
+    {{yamlfmt}} {{files}}
+
+_hook-actionlint +files:
+    {{actionlint}} {{files}}
+
+_hook-xtask-dep-graph:
+    {{cargo}} xtask dep-graph
+
+_hook-docs-drift:
+    just docs
+    {{sh}} "git diff --quiet docs/ README.md || (echo 'docs drift detected — run \\`just docs\\` and commit' >&2; exit 1)"
+
+_hook-commitlint msg_path:
+    {{bunx}} commitlint --edit {{msg_path}}

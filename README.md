@@ -1,130 +1,104 @@
-# linerule — デジタル定規
+# linerule-rs
 
-[![CI](https://github.com/P4suta/linerule-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/P4suta/linerule-rs/actions/workflows/ci.yml)
-[![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#%E3%83%A9%E3%82%A4%E3%82%BB%E3%83%B3%E3%82%B9)
+Rust 製の Windows 用 reading ruler（読書補助オーバーレイ）。透明 click-through ウィンドウで画面上に水平／垂直のスリットを表示し、視線追跡を助ける。
 
-画面の上に**透明な薄い定規**を浮かせて、マウスカーソルにくっついて
-動かすだけのアプリです。長い文章を読んでいるときに「いま何行目を
-読んでいたっけ?」となるのを防ぎます。
+> ⚠️ 開発中。Phase D（DComp + D2D + D3D11 描画パイプライン）まで実装。Phase E 以降は未実装。
 
-> 対応 OS: Windows 10 / 11 のみ(v0.1)
->
-> macOS / Linux は v0.2 で来ます
+## 構成
 
-## こんな人に
+| Crate | 役割 |
+|---|---|
+| `linerule-core` | 純粋ロジック層。ADT / reducer / render / chord parser / hold FSM / tick pipeline。`#![forbid(unsafe_code)]` |
+| `linerule-platform-windows` | Win32 / COM 実装層。DirectComposition + Direct2D + DXGI + D3D11 を直接叩く。`#![cfg(windows)]` |
+| `linerule-app` | 単一バイナリ `linerule.exe` のエントリポイント。`windows_subsystem = "windows"` + サブコマンドで GUI / CLI 切替 |
+| `xtask` | ビルド自動化。`lint` / `dep-graph` / `ci` |
 
-- Kindle / 電子書籍リーダー / PDF / ブラウザの長文を読むのが疲れる
-- 行を見失うので指で追いたくなる
-- 縦書き(青空文庫など)でも同じ補助がほしい
-- 既存アプリに改造を加えたくない(linerule は完全に画面の上に
-  *被せる* だけ — 元アプリは何も知りません)
+依存方向は一方向: `linerule-app → linerule-platform-windows → linerule-core`。`cargo xtask dep-graph` で機械検証する。
 
-## 2 つのモードを切り替えて使います
+## クイックスタート
 
-| モード   | 何が出る                                              | 用途                       |
-| -------- | ----------------------------------------------------- | -------------------------- |
-| 横マスク | カーソルの**高さ**だけ見えて、その上下が暗くなる      | 横書き、1 行集中(典型)    |
-| 縦マスク | カーソルの**位置**だけ見えて、その左右が暗くなる      | 縦書き、1 列集中(青空文庫)|
+### 開発環境
 
-起動直後は横マスクで始まります。`Ctrl+Alt+R` を押すたびに
+ホストには Docker と [`just`](https://github.com/casey/just) があれば良い。すべての Rust ツール (`cargo`, `cargo-xwin`, `cargo-deny`, `cargo-nextest`, `cargo-machete`, `cargo-llvm-cov`, `cargo-audit`, `cargo-sort`, `typos`, `taplo`, `biome`, `yamlfmt`, `lefthook`, `actionlint`, `commitlint`) はコンテナ内に揃う。
 
-```
-横マスク → 縦マスク → なし → 横マスク → ...
+```bash
+just bootstrap      # 一発セットアップ: docker build + git hooks + xwin sysroot prefetch + doctor
 ```
 
-の順に切り替わります(「なし」は完全に何も出さない状態)。
+`just bootstrap` がやること:
 
-## キー操作(初期値)
+1. **dev image を取得** — `docker compose pull` で `ghcr.io/p4suta/linerule-rs-dev:latest` を取りに行き、無ければ `docker compose build` にフォールバック（フォールバック時は `gh auth token` から `GITHUB_TOKEN` を自動拾って cargo-binstall の api.github.com レートリミット回避）。CI (`.github/workflows/dev-image.yml`) が週次 + Dockerfile 変更時にイメージを更新するので、通常は ~30s の pull
+2. `docker compose up -d dev` — 永続コンテナを立てて以降の `just <recipe>` を高速化
+3. `lefthook install` — pre-commit / commit-msg / pre-push git hooks を `.git/hooks/` に配置
+4. `bun install` — commit-msg hook が使う commitlint を入れる（npm ではなく [Bun](https://bun.sh/) を採用、爆速）
+5. `just doctor` — 全ツールの疎通確認
 
-<!-- BEGIN GENERATED: hotkeys -->
+Windows クロスコンパイル用の MSVC CRT / Windows SDK（~500 MB）は dev image に焼き込まれているので、初回の `just cross-check` も即座に通る。
 
-| キー         | 何が起きる                                    |
-| ---------- | ---------------------------------------------- |
-| Ctrl+Alt+R | 4 モード(+ なし)を順に切り替え                   |
-| Ctrl+Alt+P | 一時的に **完全 OFF**(もう一度押すと元に戻る)     |
-| Ctrl+Alt+] | 帯を太くする                                    |
-| Ctrl+Alt+[ | 帯を細くする                                    |
-| Ctrl+Alt+= | 濃くする                                        |
-| Ctrl+Alt+- | 薄くする                                        |
-| Ctrl+Alt+Q | linerule を終了する(緊急脱出用 — 必ず効きます) |
+困ったら `just doctor` を打てば、どのツールが落ちているかすぐ分かる。
 
-<!-- END GENERATED: hotkeys -->
+#### 高速化の根拠（測定済み）
 
-> キーが他のアプリと被って効かないときは設定ファイルで変更できます
-> (下「設定を変える」参照)。
+| 構成 | フレッシュクローン → cross-check 通る状態まで |
+|---|---|
+| Token 無しで build（cargo-binstall が api.github.com 60/h で 403 → 120s × N retry → source fallback、その後 xwin 7m download） | **約 20 分** |
+| Token 有りで build（cargo-binstall は prebuilt、xwin sysroot を image に焼き込み済み） | **約 2.4 分** |
+| ghcr.io pull（CI がビルドして push、xwin sysroot 込みで ~1.7 GB pull） | **約 30 秒** |
 
-## 困ったとき
+### ビルド・テスト・リント
 
-**画面が真っ暗で操作できない / マスクが邪魔で消せない:**
-`Ctrl+Alt+Q` を押すと linerule が完全終了します。これは設定で
-変えても*必ず*効くようにしてあります。
-
-**画面の上に乗っているのに、クリックは下のアプリに通る:**
-仕様です(*click-through*)。linerule は表示だけで、
-キーボード/マウスの入力は全部下のアプリに素通しします。
-
-**カーソルにくっついてこない:**
-ディスプレイが複数あるときは、起動したモニタの中だけで動きます。
-別モニタで使いたいときは linerule をそちらで再起動してください。
-
-## インストール
-
-(v0.1.0 リリース後ここに `linerule.exe` のダウンロード手順を入れます。
-今は開発中なので「下の "開発者向け" を見て自分でビルド」してください。)
-
-## 設定を変える
-
-設定ファイルは TOML です。場所と内容は次のコマンドで分かります:
-
-```sh
-linerule config path     # 設定ファイルの場所を表示
-linerule config show     # 現在の設定を表示(ファイルがなくても既定値)
-linerule config edit     # $EDITOR で開く(ファイルがなければ作る)
+```bash
+just build          # cargo build --workspace --all-targets
+just test           # cargo nextest run --workspace
+just lint           # fmt + clippy + cargo-deny + typos + actionlint + cargo-machete + dep-graph
+just run            # cargo run -p linerule-app (Windows host のみ動作)
 ```
 
-設定ファイルの中身はこんな感じです(全項目とも省略可、省略すると
-既定値):
+### クロスコンパイル確認
 
-```toml
-[overlay]
-# マスクの色。{ r, g, b, a } 各 0..=255。a が暗さ(透明=0、不透明=255)。
-mask_color = { r = 8, g = 8, b = 8, a = 217 }   # 暗いほぼ黒、85% 不透明
-thickness  = 28                                  # 隙間(スリット)の太さ(px)
+Windows ターゲットの型／構文ドリフトを Linux 上で検出するために `cargo-xwin` を使う:
 
-[hotkeys]
-cycle_mode  = "Ctrl+Alt+R"
-pause       = "Ctrl+Alt+P"
-thicker     = "Ctrl+Alt+]"
-thinner     = "Ctrl+Alt+["
-more_opaque = "Ctrl+Alt+="
-less_opaque = "Ctrl+Alt+-"
-quit        = "Ctrl+Alt+Q"
+```bash
+just cross-check        # cargo xwin check --target x86_64-pc-windows-msvc --workspace
+just publish-windows-cross  # 反復用のクロスビルド (shippable ではない)
 ```
 
-`Ctrl` / `Alt` / `Shift` / `Win` の組み合わせと
-A〜Z / `[` / `]` / `=` / `-` / 矢印キーが指定できます。
+shippable な `linerule.exe` は CI の windows-latest runner からのみ produce される（ABI / SEH 事故回避のため）。
 
-## 開発者向け
+### ログとクラッシュダンプ
 
-ビルド / テストはぜんぶ Docker の中で動きます(ホスト側に rust も
-要りません)。詳細は [`CONTRIBUTING.md`](CONTRIBUTING.md) と
-[`docs/adr/`](docs/adr/) 参照。
+ランタイム時に `%APPDATA%\linerule\events.jsonl.YYYY-MM-DD` へ tracing JSON Lines を流す。
 
-```sh
-just                 # 使えるレシピ一覧
-just build           # debug build
-just test            # nextest で全テスト
-just lint            # fmt + clippy + typos + strict-code + shear
-just coverage        # llvm-cov、region 100% で gate
-just windows-exe     # cargo-xwin で .exe を build → dist/ にコピー(Windows から起動できる)
+```bash
+just logs-tail subsystem=wnd_proc  # subsystem フィルタ
+just logs-pretty                    # 全件 pretty-print
+just crash-list                     # クラッシュダンプ一覧
+just crash-latest                   # 最新クラッシュダンプ
 ```
 
-> Windows 側から動作確認するときは `just build-windows` ではなく
-> **`just windows-exe`** を使う(後者は `dist/linerule.exe` まで
-> 同期する。`build-windows` だけだと古い `dist/` が残ったまま
-> になり、最新の挙動が試せない)。
+## Library API overview
+
+下のブロックは `crates/linerule-core/src/lib.rs` の crate-level doc から `cargo rdme` で自動同期されます。手書きで中身を編集しないこと（`just docs` で再生成）。
+
+<!-- cargo-rdme start -->
+
+<!-- cargo-rdme end -->
+
+## モジュールツリー・依存グラフ
+
+- [`docs/modules/`](docs/modules/) — 各クレートの `cargo modules structure` 出力（自動生成）
+- [`docs/dep-graph.svg`](docs/dep-graph.svg) — workspace 依存グラフ（`cargo depgraph` 自動生成）
+
+更新は `just docs` で一括実行。`lefthook` の pre-commit が drift を検出し、生成物が古いまま commit されることを防ぐ。
+
+## 設計・運用ドキュメント
+
+- [`docs/adr/0001-port-from-csharp.md`](docs/adr/0001-port-from-csharp.md): 旧 C# 版 (`linerule-cs`) からの Rust 全面リライト判断、旧 ADR 処遇マッピング
+- [`docs/adr/0002-architecture-principles.md`](docs/adr/0002-architecture-principles.md): 18 個の merge ブロッカー原則（一方向依存 / RAII / exhaustive match / unsafe 局所化 / `#[non_exhaustive]` を使わない / 等）
 
 ## ライセンス
 
-[Apache-2.0](LICENSE-APACHE) と [MIT](LICENSE-MIT) のデュアルライセンス。
-お好きな方をどうぞ。
+このプロジェクトは MIT または Apache-2.0 のいずれかでデュアルライセンスされます (お好みで)。
+
+- [`LICENSE-MIT`](LICENSE-MIT)
+- [`LICENSE-APACHE`](LICENSE-APACHE)

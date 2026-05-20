@@ -1,24 +1,48 @@
-# typos (https://github.com/crate-ci/typos) configuration
-# Named `_typos.toml` so it doesn't shadow Cargo features matching `typos.*`.
+# typos — strict spell check across the repo.
+# Fix typos rather than suppress them; the allowlist below is the minimum
+# needed to accommodate technical idioms and Win32 vocabulary.
 
 [default]
-extend-ignore-identifiers-re = [
-    "[A-Fa-f0-9]{7,}",   # git SHAs in comments
-]
+locale = "en-us"
+
+[default.extend-identifiers]
+HWND_MESSAGE = "HWND_MESSAGE"
+LPARAM = "LPARAM"
+WPARAM = "WPARAM"
+LRESULT = "LRESULT"
+GWL = "GWL"
+GWLP = "GWLP"
+HWND = "HWND"
+HMENU = "HMENU"
+PCWSTR = "PCWSTR"
+PCSTR = "PCSTR"
+WPARAM_TYPE = "WPARAM_TYPE"
 
 [default.extend-words]
-linerule = "linerule"
-typoscope = "typoscope"
-Wayland = "Wayland"
-wlroots = "wlroots"
-Hyprland = "Hyprland"
-Tategaki = "Tategaki"
-Yasunobu = "Yasunobu"
+cli = "cli"
+Cli = "Cli"
+Marshalling = "Marshalling"
+jis = "jis"
+sjis = "sjis"
+Pris = "Pris"
+SEH = "SEH"
+DComp = "DComp"
+LWA = "LWA"
+DXGI = "DXGI"
 
 [files]
 extend-exclude = [
-    "target/",
-    "coverage/",
-    "*.lock",
-    "*.html",
+    "target/**",
+    "artifacts/**",
+    "**/*.lock",
+    "**/*.snap",
+    "**/*.snap.new",
+    ".jj/**",
+    "node_modules/**",
 ]
+
+[type.toml]
+extend-glob = ["*.toml"]
+
+[type.rust]
+extend-glob = ["*.rs"]

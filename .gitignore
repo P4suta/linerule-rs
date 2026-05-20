@@ -1,52 +1,20 @@
-# Cargo build / cache. `.cargo/config.toml` is intentional source; the
-# rest under `.cargo/` is created by `CARGO_HOME=/workspace/.cargo` in
-# the dev container and must NOT be committed.
-/target/
-**/target/
-**/*.rs.bk
-Cargo.lock.bak
-.cargo/registry/
-.cargo/git/
-.cargo/.global-cache
-.cargo/.package-cache*
-
-# Docker-volume mountpoints (per `compose.yaml`)
-.sccache/
-.xwin-cache/
-
-# Extracted release artifacts (the docker volume holds the canonical
-# build output; `just windows-exe` copies the .exe here for Windows-side
-# execution).
-/dist/
-
-# IDE
-/.idea/
-/.vscode/
-*.iml
-
-# OS
+/target
+/artifacts
+/.xwin-cache
+/.sccache
+node_modules/
+*.pdb
+*.dwarf
+*.tmp
 .DS_Store
-Thumbs.db
+.vscode/
+.idea/
+*.swp
 
-# coverage
-/coverage/
-*.profraw
-*.profdata
-lcov.info
+# insta snapshots in-progress
+*.snap.new
+*.pending-snap
 
-# bacon
-.bacon-locations
-
-# cargo-xwin scratch (MSVC SDK vendored cache)
-/.xwin-cache/
-
-# release-plz
-/.release-plz/
-
-# scratch / local
-/tmp/
-*.log
-
-# secrets
-.env
-.env.local
+# tracing JSONL (used in dev runs)
+events.jsonl*
+crash-*.json

@@ -1,0 +1,57 @@
+# Build `cargo doc` for all crates and deploy to GitHub Pages on every
+# successful push to `main`. The published rustdoc is the canonical API
+# reference; `lib.rs` crate-doc and `///` items feed it directly.
+
+name: docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (cargo doc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc # v2.9.1
+      - name: cargo doc
+        env:
+          RUSTDOCFLAGS: -D warnings --enable-index-page -Z unstable-options
+        run: |
+          # `--enable-index-page` requires nightly; fall back to a manual
+          # redirect HTML when running on stable.
+          cargo doc --workspace --no-deps --exclude linerule-platform-windows \
+            || cargo +nightly doc --workspace --no-deps --exclude linerule-platform-windows \
+            || cargo doc --workspace --no-deps --exclude linerule-platform-windows
+      - name: write redirect index.html (stable rustdoc has no auto-index)
+        run: |
+          cat > target/doc/index.html <<'HTML'
+          <!doctype html><meta http-equiv="refresh" content="0; url=linerule_core/index.html">
+          HTML
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: target/doc
+
+  deploy:
+    name: deploy (gh-pages)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90af4e83d335a3186e89b4d92dbb18f8c44d # v4.0.5

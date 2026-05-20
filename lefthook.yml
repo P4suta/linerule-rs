@@ -1,62 +1,82 @@
-# Pre-commit / commit-msg / pre-push hooks. Every command runs through
-# `just`, which itself wraps `docker compose run` (ADR-0005 Docker-only).
+# lefthook — git hooks runner.
 #
-# Install after clone:  `just hooks`
-# Uninstall:            `just hooks-uninstall`
+# One-time install: `just hooks`. Every step delegates to a Justfile
+# `_hook-*` recipe so tools route through the dev container the same way
+# `just lint` does — no tool is assumed to exist on the host.
 #
-# Reference: https://lefthook.dev/configuration/
+# Policy: every formatter runs with `stage_fixed: true` — the author writes
+# code, lefthook fixes formatting on the way to the index, the commit
+# captures the fixed form. CI re-runs the same tools in `--check` mode.
+
+assert_lefthook_installed: true
+no_tty: false
+colors: true
 
 pre-commit:
-  parallel: true
-  skip:
-    - rebase
-    - merge
+  parallel: false
+  follow: true
   commands:
-    # `just fmt` writes; reformatted files are re-staged automatically so
-    # the commit carries the fix. fmt-check is *not* used here because
-    # fixing-and-restaging beats failing the commit.
-    fmt:
+    # ---- auto-fixers (stage_fixed = true) ----
+    cargo-fmt:
+      tags: format
       glob: "*.rs"
-      run: just fmt
+      run: just _hook-fmt {staged_files}
       stage_fixed: true
 
-    # `just lint` bundles fmt-check + typos + strict-code + shear +
-    # clippy in ONE docker session — single container startup means
-    # most of the cost is clippy itself. Catching every drift at commit
-    # time beats discovering it on push or in CI.
-    lint:
-      glob: "*.{rs,toml,yml,yaml}"
-      run: just lint
+    cargo-sort:
+      tags: format
+      glob: "{**/Cargo.toml,Cargo.lock}"
+      run: just _hook-cargo-sort
+      stage_fixed: true
+
+    taplo-fmt:
+      tags: format
+      glob: "*.toml"
+      run: just _hook-taplo-fmt {staged_files}
+      stage_fixed: true
+
+    biome-format:
+      tags: format
+      glob: "{*.json,*.jsonc}"
+      run: just _hook-biome-format {staged_files}
+      stage_fixed: true
+
+    yamlfmt:
+      tags: format
+      glob: "{*.yml,*.yaml}"
+      run: just _hook-yamlfmt {staged_files}
+      stage_fixed: true
+
+    typos-fix:
+      tags: spell
+      run: just _hook-typos-fix {staged_files}
+      stage_fixed: true
+
+    # ---- checks (no auto-fix; author must address) ----
+    actionlint:
+      tags: ci
+      glob: "{.github/workflows/*.yml,.github/workflows/*.yaml}"
+      run: just _hook-actionlint {staged_files}
+
+    xtask-dep-graph:
+      tags: lint
+      glob: "{**/Cargo.toml,Cargo.lock}"
+      run: just _hook-xtask-dep-graph
 
 commit-msg:
   commands:
-    # Conventional Commits enforcement via `committed`. {1} is lefthook's
-    # positional reference to the commit-message file path.
-    conventional:
-      run: docker compose run --rm --no-TTY dev committed --commit-file {1}
+    commitlint:
+      run: just _hook-commitlint {1}
 
 pre-push:
-  parallel: true
-  skip:
-    - rebase
+  piped: true
   commands:
-    # Run the full nextest suite locally before pushing — catches the
-    # red surfaces a remote-CI run would catch, but without burning a
-    # round-trip.
+    lint:
+      tags: lint
+      run: just lint
     test:
+      tags: test
       run: just test
-
-    # cargo-deny — license / advisory / source restrictions. Cheap and
-    # stable enough to gate on every push.
-    deny:
-      run: just deny
-
-    # cargo-audit — RustSec advisories. Same logic as deny.
-    audit:
-      run: just audit
-
-    # Property-test deep sweep — bolero with a higher case budget than
-    # CI. A regression that needs many cases to surface is caught
-    # locally instead of on a downstream PR.
-    prop:
-      run: just prop
+    cross-check:
+      tags: build
+      run: just cross-check
