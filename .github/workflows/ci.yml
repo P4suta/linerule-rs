@@ -46,6 +46,9 @@ jobs:
         run: cargo build --workspace --exclude linerule-platform-windows --all-targets
       - name: cargo nextest (exclude platform-windows)
         run: cargo nextest run --workspace --exclude linerule-platform-windows
+      # nextest does not run doctests; run them as a separate step.
+      - name: cargo test --doc (exclude platform-windows)
+        run: cargo test --doc --workspace --exclude linerule-platform-windows
 
   build-test-windows:
     name: build + test (windows)
@@ -59,6 +62,8 @@ jobs:
           tool: cargo-nextest
       - run: cargo build --workspace --all-targets
       - run: cargo nextest run --workspace --run-ignored all
+      # nextest does not run doctests; run them as a separate step.
+      - run: cargo test --doc --workspace
 
   cross-check:
     name: cross-check (linux → win-x64)

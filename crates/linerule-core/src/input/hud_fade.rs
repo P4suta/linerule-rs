@@ -47,7 +47,7 @@ pub fn compute_opacity(
     perceptual::smooth(linear)
 }
 
-fn slit_range(center: f32, thickness: Thickness) -> (f32, f32) {
+pub(crate) fn slit_range(center: f32, thickness: Thickness) -> (f32, f32) {
     let t = px(i32::from(thickness.get()));
     let half = t * 0.5;
     (center - half, center + (t - half))
@@ -55,13 +55,13 @@ fn slit_range(center: f32, thickness: Thickness) -> (f32, f32) {
 
 /// 1-D interval gap between half-open intervals `[a_lo, a_hi)` and
 /// `[b_lo, b_hi)`. Returns `0` when they overlap.
-fn axis_gap(a_lo: f32, a_hi: f32, b_lo: f32, b_hi: f32) -> f32 {
+pub(crate) fn axis_gap(a_lo: f32, a_hi: f32, b_lo: f32, b_hi: f32) -> f32 {
     (b_lo - a_hi).max(a_lo - b_hi).max(0.0)
 }
 
 /// 2-D point-to-rect distance. Returns `0` when the point lies inside the
 /// rectangle.
-fn point_to_rect_distance(x: f32, y: f32, rl: f32, rt: f32, rr: f32, rb: f32) -> f32 {
+pub(crate) fn point_to_rect_distance(x: f32, y: f32, rl: f32, rt: f32, rr: f32, rb: f32) -> f32 {
     let dx = axis_gap(x, x + 1.0, rl, rr);
     let dy = axis_gap(y, y + 1.0, rt, rb);
     dx.mul_add(dx, dy * dy).sqrt()

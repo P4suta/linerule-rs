@@ -7,7 +7,8 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use linerule_core::{ChordSpec, HotkeyMap, KeyCode, Letter, Modifiers, OverlayAction};
+use linerule_core::input::win32_vk::chord_to_win32;
+use linerule_core::{ChordSpec, HotkeyMap, Letter, OverlayAction};
 use windows::Win32::Foundation::HWND;
 use windows::core::w;
 
@@ -105,45 +106,6 @@ impl Drop for HotkeyHost {
         if let Err(e) = win32_ffi::destroy_window(self.hwnd) {
             tracing::warn!(error = %e, "DestroyWindow(hotkey host) failed");
         }
-    }
-}
-
-/// `ChordSpec` を `RegisterHotKey` の (modifiers, vk) に変換する。
-fn chord_to_win32(chord: ChordSpec) -> (u32, u32) {
-    const MOD_ALT: u32 = 0x0001;
-    const MOD_CONTROL: u32 = 0x0002;
-    const MOD_SHIFT: u32 = 0x0004;
-    const MOD_WIN: u32 = 0x0008;
-
-    let mut mods = 0u32;
-    if chord.modifiers.contains(Modifiers::ALT) {
-        mods |= MOD_ALT;
-    }
-    if chord.modifiers.contains(Modifiers::CTRL) {
-        mods |= MOD_CONTROL;
-    }
-    if chord.modifiers.contains(Modifiers::SHIFT) {
-        mods |= MOD_SHIFT;
-    }
-    if chord.modifiers.contains(Modifiers::META) {
-        mods |= MOD_WIN;
-    }
-    let vk = key_to_vk(chord.key);
-    (mods, vk)
-}
-
-fn key_to_vk(key: KeyCode) -> u32 {
-    use linerule_core::Direction;
-    match key {
-        KeyCode::Letter(letter) => u32::from(letter.as_u8()),
-        KeyCode::BracketLeft => 0xDB,  // VK_OEM_4
-        KeyCode::BracketRight => 0xDD, // VK_OEM_6
-        KeyCode::Minus => 0xBD,        // VK_OEM_MINUS
-        KeyCode::Equal => 0xBB,        // VK_OEM_PLUS
-        KeyCode::Arrow(Direction::Up) => 0x26,
-        KeyCode::Arrow(Direction::Down) => 0x28,
-        KeyCode::Arrow(Direction::Left) => 0x25,
-        KeyCode::Arrow(Direction::Right) => 0x27,
     }
 }
 

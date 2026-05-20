@@ -43,6 +43,8 @@ features = [
 
 [target.'cfg(windows)'.dev-dependencies]
 anyhow = { workspace = true }
+insta = { workspace = true }
+proptest = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [lints]
