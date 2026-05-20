@@ -49,7 +49,12 @@ jobs:
         # (see docs/mutation-baseline.md); any regression must be killed
         # by a focused test or annotated with `// mutants: skip` plus a
         # justification in the same PR.
+        #
+        # `mkdir -p target` is required because cargo-mutants refuses to
+        # create the parent of `--output` itself, and a fresh CI checkout
+        # has no `target/` yet (no cargo command has run).
         run: |
+          mkdir -p target
           cargo mutants \
             --package linerule-core \
             --baseline skip \
