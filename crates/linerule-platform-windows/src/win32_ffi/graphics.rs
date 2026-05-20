@@ -208,6 +208,13 @@ pub fn visual_set_offset(visual: &IDCompositionVisual2, x: f32, y: f32) -> Resul
     Ok(())
 }
 
+// 注: 直接 `IDCompositionVisual2::SetOpacity(f32)` は存在しない。Win32 spec 上、
+// visual の opacity 制御は `IDCompositionVisual3::SetOpacity2` か
+// `IDCompositionEffectGroup` 経由になる。Phase G では opacity を `HudFrame` の
+// 色に bake する設計 (draw_hud_to_surface 側で premultiply) を採用したため、
+// visual 単位の opacity wrapper は導入しない。PR 4 で cursor-distance fade を
+// 実装する際に IDCompositionVisual3 cast or EffectGroup を導入する。
+
 /// レイヤに描画内容（`IDCompositionSurface`）を接続する。
 pub fn visual_set_content(
     visual: &IDCompositionVisual2,

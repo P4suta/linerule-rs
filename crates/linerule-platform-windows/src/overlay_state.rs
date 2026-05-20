@@ -62,10 +62,18 @@ pub enum HotkeyFailure {
 }
 
 /// WndProc に流れ込むメッセージごとに参照される instance state。
+///
+/// フィールドの宣言順は Drop 順を兼ねる。HUD の visual は overlay の
+/// `DcompPipeline.root` の子として attach されているので、`hud_renderer` を
+/// `renderer` より先に宣言して先に Drop させる。
 pub struct OverlayWndState {
     log_span: Span,
     nchit_count: AtomicU64,
     click_count: AtomicU64,
+    /// Phase G で attach される HUD 描画器。`attach_dcomp` で `Some` になり、
+    /// Drop で COM オブジェクトが Release される。`renderer` より先に Drop
+    /// させるため上に置く。
+    hud_renderer: RefCell<Option<crate::hud_renderer::HudRenderer>>,
     /// Phase D で attach される DComp + D2D renderer。`attach_dcomp` で `Some` に
     /// なり、Drop で COM オブジェクトが Release される。
     renderer: RefCell<Option<CompositionRenderer>>,
@@ -101,6 +109,7 @@ impl OverlayWndState {
             log_span,
             nchit_count: AtomicU64::new(0),
             click_count: AtomicU64::new(0),
+            hud_renderer: RefCell::new(None),
             renderer: RefCell::new(None),
             tick_world: RefCell::new(TickWorld::INITIAL),
             hotkey_sender: sender,
@@ -143,6 +152,16 @@ impl OverlayWndState {
     /// レンダラへの可変アクセス（WndProc の `WM_APP_TICK` ハンドラから利用）。
     pub fn renderer(&self) -> &RefCell<Option<CompositionRenderer>> {
         &self.renderer
+    }
+
+    /// `attach_dcomp` で構築された `HudRenderer` を仕込む。
+    pub fn install_hud_renderer(&self, renderer: crate::hud_renderer::HudRenderer) {
+        *self.hud_renderer.borrow_mut() = Some(renderer);
+    }
+
+    /// HUD レンダラへの可変アクセス（`RefreshHud` / `SetHudOpacity` 効果適用用）。
+    pub fn hud_renderer(&self) -> &RefCell<Option<crate::hud_renderer::HudRenderer>> {
+        &self.hud_renderer
     }
 
     /// 現在の tick world snapshot を取り出す。

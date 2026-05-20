@@ -16,8 +16,9 @@
 
 #![forbid(unsafe_code)]
 
+use linerule_core::input::hud_fade;
 use linerule_core::input::tick::{TickEffect, TickInput, step};
-use linerule_core::{OverlayFrame, State, render};
+use linerule_core::{HudFrame, Logical, OverlayFrame, Point, ScreenRect, State, hud_frame, render};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     WM_APP, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_NCDESTROY, WM_NCHITTEST,
@@ -161,11 +162,24 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
             TickEffect::ClearOverlay => {
                 apply_overlay_frame(state, &OverlayFrame::EMPTY)?;
             },
-            TickEffect::RefreshHud(_) => {
-                // PR 2 で HudRenderer 経由で描画する
+            TickEffect::RefreshHud(s) => {
+                let hz = crate::render_timing::refresh_rate_hz();
+                let mut frame = hud_frame(s, *state.hud_config(), state.monitor(), hz);
+                append_conflict_rows(state, &mut frame);
+                apply_hud_frame(state, &frame)?;
             },
-            TickEffect::SetHudOpacity { .. } => {
-                // PR 2 で HudRenderer 経由で opacity を更新する
+            TickEffect::SetHudOpacity { state: s, cursor } => {
+                // PR 3 では HUD opacity を `HudFrame` の色に bake する設計のため、
+                // visual 単位 opacity 更新は行わない（描画器単位で 1 frame 再描画
+                // するコスト > ベース不透明度のままの視覚差、と判断）。fade 反映は
+                // 次の RefreshHud で `hud_frame()` が computed opacity を入れる
+                // 拡張で対応する。本 handler では tracing のみ。
+                let _ = hud_fade::compute_opacity(
+                    s,
+                    cursor,
+                    hud_panel_rect(state),
+                    state.hud_config().fade_decay_px,
+                );
             },
             TickEffect::LogStateChanged {
                 action,
@@ -190,6 +204,79 @@ fn apply_overlay_frame(state: &OverlayWndState, frame: &OverlayFrame) -> Result<
         renderer.apply(frame)?;
     }
     Ok(())
+}
+
+fn apply_hud_frame(state: &OverlayWndState, frame: &HudFrame) -> Result<()> {
+    if let Some(renderer) = state.hud_renderer().borrow_mut().as_mut() {
+        renderer.apply(frame)?;
+    }
+    Ok(())
+}
+
+/// `OverlayWndState` の hotkey 競合一覧を HUD の追加行として `frame.rows`
+/// に append する（PR 2 で `RegisterHotKey` 失敗をユーザーに見せるため）。
+fn append_conflict_rows(state: &OverlayWndState, frame: &mut HudFrame) {
+    let conflicts = state.hotkey_conflicts();
+    if conflicts.is_empty() {
+        return;
+    }
+    let hud = state.hud_config();
+    let panel_left = frame.panel_left + hud.padding.edge;
+    let mut y = frame
+        .rows
+        .last()
+        .map(|r| r.origin_y + r.font_size + hud.padding.section)
+        .unwrap_or(frame.panel_top + hud.padding.edge);
+    frame.rows.push(linerule_core::HudRow {
+        origin_x: panel_left,
+        origin_y: y,
+        text: format!("Hotkey conflicts: {}", conflicts.len()),
+        font_size: hud.fonts.body,
+        font: linerule_core::HudFontKey::Title,
+        color: hud.colors.hint,
+    });
+    y += hud.fonts.body + hud.padding.row;
+    for c in conflicts.iter().take(6) {
+        let reason = match &c.reason {
+            crate::overlay_state::HotkeyFailure::ChordParse(_) => "parse error",
+            crate::overlay_state::HotkeyFailure::RegisterHotKey { .. } => "already in use",
+        };
+        frame.rows.push(linerule_core::HudRow {
+            origin_x: panel_left,
+            origin_y: y,
+            text: format!("  {} → {}", c.spec, reason),
+            font_size: hud.fonts.telemetry,
+            font: linerule_core::HudFontKey::Mono,
+            color: hud.colors.subtle,
+        });
+        y += hud.fonts.telemetry + hud.padding.row;
+    }
+}
+
+/// HUD パネルの bounds (logical px) を `hud_frame` と同じロジックで計算する。
+/// `compute_opacity` に渡すために `ScreenRect<Logical>` (i32) に丸める。
+fn hud_panel_rect(state: &OverlayWndState) -> ScreenRect<Logical> {
+    let hud = state.hud_config();
+    let monitor = state.monitor();
+    let width = hud.geometry.width;
+    let height = hud.geometry.height;
+    let margin = hud.geometry.margin;
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "screen-space px は f32 mantissa に余裕で収まり、ceil の結果は i32 範囲内"
+    )]
+    let monitor_right = monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX);
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "ditto"
+    )]
+    let panel_left = monitor_right - (margin + width).round() as i32;
+    let panel_top = monitor.top() + margin.round() as i32;
+    let w = width.round() as u32;
+    let h = height.round() as u32;
+    ScreenRect::new(Point::<Logical>::new(panel_left, panel_top), w, h)
 }
 
 #[cfg(test)]

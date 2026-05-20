@@ -117,15 +117,19 @@ impl OverlayWindow {
         win32_ffi::state_ref(self.state)
     }
 
-    /// Phase D: DirectComposition + Direct2D の visual tree を attach し、
-    /// `CompositionRenderer` を `OverlayWndState` 側に install する。
+    /// Phase D + G: DirectComposition + Direct2D の visual tree を attach し、
+    /// overlay slit 用 `CompositionRenderer` と HUD 用 `HudRenderer` を
+    /// `OverlayWndState` 側に install する。
     ///
     /// # Errors
-    /// D3D11 / DXGI / D2D / DComp のいずれかの初期化に失敗したとき。
+    /// D3D11 / DXGI / D2D / DComp / DWrite のいずれかの初期化に失敗したとき。
     pub fn attach_dcomp(&mut self) -> Result<()> {
         let renderer = crate::composition_renderer::CompositionRenderer::new(self.hwnd)?;
+        let hud_config = *self.state().hud_config();
+        let hud_renderer = crate::hud_renderer::HudRenderer::new(renderer.pipeline(), &hud_config)?;
         ex_style_snapshot::capture(self.hwnd, "after attach_dcomp");
         self.state().install_renderer(renderer);
+        self.state().install_hud_renderer(hud_renderer);
         Ok(())
     }
 

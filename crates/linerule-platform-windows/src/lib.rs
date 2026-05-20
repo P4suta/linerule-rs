@@ -28,6 +28,7 @@ pub mod composition_renderer;
 pub mod cursor_tracker;
 pub mod error;
 pub mod ex_style_snapshot;
+pub mod hud_renderer;
 pub mod messages;
 pub mod monitor_info;
 pub mod overlay_state;
