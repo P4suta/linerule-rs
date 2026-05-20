@@ -1,0 +1,59 @@
+# Mutation testing for `linerule-core` via `cargo-mutants`.
+#
+# Why scope = linerule-core only:
+#   - The reducer / parser / frame builder are the project's "logic
+#     center"; missed mutants there mean a real test gap.
+#   - linerule-platform-windows is `#![cfg(windows)]`; cargo-mutants would
+#     need a Windows runner. Not worth the wall time for a thin FFI veneer.
+#   - linerule-app is mostly clap + boot glue; mutating it produces lots
+#     of low-signal "skipped" mutants.
+#
+# Why this is not a required gate:
+#   - First-time runs need a baseline so the missed-mutant list is reviewed
+#     (some are "intentionally not tested", e.g. exhaustive match arms).
+#   - The run takes 5–15 min. Trigger explicitly on PRs that touch core
+#     logic, or run on-demand via `workflow_dispatch`.
+
+name: mutants
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/linerule-core/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutants-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutate-core:
+    name: cargo-mutants on linerule-core
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
+        with:
+          tool: cargo-mutants,cargo-nextest
+      - name: cargo mutants (linerule-core only, baseline skip)
+        run: |
+          cargo mutants \
+            --package linerule-core \
+            --baseline skip \
+            --no-times \
+            --output target/mutants \
+            --test-tool nextest \
+            || true   # do not fail the job yet; surface as artifact
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-report
+          path: target/mutants/
+          if-no-files-found: warn

@@ -19,9 +19,22 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 insta = { workspace = true }
 proptest = { workspace = true }
 serde_json = { workspace = true }
+
+[[bench]]
+name = "frame"
+harness = false
+
+[[bench]]
+name = "reduce"
+harness = false
+
+[[bench]]
+name = "tick"
+harness = false
 
 [lints]
 workspace = true
