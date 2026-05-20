@@ -288,9 +288,15 @@ pub fn create_surface(
 /// からの呼び出しは `just lint` で reject される。
 ///
 /// 返却される `ID2D1DeviceContext` は DComp が surface tile を render target
-/// として bind 済み。caller は `BeginDraw` (D2D 側) → 描画 → `EndDraw` (D2D 側)
-/// → [`end_dcomp_draw`] (DComp surface 側) の順で叩く。`offset` は surface tile
-/// 内の左上座標で、`SetTransform` の translation に反映すること。
+/// として bind 済みかつ、**D2D drawing session も内部で開かれている状態**で返る
+/// (MS Docs: "The application does not need to call BeginDraw or EndDraw on the
+/// returned device context")。caller は `SetTransform` / `Clear` / `DrawText`
+/// 等の描画コマンドだけを発行し、最後に [`end_dcomp_draw`] を呼ぶこと。**D2D 側
+/// の `BeginDraw` / `EndDraw` は呼んではならない** — `D2DERR_WRONG_STATE`
+/// (0x88990001) → surface が "rendering in progress" のまま stuck → 次 tick で
+/// `DCOMPOSITION_ERROR_SURFACE_BEING_RENDERED` (0x88980801) のカスケード障害
+/// (PR #57 後の Phase I 続編実機検証で発覚)。`offset` は surface tile 内の左上
+/// 座標で、`SetTransform` の translation に反映すること。
 ///
 /// # Errors
 /// `IDCompositionSurface::BeginDraw` が失敗したとき。`operation_tag` が
@@ -336,13 +342,17 @@ pub(crate) fn end_dcomp_draw(
     })
 }
 
-/// 既存 surface を指定色で塗りつぶす。`BeginDraw` → `Clear` → `EndDraw` の三段。
+/// 既存 surface を指定色で塗りつぶす。DComp surface の `BeginDraw` (= D2D drawing
+/// session も内部で開く) → `Clear` → DComp surface の `EndDraw` の三段。D2D
+/// context 側の `BeginDraw` / `EndDraw` は呼ばない (MS Docs 仕様、詳細は
+/// [`begin_dcomp_draw_d2d`] の doc コメント参照)。
 pub fn fill_surface(surface: &IDCompositionSurface, color: Rgba) -> Result<()> {
     let (dc, offset) = begin_dcomp_draw_d2d(surface, "IDCompositionSurface::BeginDraw")?;
     let f = color_to_premultiplied_f(color);
-    // SAFETY: dc / surface は valid、BeginDraw 後の D2D 描画シーケンスを End で閉じる。
+    // SAFETY: dc / surface は valid。DComp::BeginDraw が D2D drawing session を
+    // 既に開いているので、context に描画コマンドだけを発行する。surface.EndDraw
+    // で D2D session も内部的にクローズされる。
     unsafe {
-        dc.BeginDraw();
         // surface tile の offset を transform に反映する。
         dc.SetTransform(&Matrix3x2 {
             M11: 1.0,
@@ -353,10 +363,6 @@ pub fn fill_surface(surface: &IDCompositionSurface, color: Rgba) -> Result<()> {
             M32: offset.y as f32,
         });
         dc.Clear(Some(&f));
-        dc.EndDraw(None, None).map_err(|e| PlatformError::BadHr {
-            operation: "ID2D1DeviceContext::EndDraw",
-            hr: e.code().0,
-        })?;
     }
     end_dcomp_draw(surface, "IDCompositionSurface::EndDraw")
 }

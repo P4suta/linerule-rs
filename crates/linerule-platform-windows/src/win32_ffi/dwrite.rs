@@ -98,11 +98,12 @@ pub struct HudDrawRow<'a> {
 
 /// `IDCompositionSurface` の中身を「背景クリア + 複数行テキスト描画」で更新する。
 ///
-/// `BeginDraw (DComp) → BeginDraw (D2D) → Clear → DrawText× → EndDraw (D2D) →
-/// EndDraw (DComp)` の標準シーケンスを 1 関数に閉じ込め、呼び出し側を
-/// `#![forbid(unsafe_code)]` で書けるようにする。DComp surface tile を render
-/// target に bind する責務は `begin_dcomp_draw_d2d` 側で完結するため、本関数では
-/// 明示的な `SetTarget` 呼び出しを行わない (ADR-0006 + graphics::fill_surface 参照)。
+/// `BeginDraw (DComp) → Clear → DrawText× → EndDraw (DComp)` の標準シーケンスを
+/// 1 関数に閉じ込め、呼び出し側を `#![forbid(unsafe_code)]` で書けるようにする。
+/// DComp surface tile を render target に bind する責務と D2D drawing session の
+/// 開始/終了は `begin_dcomp_draw_d2d` / `end_dcomp_draw` 側で完結するため、本関数
+/// では D2D context の `BeginDraw` / `EndDraw` を呼ばない (ADR-0006 + MS Docs
+/// `IDCompositionSurface::BeginDraw`、graphics::fill_surface 参照)。
 ///
 /// `opacity` (0.0–1.0) は背景・各行色の alpha に乗算する形で適用される。dcomp の
 /// visual 単位 opacity を使わない理由は `graphics.rs` のコメント参照。
@@ -122,9 +123,10 @@ pub fn draw_hud_to_surface(
     )?;
 
     let bg = color_to_premultiplied_f(scale_alpha(background, opacity));
-    // SAFETY: dc / surface valid。Begin/End はペア。
+    // SAFETY: dc / surface valid。DComp::BeginDraw が D2D drawing session を既に
+    // 開いているので、context に描画コマンドだけを発行する。surface.EndDraw で
+    // D2D session も内部的にクローズされる。
     unsafe {
-        dc.BeginDraw();
         #[allow(
             clippy::cast_precision_loss,
             reason = "DComp offset は通常 < 4096; f32 精度に余裕"
@@ -157,11 +159,6 @@ pub fn draw_hud_to_surface(
                 DWRITE_MEASURING_MODE_NATURAL,
             );
         }
-
-        dc.EndDraw(None, None).map_err(|e| PlatformError::BadHr {
-            operation: "ID2D1DeviceContext::EndDraw (HUD)",
-            hr: e.code().0,
-        })?;
     }
     crate::win32_ffi::graphics::end_dcomp_draw(surface, "IDCompositionSurface::EndDraw (HUD)")
 }
