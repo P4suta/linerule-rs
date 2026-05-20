@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/P4suta/linerule-rs/compare/v0.2.1...v0.2.2) (2026-05-20)
+
+
+### Bug Fixes
+
+* **docs:** bump actions/deploy-pages v4.0.5 → v5.0.0 ([#25](https://github.com/P4suta/linerule-rs/issues/25)) ([4888407](https://github.com/P4suta/linerule-rs/commit/4888407772862786b1221af027226d786bd2d5ed))
+
 ## [0.2.1](https://github.com/P4suta/linerule-rs/compare/v0.2.0...v0.2.1) (2026-05-20)
 
 
