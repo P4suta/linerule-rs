@@ -48,3 +48,78 @@ impl Cli {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Cli {
+        let mut tokens = vec!["linerule"];
+        tokens.extend_from_slice(args);
+        Cli::try_parse_from(tokens).expect("clap should parse the fixture")
+    }
+
+    #[test]
+    fn parses_version_subcommand() {
+        assert!(matches!(
+            parse(&["version"]).command,
+            Some(Command::Version)
+        ));
+    }
+
+    #[test]
+    fn parses_diagnostics_with_dry_run() {
+        match parse(&["diagnostics", "--dry-run"]).command {
+            Some(Command::Diagnostics { dry_run }) => assert!(dry_run),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_diagnostics_without_dry_run_defaults_false() {
+        match parse(&["diagnostics"]).command {
+            Some(Command::Diagnostics { dry_run }) => assert!(!dry_run),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_run_subcommand() {
+        assert!(matches!(parse(&["run"]).command, Some(Command::Run)));
+    }
+
+    #[test]
+    fn no_args_yields_none_command() {
+        assert!(parse(&[]).command.is_none());
+    }
+
+    #[test]
+    fn cli_flag_is_global_and_independent_of_subcommand() {
+        let cli = parse(&["--cli", "version"]);
+        assert!(cli.cli);
+        assert!(matches!(cli.command, Some(Command::Version)));
+    }
+
+    #[test]
+    fn needs_console_for_version() {
+        assert!(parse(&["version"]).needs_console());
+    }
+
+    #[test]
+    fn needs_console_for_diagnostics() {
+        assert!(parse(&["diagnostics"]).needs_console());
+        assert!(parse(&["diagnostics", "--dry-run"]).needs_console());
+    }
+
+    #[test]
+    fn needs_console_for_run_only_with_cli_flag() {
+        assert!(!parse(&["run"]).needs_console());
+        assert!(parse(&["--cli", "run"]).needs_console());
+    }
+
+    #[test]
+    fn needs_console_for_no_args_only_with_cli_flag() {
+        assert!(!parse(&[]).needs_console());
+        assert!(parse(&["--cli"]).needs_console());
+    }
+}
