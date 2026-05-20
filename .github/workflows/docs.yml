@@ -31,13 +31,11 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo doc
         env:
-          RUSTDOCFLAGS: -D warnings --enable-index-page -Z unstable-options
-        run: |
-          # `--enable-index-page` requires nightly; fall back to a manual
-          # redirect HTML when running on stable.
-          cargo doc --workspace --no-deps --exclude linerule-platform-windows \
-            || cargo +nightly doc --workspace --no-deps --exclude linerule-platform-windows \
-            || cargo doc --workspace --no-deps --exclude linerule-platform-windows
+          # Stable rustdoc only. `--enable-index-page` / `-Z unstable-options`
+          # need nightly; we write a manual redirect HTML in the next step
+          # so the gh-pages root lands on linerule_core's index.
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --exclude linerule-platform-windows
       - name: write redirect index.html (stable rustdoc has no auto-index)
         run: |
           cat > target/doc/index.html <<'HTML'
