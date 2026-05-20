@@ -52,13 +52,33 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
 pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
     match cli.command.unwrap_or(Command::Run) {
         Command::Run => run_overlay(),
-        Command::Diagnostics { dry_run } => diagnostics(dry_run),
+        Command::Diagnostics {
+            dry_run,
+            last_crash,
+            recent_events,
+            data_dir,
+        } => diagnostics(DiagnosticsArgs {
+            dry_run,
+            last_crash,
+            recent_events,
+            data_dir,
+        }),
         Command::Version => {
             println!("linerule {}", env!("CARGO_PKG_VERSION"));
             tracing::info!(version = env!("CARGO_PKG_VERSION"), "linerule version");
             Ok(())
         },
     }
+}
+
+/// `diagnostics` サブコマンドの flag をまとめた struct (`clap` の構造を本体
+/// 関数のシグネチャに直接持ち込まないため)。
+#[derive(Debug, Clone, Copy, Default)]
+struct DiagnosticsArgs {
+    dry_run: bool,
+    last_crash: bool,
+    recent_events: Option<usize>,
+    data_dir: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -104,8 +124,27 @@ fn run_overlay() -> Result<()> {
     anyhow::bail!("`linerule run` is Windows-only");
 }
 
-fn diagnostics(_dry_run: bool) -> Result<()> {
+fn diagnostics(args: DiagnosticsArgs) -> Result<()> {
     let data_dir = logging::data_dir()?;
+
+    // `--data-dir`: path だけ stdout に書いて exit。script pipe 用 ergonomic。
+    if args.data_dir {
+        println!("{}", data_dir.display());
+        tracing::info!(data_dir = %data_dir.display(), "linerule --data-dir");
+        return Ok(());
+    }
+
+    // `--last-crash`: 最新の crash-*.json を pretty-print。
+    if args.last_crash {
+        return print_last_crash(&data_dir);
+    }
+
+    // `--recent-events N`: events.jsonl.<today> の末尾 N 行を JSON pretty-print。
+    if let Some(n) = args.recent_events {
+        return print_recent_events(&data_dir, n);
+    }
+
+    // Default (or `--dry-run`): data dir 列挙のみ。
     println!("linerule data dir: {}", data_dir.display());
     tracing::info!(data_dir = %data_dir.display(), "linerule data dir");
     if data_dir.exists() {
@@ -116,6 +155,70 @@ fn diagnostics(_dry_run: bool) -> Result<()> {
     } else {
         println!("  (directory does not exist yet — no events / crashes)");
     }
+    let _ = args.dry_run; // 既存挙動の明示 (file 列挙以外の I/O はもともと無い)
+    Ok(())
+}
+
+/// `%APPDATA%\linerule\crash-*.json` を mtime で並べ最新を pretty-print する。
+fn print_last_crash(data_dir: &std::path::Path) -> Result<()> {
+    if !data_dir.exists() {
+        println!("(no crash dumps — data dir does not exist)");
+        return Ok(());
+    }
+    let latest = std::fs::read_dir(data_dir)?
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("crash-"))
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
+        .filter_map(|e| {
+            let modified = e.metadata().ok()?.modified().ok()?;
+            Some((modified, e.path()))
+        })
+        .max_by_key(|(modified, _)| *modified);
+    let Some((_, path)) = latest else {
+        println!("(no crash dumps in {})", data_dir.display());
+        return Ok(());
+    };
+    println!("# {}", path.display());
+    let raw = std::fs::read_to_string(&path)?;
+    let value: serde_json::Value = serde_json::from_str(&raw)?;
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    tracing::info!(crash_path = %path.display(), "diagnostics --last-crash");
+    Ok(())
+}
+
+/// `events.jsonl.<today>` の末尾 N 行を 1 行ずつ pretty-print する。jq -C 風の
+/// 表示を Rust 内で完結させる。
+fn print_recent_events(data_dir: &std::path::Path, n: usize) -> Result<()> {
+    use std::io::{BufRead, BufReader};
+    if !data_dir.exists() {
+        println!("(no events — data dir does not exist)");
+        return Ok(());
+    }
+    // 最新の `events.jsonl.YYYY-MM-DD` を mtime で選ぶ。
+    let latest_log = std::fs::read_dir(data_dir)?
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("events.jsonl"))
+        .filter_map(|e| {
+            let modified = e.metadata().ok()?.modified().ok()?;
+            Some((modified, e.path()))
+        })
+        .max_by_key(|(modified, _)| *modified);
+    let Some((_, path)) = latest_log else {
+        println!("(no events.jsonl in {})", data_dir.display());
+        return Ok(());
+    };
+    println!("# {} (tail {n})", path.display());
+    let file = std::fs::File::open(&path)?;
+    let reader = BufReader::new(file);
+    let lines: Vec<String> = reader.lines().map_while(std::result::Result::ok).collect();
+    let start = lines.len().saturating_sub(n);
+    for line in &lines[start..] {
+        match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(value) => println!("{}", serde_json::to_string_pretty(&value)?),
+            Err(_) => println!("{line}"),
+        }
+    }
+    tracing::info!(events_path = %path.display(), n, "diagnostics --recent-events");
     Ok(())
 }
 
