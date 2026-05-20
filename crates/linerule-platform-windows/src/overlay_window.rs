@@ -85,9 +85,12 @@ impl OverlayWindow {
         match create_result {
             Ok(hwnd) => {
                 ex_style_snapshot::capture(hwnd, "after CreateWindowExW");
-                // ShowWindow は呼ばない: layered + dcomp HWND は dcomp content が
-                // commit された瞬間に compositor によって表示される（WS_VISIBLE は
-                // 不要）。focus 奪取防止のためにも opt-out している。
+                // `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` は仕様上
+                // 「dcomp content の commit で表示される」が、実環境では
+                // ShowWindow を明示呼びしないと visible にならないケースが
+                // 確認されている (Phase I 実機検証)。SW_SHOWNOACTIVATE +
+                // WS_EX_NOACTIVATE の二重防壁で focus 奪取は防ぐ。
+                win32_ffi::show_window_noactivate(hwnd);
 
                 // SAFETY-equivalent: NonNull<_> は Box::into_raw の戻り値で常に non-null
                 let state = NonNull::new(state_ptr).expect("Box::into_raw is never null");

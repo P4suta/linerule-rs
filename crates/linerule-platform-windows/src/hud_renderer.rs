@@ -124,7 +124,11 @@ impl HudRenderer {
         // SetOpacity は呼ばない。理由は win32_ffi/graphics.rs のコメント参照)。
         graphics::visual_set_offset(&self.visual, frame.panel_left, frame.panel_top)?;
         self.last_opacity = frame.opacity;
-        Ok(())
+        // DComp visual tree の変更を compositor に push する。HudRenderer は
+        // CompositionRenderer とは独立に commit する (起動直後 mode=Off で
+        // DrawOverlay が発行されない期間に HUD が見えない事故を防ぐ、Phase I
+        // 仕上げで発覚)。
+        graphics::commit(&self.dcomp)
     }
 
     fn get_or_create_format(&mut self, font: HudFontKey, size: f32) -> Result<IDWriteTextFormat> {

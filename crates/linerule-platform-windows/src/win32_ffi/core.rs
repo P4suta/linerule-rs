@@ -22,8 +22,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA,
     GetMessageW, GetSystemMetrics, GetWindowLongPtrW, MSG, PostQuitMessage, RegisterClassExW,
-    SM_CXSCREEN, SM_CYSCREEN, SetWindowLongPtrW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_NCCREATE, WNDCLASSEXW, WNDPROC,
+    SM_CXSCREEN, SM_CYSCREEN, SW_SHOWNOACTIVATE, SetWindowLongPtrW, ShowWindow, TranslateMessage,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_NCCREATE, WNDCLASSEXW, WNDPROC,
 };
 use windows::core::PCWSTR;
 
@@ -124,6 +124,22 @@ pub fn destroy_window(hwnd: HWND) -> Result<()> {
         operation: "DestroyWindow",
         hr: e.code().0,
     })
+}
+
+/// `ShowWindow(hwnd, SW_SHOWNOACTIVATE)` の safe wrapper。
+///
+/// `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` の overlay HWND は理論上
+/// 「dcomp content が commit された瞬間に compositor によって表示される」が、
+/// 実環境では `ShowWindow` を明示的に呼ばないと visible にならないケースが
+/// 確認されている (Phase I 実機検証)。`SW_SHOWNOACTIVATE` を使うことで
+/// `WS_EX_NOACTIVATE` と合わせ focus 奪取を二重に防ぐ。
+///
+/// `ShowWindow` の戻り値 BOOL は「前回 visible だったか」を返すだけで失敗を
+/// 示さないため、戻り値は捨てる。
+pub fn show_window_noactivate(hwnd: HWND) {
+    // SAFETY: hwnd は OverlayWindow が所有する有効 HWND。SW_SHOWNOACTIVATE は
+    // WinAPI 定数。本 API は失敗 HRESULT を返さない。
+    let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
 }
 
 // ---- GWLP_USERDATA (instance state) ----------------------------------------
