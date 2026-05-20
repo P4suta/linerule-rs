@@ -31,6 +31,9 @@ struct CrashRecord<'a> {
     message: String,
     location: Option<CrashLocation<'a>>,
     backtrace: String,
+    /// panic 直前の tracing event tail (capacity 64)。`event_ring::snapshot_tail`
+    /// で取り出す。lock 取得失敗時は空 `Vec`。
+    recent_events: Vec<crate::event_ring::RingEntry>,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,6 +70,7 @@ fn write_crash_dump(info: &PanicHookInfo<'_>, run_id: Uuid) -> anyhow::Result<()
         message,
         location,
         backtrace,
+        recent_events: crate::event_ring::snapshot_tail(64),
     };
 
     let path = crash_path(run_id, unix_ms)?;
@@ -123,6 +127,7 @@ mod tests {
                 col: 7,
             }),
             backtrace: "<stack frames>".to_string(),
+            recent_events: Vec::new(),
         };
         let json = serde_json::to_string(&r).expect("serialize");
         let parsed: ReadCrashRecord = serde_json::from_str(&json).expect("deserialize");
@@ -144,12 +149,35 @@ mod tests {
             message: "no-location".to_string(),
             location: None,
             backtrace: String::new(),
+            recent_events: Vec::new(),
         };
         let json = serde_json::to_string(&r).expect("serialize");
         assert!(
             json.contains("\"location\":null"),
             "expected null location in JSON, got: {json}"
         );
+    }
+
+    #[test]
+    fn crash_record_serializes_recent_events_array() {
+        let r = CrashRecord {
+            run_id: Uuid::nil(),
+            unix_ms: 0,
+            message: "with-events".to_string(),
+            location: None,
+            backtrace: String::new(),
+            recent_events: vec![crate::event_ring::RingEntry {
+                unix_ms: 1_700_000_000_001,
+                level: "INFO".to_string(),
+                target: "test".to_string(),
+                message: "tick".to_string(),
+                fields: serde_json::json!({"frame": 7}),
+            }],
+        };
+        let json = serde_json::to_string(&r).expect("serialize");
+        assert!(json.contains("\"recent_events\""), "{json}");
+        assert!(json.contains("\"tick\""), "{json}");
+        assert!(json.contains("\"frame\":7"), "{json}");
     }
 
     #[test]

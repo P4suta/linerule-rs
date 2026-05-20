@@ -43,6 +43,9 @@ pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
 
     let registry = tracing_subscriber::registry()
         .with(env_filter)
+        // panic 直前の event を crash_dump JSON に同梱するための ring buffer。
+        // env_filter で殺された event は ring にも入らない (filter は全 Layer 共通)。
+        .with(crate::event_ring::RingBufferLayer)
         .with(file_layer);
 
     if human_readable_stderr {

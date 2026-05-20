@@ -32,6 +32,7 @@ mod cli;
 mod console;
 mod crash_dump;
 mod error;
+mod event_ring;
 mod logging;
 
 fn main() -> anyhow::Result<()> {
