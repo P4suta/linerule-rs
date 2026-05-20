@@ -253,4 +253,66 @@ mod tests {
         assert_eq!(entry.level, "WARN");
         assert_eq!(entry.target, "test_subsystem");
     }
+
+    /// Phase δ integration: ring buffer は `crash_dump` の `recent_events` field の
+    /// 供給源として動作する。tracing event → ring → [`snapshot_tail`] → JSON
+    /// serialize → JSON deserialize の round-trip で内容を維持することを確認。
+    ///
+    /// これは end-to-end signal で、crash dump の "recent events tail" が
+    /// 実際の event の内容を欠落させずに保存することを保証する (Phase H/I の
+    /// crash analytics で頼られている経路の test 化)。
+    #[test]
+    fn ring_snapshot_round_trips_through_serde_json() {
+        #[derive(serde::Deserialize)]
+        struct ReadEntry {
+            level: String,
+            target: String,
+            message: String,
+            fields: serde_json::Value,
+        }
+
+        clear_ring();
+        let subscriber = Registry::default().with(RingBufferLayer);
+        with_default(subscriber, || {
+            tracing::warn!(target: "crash_dump_integration", key = "value", "panic-adjacent");
+            tracing::info!(target: "crash_dump_integration", "after");
+        });
+
+        let tail = snapshot_tail(64);
+        assert_eq!(tail.len(), 2, "expected exactly 2 entries in the snapshot");
+
+        // Serialize ring entries (CrashRecord::recent_events と同じ形)。
+        let json = serde_json::to_string(&tail).expect("serialize ring snapshot");
+        assert!(json.contains("panic-adjacent"));
+        assert!(json.contains("crash_dump_integration"));
+
+        // Deserialize back via a structurally-equivalent shape. CrashRecord
+        // で使われる形と互換であることを示す: level / target / message / fields
+        // を読み戻せる。
+        let parsed: Vec<ReadEntry> = serde_json::from_str(&json).expect("round-trip");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].level, "WARN");
+        assert_eq!(parsed[0].target, "crash_dump_integration");
+        assert_eq!(parsed[0].message, "panic-adjacent");
+        assert_eq!(
+            parsed[0].fields.get("key").and_then(|v| v.as_str()),
+            Some("value")
+        );
+        assert_eq!(parsed[1].level, "INFO");
+        assert_eq!(parsed[1].message, "after");
+    }
+
+    /// [`snapshot_tail`] に `0` を渡したら空 `Vec` を返す。`crash_dump` で
+    /// `N=0` が誤って渡されても panic しないことを確認 (防御的)。
+    #[test]
+    fn snapshot_tail_zero_returns_empty_vec() {
+        clear_ring();
+        let subscriber = Registry::default().with(RingBufferLayer);
+        with_default(subscriber, || {
+            tracing::info!("a");
+            tracing::info!("b");
+        });
+        let tail = snapshot_tail(0);
+        assert!(tail.is_empty(), "snapshot_tail(0) should yield empty Vec");
+    }
 }
