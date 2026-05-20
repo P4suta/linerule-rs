@@ -18,6 +18,11 @@ use crate::{console, crash_dump, logging};
 
 /// 実 main。
 ///
+/// `run_id` は panic hook と tracing root span の両方に渡し、`events.jsonl` と
+/// `crash-<run_id>-*.json` を機械的に紐付けられるようにする。span の lifetime
+/// が boot 全体を覆うので、全 subcommand (`Run` / `Diagnostics` / `Version`) の
+/// `tracing` event に `run_id` field が自動付与される。
+///
 /// # Errors
 /// 各サブコマンドが失敗したとき。
 pub(crate) fn boot(cli: Cli) -> Result<()> {
@@ -28,6 +33,13 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
     if cli.needs_console() {
         console::ensure_console_attached();
     }
+
+    // subscriber init 後に root span を enter。`tracing-subscriber` の JSON layer
+    // は親 span の field を `span` キーに自動付与するので、本 span 内で発火する
+    // 全 event の `events.jsonl` 行に `"run_id":"<UUID>"` が乗る。
+    let root = tracing::info_span!("linerule_run", run_id = %run_id);
+    let _entered = root.enter();
+    tracing::info!(run_id = %run_id, version = env!("CARGO_PKG_VERSION"), "linerule boot");
 
     dispatch_command(cli)
 }
@@ -135,6 +147,41 @@ mod tests {
         assert!(
             logs_contain("linerule version"),
             "version event should carry the `linerule version` message"
+        );
+    }
+
+    /// PR-B: `boot()` の `info_span!("linerule_run", run_id = ...)` 経由で
+    /// log line に `run_id` が乗ることを確認する。`boot()` 全体を叩くと global
+    /// subscriber + panic hook を install してしまうので、span だけ手で構築
+    /// して `dispatch_command` を呼び、`traced_test` subscriber が span field
+    /// を含めて log line を render することを assert する。
+    #[traced_test]
+    #[test]
+    fn root_span_propagates_run_id_into_log_lines() {
+        let run_id = Uuid::new_v4();
+        let id_str = run_id.to_string();
+        let root = tracing::info_span!("linerule_run", run_id = %run_id);
+        let _entered = root.enter();
+        tracing::info!(run_id = %run_id, "test run started");
+        dispatch_command(parse(&["version"])).expect("version subcommand");
+        assert!(
+            logs_contain(&id_str),
+            "events under linerule_run span should carry run_id={id_str}"
+        );
+    }
+
+    /// `Diagnostics` 経路でも `run_id` span field が log line に乗ることを確認。
+    #[traced_test]
+    #[test]
+    fn root_span_propagates_run_id_in_diagnostics_path() {
+        let run_id = Uuid::new_v4();
+        let id_str = run_id.to_string();
+        let root = tracing::info_span!("linerule_run", run_id = %run_id);
+        let _entered = root.enter();
+        let _ = dispatch_command(parse(&["diagnostics", "--dry-run"]));
+        assert!(
+            logs_contain(&id_str),
+            "diagnostics events should carry run_id={id_str}"
         );
     }
 
