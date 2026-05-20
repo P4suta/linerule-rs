@@ -12,12 +12,12 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
-use crate::error::{Result, Win32Error};
+use crate::error::{PlatformError, Result};
 
 /// `DwmFlush()` の薄い safe wrapper。次の vsync まで block する。
 pub fn dwm_flush() -> Result<()> {
     // SAFETY: DwmFlush は引数なしの blocking call。
-    unsafe { DwmFlush() }.map_err(|e| Win32Error::BadHr {
+    unsafe { DwmFlush() }.map_err(|e| PlatformError::BadHr {
         operation: "DwmFlush",
         hr: e.code().0,
     })
@@ -29,8 +29,10 @@ pub fn dwm_flush() -> Result<()> {
 /// `PostMessageW` が FALSE を返したとき。
 pub fn post_message(hwnd: HWND, msg: u32) -> Result<()> {
     // SAFETY: hwnd valid (overlay window or hotkey host), msg は WM_APP_*
-    unsafe { PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(0)) }.map_err(|e| Win32Error::BadHr {
-        operation: "PostMessageW",
-        hr: e.code().0,
+    unsafe { PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(0)) }.map_err(|e| {
+        PlatformError::BadHr {
+            operation: "PostMessageW",
+            hr: e.code().0,
+        }
     })
 }

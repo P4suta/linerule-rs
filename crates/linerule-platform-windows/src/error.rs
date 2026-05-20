@@ -1,18 +1,21 @@
-//! Win32 / COM 呼び出し失敗を表すエラー型。
+//! `linerule-platform-windows` の集約エラー型。
 //!
-//! 本ファイルは `#![forbid(unsafe_code)]`。実 FFI 呼び出しは `win32_ffi.rs`
-//! 側で行い、ここではエラー値の構築・整形だけを担当する。
+//! Win32 / COM 呼び出しの失敗形に加え、[`linerule_core::ChordError`] を
+//! `#[from]` で取り込み、`?` 1 つでアプリ境界まで上げられる closed sum を作る。
+//! 実 FFI 呼び出しは `win32_ffi.rs` 側で行い、ここではエラー値の構築・整形だけ
+//! を担当する (本ファイルは `#![forbid(unsafe_code)]`)。
 
 #![forbid(unsafe_code)]
 
+use linerule_core::ChordError;
 use thiserror::Error;
 
-/// `linerule-platform-windows` 内で扱う Win32 / COM 失敗の closed sum。
+/// `linerule-platform-windows` で扱う失敗の closed sum。
 ///
-/// `windows::core::Error` は HRESULT / Last-Error / GetLastError をまとめて
-/// 表す型だが、表示・分類のためにここでは別 enum に薄くラップする。
+/// Win32 / COM の失敗形 4 種に加え、`linerule-core` から伝搬する
+/// [`ChordError`] を [`PlatformError::Chord`] として受け取る。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Error)]
-pub enum Win32Error {
+pub enum PlatformError {
     /// HWND を返す API が null を返した（CreateWindowExW など）。
     #[error("{operation}: HWND was null")]
     NullHandle {
@@ -47,10 +50,13 @@ pub enum Win32Error {
         /// 既知の `ERROR_*` symbol。
         symbol: &'static str,
     },
+    /// chord 文字列の解析に失敗した（`linerule-core::input::chord::parse`）。
+    #[error(transparent)]
+    Chord(#[from] ChordError),
 }
 
 /// `linerule-platform-windows` の Result alias。
-pub type Result<T, E = Win32Error> = core::result::Result<T, E>;
+pub type Result<T, E = PlatformError> = core::result::Result<T, E>;
 
 /// よく出る `ERROR_*` だけ static 文字列で symbolic name を返す。
 /// 不明な値は `"WIN32_ERROR(other)"` を返してログに残せるようにする。
@@ -93,7 +99,7 @@ mod tests {
 
     #[test]
     fn display_null_handle_includes_operation() {
-        let e = Win32Error::NullHandle {
+        let e = PlatformError::NullHandle {
             operation: "CreateWindowExW",
         };
         let s = e.to_string();
@@ -103,7 +109,7 @@ mod tests {
 
     #[test]
     fn display_bool_false_includes_code_and_symbol() {
-        let e = Win32Error::BoolFalse {
+        let e = PlatformError::BoolFalse {
             operation: "RegisterClassExW",
             code: 1410,
             symbol: "ERROR_CLASS_ALREADY_EXISTS",
@@ -116,7 +122,7 @@ mod tests {
 
     #[test]
     fn display_bad_hr_uses_hex_format() {
-        let e = Win32Error::BadHr {
+        let e = PlatformError::BadHr {
             operation: "D3D11CreateDevice",
             hr: i32::from_be_bytes([0x80, 0x00, 0x00, 0x05_u8.wrapping_neg()]),
         };
@@ -127,7 +133,7 @@ mod tests {
 
     #[test]
     fn display_last_error_includes_code_symbol_pair() {
-        let e = Win32Error::LastError {
+        let e = PlatformError::LastError {
             operation: "GetMonitorInfoW",
             code: 6,
             symbol: "ERROR_INVALID_HANDLE",
@@ -135,5 +141,13 @@ mod tests {
         let s = e.to_string();
         assert!(s.contains("GetMonitorInfoW"));
         assert!(s.contains("ERROR_INVALID_HANDLE"));
+    }
+
+    #[test]
+    fn chord_variant_transparently_wraps_core_error() {
+        let e: PlatformError = ChordError::Empty.into();
+        assert!(matches!(e, PlatformError::Chord(ChordError::Empty)));
+        // transparent display should match the inner ChordError's display.
+        assert_eq!(e.to_string(), ChordError::Empty.to_string());
     }
 }

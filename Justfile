@@ -130,14 +130,23 @@ b:
 test:
     @echo "==> cargo nextest run --workspace --exclude linerule-platform-windows"
     {{cargo}} nextest run --workspace --exclude linerule-platform-windows
+    @echo "==> cargo test --doc --workspace --exclude linerule-platform-windows"
+    {{cargo}} test --doc --workspace --exclude linerule-platform-windows
 
-# Inner-loop test alias.
+# Inner-loop test alias (doctest を省くので速い)。
 t:
     {{cargo}} nextest run --workspace --exclude linerule-platform-windows --no-fail-fast
+
+# Doctest 単独実行（`just test` にも含まれるが個別に叩きたいとき用）。
+doctest:
+    @echo "==> cargo test --doc --workspace --exclude linerule-platform-windows"
+    {{cargo}} test --doc --workspace --exclude linerule-platform-windows
 
 test-windows:
     @echo "==> cargo nextest run --workspace --run-ignored all"
     {{cargo}} nextest run --workspace --run-ignored all
+    @echo "==> cargo test --doc --workspace"
+    {{cargo}} test --doc --workspace
 
 # Coverage report (advisory threshold 80%).
 coverage:
@@ -229,9 +238,11 @@ ci:
 # ----- cross-compile checks -----
 
 # Compile-only check that Windows code still builds from Linux dev container.
+# `--all-targets` でテスト・examples・benches も対象にし、Windows native CI
+# (`cargo build --workspace --all-targets`) と検出範囲を揃える。
 cross-check:
-    @echo "==> cargo xwin check --workspace --target x86_64-pc-windows-msvc"
-    {{cargo}} xwin check --workspace --target x86_64-pc-windows-msvc
+    @echo "==> cargo xwin check --workspace --all-targets --target x86_64-pc-windows-msvc"
+    {{cargo}} xwin check --workspace --all-targets --target x86_64-pc-windows-msvc
 
 # Iteration-quality cross build (NOT shippable — see ADR-0001 deployment notes).
 publish-windows-cross:

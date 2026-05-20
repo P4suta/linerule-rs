@@ -28,7 +28,6 @@ pub mod composition_renderer;
 pub mod cursor_tracker;
 pub mod error;
 pub mod ex_style_snapshot;
-pub mod hotkey_host;
 pub mod messages;
 pub mod monitor_info;
 pub mod overlay_state;
@@ -40,7 +39,8 @@ pub mod window_class;
 pub mod windows_app;
 pub mod wndproc;
 
-pub use error::{Result, Win32Error};
-pub use overlay_state::OverlayWndState;
+pub use error::{PlatformError, Result};
+pub use overlay_state::{HotkeyConflict, HotkeyFailure, OverlayWndState};
 pub use overlay_window::OverlayWindow;
+pub use render_clock::RenderClock;
 pub use windows_app::run_message_pump;

@@ -1,29 +1,33 @@
 //! 透明 click-through な topmost オーバーレイ HWND のライフサイクル管理。
 //!
-//! Phase C 段階では HWND 作成 + click-through ex-styles + Drop での破棄まで。
-//! `IDCompositionDesktopDevice` / `IDCompositionTarget` の attach は Phase D。
+//! Phase D で `IDCompositionDesktopDevice` / `IDCompositionTarget` を attach し
+//! た renderer を `OverlayWndState` 側に install する。Phase E で同じ HWND を
+//! `RegisterHotKey` の target にして `WM_HOTKEY` を受信する（message-only HWND
+//! を作らない設計 — D1 in `docs/plans/...`）。
 
 #![forbid(unsafe_code)]
 
 use core::ptr::NonNull;
 
-use linerule_core::{Logical, ScreenRect};
+use linerule_core::input::chord;
+use linerule_core::input::win32_vk::chord_to_win32;
+use linerule_core::{HotkeyMap, HudConfig, Logical, OverlayAction, ScreenRect, TapStepConfig};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WINDOW_EX_STYLE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::w;
 
-use crate::error::Result;
-use crate::overlay_state::OverlayWndState;
+use crate::error::{PlatformError, Result};
+use crate::overlay_state::{HotkeyConflict, HotkeyFailure, OverlayWndState};
+use crate::win32_ffi::hotkey as hotkey_ffi;
 use crate::{ex_style_snapshot, win32_ffi, window_class};
 
 /// linerule overlay window の組み合わせ ex-style。
 ///
 /// - [`WS_EX_LAYERED`] + [`WS_EX_NOREDIRECTIONBITMAP`]: DWM が GPU 直結で
-///   per-pixel α 合成する layered window（Phase D で `IDCompositionTarget` を
-///   attach する前提）
+///   per-pixel α 合成する layered window
 /// - [`WS_EX_TRANSPARENT`]: DWM レベルでクリックを下層に通す（click-through）
 /// - [`WS_EX_NOACTIVATE`]: 通常 focus を奪わない
 /// - [`WS_EX_TOOLWINDOW`]: Alt+Tab / taskbar から除外
@@ -37,14 +41,13 @@ pub const OVERLAY_EX_STYLE: WINDOW_EX_STYLE = WINDOW_EX_STYLE(
         | WS_EX_TOPMOST.0,
 );
 
-/// 透明 click-through オーバーレイ HWND。Drop で `DestroyWindow` する RAII ハンドル。
+/// 透明 click-through オーバーレイ HWND。Drop で `UnregisterHotKey` 群と
+/// `DestroyWindow` を呼ぶ RAII ハンドル。
 pub struct OverlayWindow {
     hwnd: HWND,
     /// `Box::into_raw` 由来のポインタ。実 drop は WM_NCDESTROY 経由で
     /// `win32_ffi::take_userdata` が回収する。
     state: NonNull<OverlayWndState>,
-    /// Phase D で attach される dcomp + d2d renderer。Phase C 時点では None。
-    renderer: Option<crate::composition_renderer::CompositionRenderer>,
 }
 
 // SAFETY equivalent: HWND は thread-affinity を持つので明示的に Send/Sync を実装しない。
@@ -54,13 +57,14 @@ impl OverlayWindow {
     ///
     /// # Errors
     /// `RegisterClassExW` / `CreateWindowExW` / `GetModuleHandleW` が失敗したとき。
-    pub fn new(monitor: ScreenRect<Logical>) -> Result<Self> {
+    pub fn new(monitor: ScreenRect<Logical>, hud_config: HudConfig) -> Result<Self> {
         let _atom = window_class::ensure_registered()?;
 
-        let state_box = Box::new(OverlayWndState::new(tracing::info_span!(
-            "overlay_window",
-            class = "linerule-rs-overlay"
-        )));
+        let state_box = Box::new(OverlayWndState::new(
+            tracing::info_span!("overlay_window", class = "linerule-rs-overlay"),
+            monitor,
+            hud_config,
+        ));
         let state_ptr = Box::into_raw(state_box);
 
         let width = i32::try_from(monitor.width).unwrap_or(i32::MAX);
@@ -81,17 +85,13 @@ impl OverlayWindow {
         match create_result {
             Ok(hwnd) => {
                 ex_style_snapshot::capture(hwnd, "after CreateWindowExW");
-                // SW_SHOWNOACTIVATE: focus を奪わずに表示
-                show_no_activate(hwnd);
-                ex_style_snapshot::capture(hwnd, "after ShowWindow");
+                // ShowWindow は呼ばない: layered + dcomp HWND は dcomp content が
+                // commit された瞬間に compositor によって表示される（WS_VISIBLE は
+                // 不要）。focus 奪取防止のためにも opt-out している。
 
                 // SAFETY-equivalent: NonNull<_> は Box::into_raw の戻り値で常に non-null
                 let state = NonNull::new(state_ptr).expect("Box::into_raw is never null");
-                Ok(Self {
-                    hwnd,
-                    state,
-                    renderer: None,
-                })
+                Ok(Self { hwnd, state })
             },
             Err(e) => {
                 // CreateWindowExW 失敗時は WM_NCCREATE が呼ばれていない可能性が
@@ -104,7 +104,8 @@ impl OverlayWindow {
         }
     }
 
-    /// 内部 HWND を借りる。Phase D 以降の COM attach 用。
+    /// 内部 HWND を借りる。Phase F の `RenderClock::spawn` 等から target を取得
+    /// するときに使う。
     #[must_use]
     pub fn hwnd(&self) -> HWND {
         self.hwnd
@@ -116,31 +117,93 @@ impl OverlayWindow {
         win32_ffi::state_ref(self.state)
     }
 
-    /// Phase D: DirectComposition + Direct2D の visual tree を attach する。
+    /// Phase D: DirectComposition + Direct2D の visual tree を attach し、
+    /// `CompositionRenderer` を `OverlayWndState` 側に install する。
     ///
     /// # Errors
     /// D3D11 / DXGI / D2D / DComp のいずれかの初期化に失敗したとき。
     pub fn attach_dcomp(&mut self) -> Result<()> {
         let renderer = crate::composition_renderer::CompositionRenderer::new(self.hwnd)?;
         ex_style_snapshot::capture(self.hwnd, "after attach_dcomp");
-        self.renderer = Some(renderer);
+        self.state().install_renderer(renderer);
         Ok(())
     }
 
-    /// 与えられた `OverlayFrame` を visual tree に反映する。attach 前は no-op。
+    /// Phase E: `HotkeyMap` の chord を順に解析・`RegisterHotKey` し、成功した
+    /// 組を `OverlayWndState::record_hotkey` に積む。失敗した chord は warn +
+    /// `record_hotkey_conflict` で残し、続きを継続する。
     ///
     /// # Errors
-    /// composition_renderer の COM 呼び出しが失敗したとき。
-    pub fn apply_frame(&mut self, frame: &linerule_core::OverlayFrame) -> Result<()> {
-        if let Some(renderer) = self.renderer.as_mut() {
-            renderer.apply(frame)?;
+    /// 通常は失敗しない（個別の chord 失敗は内部で warn して conflict に積む）。
+    /// 将来 OS レベルで catastrophic に失敗する API を呼ぶようになった場合のみ
+    /// `Err` を返す可能性を残す。
+    pub fn register_hotkeys(&self, hotkeys: &HotkeyMap, tap_step: TapStepConfig) -> Result<()> {
+        let bumps = (tap_step.thickness, tap_step.opacity);
+        let pairs: [(i32, &'static str, OverlayAction); 7] = [
+            (1, hotkeys.cycle_mode, OverlayAction::CycleMode),
+            (2, hotkeys.toggle_visible, OverlayAction::ToggleVisible),
+            (3, hotkeys.thicker, OverlayAction::BumpThickness(bumps.0)),
+            (4, hotkeys.thinner, OverlayAction::BumpThickness(-bumps.0)),
+            (5, hotkeys.more_opaque, OverlayAction::BumpOpacity(bumps.1)),
+            (6, hotkeys.less_opaque, OverlayAction::BumpOpacity(-bumps.1)),
+            (7, hotkeys.quit, OverlayAction::Quit),
+        ];
+        for (id, spec, action) in pairs {
+            self.register_one(id, spec, action);
         }
         Ok(())
+    }
+
+    fn register_one(&self, id: i32, spec: &'static str, action: OverlayAction) {
+        let state = self.state();
+        let chord = match chord::parse(spec) {
+            Ok(c) => c,
+            Err(err) => {
+                tracing::warn!(spec, ?action, ?err, "chord parse failed; skipping hotkey");
+                state.record_hotkey_conflict(HotkeyConflict {
+                    spec,
+                    action,
+                    reason: HotkeyFailure::ChordParse(err),
+                });
+                return;
+            },
+        };
+        let (mods, vk) = chord_to_win32(chord);
+        match hotkey_ffi::register_hotkey(self.hwnd, id, mods, vk) {
+            Ok(()) => {
+                state.record_hotkey(id, action);
+                tracing::info!(spec, ?action, id, "hotkey registered");
+            },
+            Err(err) => {
+                let hresult = match err {
+                    PlatformError::BadHr { hr, .. } => hr,
+                    _ => 0,
+                };
+                tracing::warn!(
+                    spec,
+                    ?action,
+                    ?err,
+                    "RegisterHotKey failed; skipping hotkey"
+                );
+                state.record_hotkey_conflict(HotkeyConflict {
+                    spec,
+                    action,
+                    reason: HotkeyFailure::RegisterHotKey { hresult },
+                });
+            },
+        }
     }
 }
 
 impl Drop for OverlayWindow {
     fn drop(&mut self) {
+        // HWND が生きているうちに UnregisterHotKey を済ませる
+        let ids = self.state().registered_hotkey_ids();
+        for id in ids {
+            if let Err(e) = hotkey_ffi::unregister_hotkey(self.hwnd, id) {
+                tracing::warn!(id, error = %e, "UnregisterHotKey failed during OverlayWindow::drop");
+            }
+        }
         // `DestroyWindow` が WM_NCDESTROY を発火し、`crate::wndproc::dispatch`
         // が `win32_ffi::take_userdata` を呼んで Box<OverlayWndState> を回収する。
         if let Err(e) = win32_ffi::destroy_window(self.hwnd) {
@@ -148,28 +211,3 @@ impl Drop for OverlayWindow {
         }
     }
 }
-
-/// `ShowWindow(hwnd, SW_SHOWNOACTIVATE)` を呼ぶ（focus を奪わずに可視化）。
-fn show_no_activate(hwnd: HWND) {
-    // `ShowWindow` は windows crate で `unsafe fn` のため、win32_ffi に逃がす…
-    // のが本筋だが、本ファイルは `#![forbid(unsafe_code)]` なので
-    // wrap も win32_ffi 側で行う。ここでは何もしない。
-    let _ = (hwnd, SW_SHOWNOACTIVATE);
-    // 実際には ↓ で呼ぶ。win32_ffi に show_window が無い場合は no-op。
-    // 移植段階では win32_ffi::show_window を別途実装する。
-    win32_ffi_show_window_shim(hwnd);
-}
-
-// TODO Phase D: `win32_ffi::show_window` を追加し、ここを `win32_ffi::show_window(hwnd)` に。
-#[allow(
-    dead_code,
-    reason = "shim placeholder until win32_ffi::show_window is added"
-)]
-fn win32_ffi_show_window_shim(_hwnd: HWND) {
-    // 現状 ShowWindow を呼んでいない (visibility は WS_VISIBLE を style に
-    // 立てれば create 時に表示される)。Phase D で hide/show 切替が必要になったら
-    // win32_ffi 側に safe wrapper を生やす。
-}
-
-// ShowWindow の `SW_SHOWNOACTIVATE` 定数だけ参照させて警告を抑える。
-const _: i32 = SW_SHOWNOACTIVATE.0;

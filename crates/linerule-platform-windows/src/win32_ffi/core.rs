@@ -27,7 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
-use crate::error::{Result, Win32Error, decode_last_error};
+use crate::error::{PlatformError, Result, decode_last_error};
 use crate::overlay_state::OverlayWndState;
 
 // ---- module handle ---------------------------------------------------------
@@ -37,7 +37,7 @@ use crate::overlay_state::OverlayWndState;
 pub fn module_handle() -> Result<HINSTANCE> {
     // SAFETY: PCWSTR::null() で current process の HMODULE を取得する標準呼び出し。
     let h: HMODULE =
-        unsafe { GetModuleHandleW(PCWSTR::null()) }.map_err(|e| Win32Error::BadHr {
+        unsafe { GetModuleHandleW(PCWSTR::null()) }.map_err(|e| PlatformError::BadHr {
             operation: "GetModuleHandleW",
             hr: e.code().0,
         })?;
@@ -104,12 +104,12 @@ pub fn create_window(
             Some(create_param.cast()),
         )
     }
-    .map_err(|e| Win32Error::BadHr {
+    .map_err(|e| PlatformError::BadHr {
         operation: "CreateWindowExW",
         hr: e.code().0,
     })?;
     if hwnd.0.is_null() {
-        return Err(Win32Error::NullHandle {
+        return Err(PlatformError::NullHandle {
             operation: "CreateWindowExW",
         });
     }
@@ -120,7 +120,7 @@ pub fn create_window(
 /// （Drop から呼ばれるため）。
 pub fn destroy_window(hwnd: HWND) -> Result<()> {
     // SAFETY: hwnd は OverlayWindow が所有する有効 HWND。
-    unsafe { DestroyWindow(hwnd) }.map_err(|e| Win32Error::BadHr {
+    unsafe { DestroyWindow(hwnd) }.map_err(|e| PlatformError::BadHr {
         operation: "DestroyWindow",
         hr: e.code().0,
     })
@@ -220,7 +220,7 @@ pub fn cursor_pos() -> Result<linerule_core::Point<linerule_core::Logical>> {
     use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
     let mut pt = POINT::default();
     // SAFETY: pt は zero-init の out param
-    unsafe { GetCursorPos(&mut pt) }.map_err(|e| Win32Error::BadHr {
+    unsafe { GetCursorPos(&mut pt) }.map_err(|e| PlatformError::BadHr {
         operation: "GetCursorPos",
         hr: e.code().0,
     })?;
@@ -293,12 +293,12 @@ pub fn get_ex_style(hwnd: HWND) -> isize {
 
 // ---- last-error helpers ----------------------------------------------------
 
-/// `GetLastError()` を読み取り [`Win32Error::LastError`] を構築する。
-pub fn last_error(operation: &'static str) -> Win32Error {
+/// `GetLastError()` を読み取り [`PlatformError::LastError`] を構築する。
+pub fn last_error(operation: &'static str) -> PlatformError {
     use windows::Win32::Foundation::GetLastError;
     // SAFETY: GetLastError は副作用なく直近の thread-local エラーを返す。
     let code = unsafe { GetLastError() }.0;
-    Win32Error::LastError {
+    PlatformError::LastError {
         operation,
         code,
         symbol: decode_last_error(code),
