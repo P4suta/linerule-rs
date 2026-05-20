@@ -108,9 +108,23 @@ pub struct OverlayWndState {
 }
 
 impl OverlayWndState {
-    /// 新しい instance state を構築する。
+    /// 新しい instance state を構築する。デフォルトの `TickWorld::INITIAL`
+    /// (mode = Off) で初期化される。
     #[must_use]
     pub fn new(log_span: Span, monitor: ScreenRect<Logical>, hud_config: HudConfig) -> Self {
+        Self::new_with_initial_world(log_span, monitor, hud_config, TickWorld::INITIAL)
+    }
+
+    /// 任意の `TickWorld` で初期化する。`--initial-mode` 等で起動時 mode を
+    /// 上書きする経路で使う (CI smoke test が slit 描画パスを cover するため
+    /// `Mode::Horizontal` で起動する用途)。
+    #[must_use]
+    pub fn new_with_initial_world(
+        log_span: Span,
+        monitor: ScreenRect<Logical>,
+        hud_config: HudConfig,
+        initial_world: TickWorld,
+    ) -> Self {
         let (sender, receiver) = channel::<OverlayAction>();
         Self {
             log_span,
@@ -118,7 +132,7 @@ impl OverlayWndState {
             click_count: AtomicU64::new(0),
             hud_renderer: RefCell::new(None),
             renderer: RefCell::new(None),
-            tick_world: RefCell::new(TickWorld::INITIAL),
+            tick_world: RefCell::new(initial_world),
             hotkey_sender: sender,
             hotkey_inbox: receiver,
             id_to_action: RefCell::new(HashMap::new()),

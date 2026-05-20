@@ -50,8 +50,14 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
 /// # Errors
 /// 各サブコマンドが失敗したとき。
 pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
-    match cli.command.unwrap_or(Command::Run { duration_ms: None }) {
-        Command::Run { duration_ms } => run_overlay(duration_ms),
+    match cli.command.unwrap_or(Command::Run {
+        duration_ms: None,
+        initial_mode: None,
+    }) {
+        Command::Run {
+            duration_ms,
+            initial_mode,
+        } => run_overlay(duration_ms, initial_mode),
         Command::Diagnostics {
             dry_run,
             last_crash,
@@ -82,10 +88,14 @@ struct DiagnosticsArgs {
 }
 
 #[cfg(target_os = "windows")]
-fn run_overlay(duration_ms: Option<u64>) -> Result<()> {
+fn run_overlay(
+    duration_ms: Option<u64>,
+    initial_mode: Option<crate::cli::InitialMode>,
+) -> Result<()> {
     use std::time::Duration;
 
-    use linerule_core::UserConfig;
+    use linerule_core::input::tick::TickWorld;
+    use linerule_core::{State, UserConfig};
     use linerule_platform_windows::{
         AutoQuitTimer, OverlayWindow, RenderClock, monitor_info, run_message_pump, set_dpi_aware,
     };
@@ -102,11 +112,22 @@ fn run_overlay(duration_ms: Option<u64>) -> Result<()> {
     // overlay HWND がモニタ境界を跨いで slit を引けるようにする。
     let monitor = monitor_info::virtual_screen_bounds()?;
 
+    // initial_mode 指定時は TickWorld の初期 state を上書きする (CI smoke 用)。
+    let initial_world = initial_mode
+        .map(|m| {
+            let state = State {
+                mode: m.into(),
+                ..State::DEFAULT
+            };
+            TickWorld::with_initial_state(state)
+        })
+        .unwrap_or(TickWorld::INITIAL);
+
     // Drop order が重要: 各 thread (`_clock`, `_auto_quit`) は overlay HWND に
     // `PostMessageW` を投げる可能性があるので、overlay HWND が破棄される前に
     // thread を join する必要がある。Rust の逆順 Drop を活かすため
     // overlay → _clock → _auto_quit の順に宣言する。
-    let mut overlay = OverlayWindow::new(monitor, config.hud)?;
+    let mut overlay = OverlayWindow::new_with_initial_world(monitor, config.hud, initial_world)?;
     overlay.attach_dcomp()?;
     overlay.register_hotkeys(&config.hotkeys, config.input.tap_step)?;
     let _clock = RenderClock::spawn(overlay.hwnd())?;
@@ -119,6 +140,7 @@ fn run_overlay(duration_ms: Option<u64>) -> Result<()> {
         toggle_visible = config.hotkeys.toggle_visible,
         quit = config.hotkeys.quit,
         duration_ms = duration_ms.unwrap_or(0),
+        initial_mode = ?initial_mode,
         "overlay running; press Ctrl+Alt+R to cycle modes, Ctrl+Alt+Q to quit"
     );
     run_message_pump()?;
@@ -126,7 +148,10 @@ fn run_overlay(duration_ms: Option<u64>) -> Result<()> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn run_overlay(_duration_ms: Option<u64>) -> Result<()> {
+fn run_overlay(
+    _duration_ms: Option<u64>,
+    _initial_mode: Option<crate::cli::InitialMode>,
+) -> Result<()> {
     anyhow::bail!("`linerule run` is Windows-only");
 }
 

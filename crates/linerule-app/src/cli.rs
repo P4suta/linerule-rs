@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// linerule-rs CLI。
 #[derive(Debug, Parser)]
@@ -30,6 +30,12 @@ pub(crate) enum Command {
         /// 未指定なら hotkey で終了するまで動作。
         #[arg(long, value_name = "MILLIS")]
         duration_ms: Option<u64>,
+        /// 起動時の overlay mode を上書きする。デフォルト (未指定) は `Off`
+        /// (= `Ctrl+Alt+R` 押下で初めて slit が表示される本来の挙動)。CI
+        /// smoke test が起動直後から slit 描画パス (`CompositionRenderer`)
+        /// を exercise するために `horizontal` を渡す用途。
+        #[arg(long, value_enum, value_name = "MODE")]
+        initial_mode: Option<InitialMode>,
     },
     /// `%APPDATA%\linerule\` の events.jsonl と crash-*.json を pretty-print する。
     Diagnostics {
@@ -49,6 +55,30 @@ pub(crate) enum Command {
     },
     /// バージョン情報を出力する。
     Version,
+}
+
+/// `--initial-mode` flag に渡せる値。`linerule_core::state::Mode` に対応する。
+/// app 層の boundary 型として独立に定義 (linerule-core を clap 依存にしない)。
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+#[clap(rename_all = "lowercase")]
+pub(crate) enum InitialMode {
+    /// `Mode::Off` 相当 (default 挙動と同じ)。
+    Off,
+    /// `Mode::Horizontal` 相当。
+    Horizontal,
+    /// `Mode::Vertical` 相当。
+    Vertical,
+}
+
+#[cfg(target_os = "windows")]
+impl From<InitialMode> for linerule_core::Mode {
+    fn from(m: InitialMode) -> Self {
+        match m {
+            InitialMode::Off => Self::Off,
+            InitialMode::Horizontal => Self::Horizontal,
+            InitialMode::Vertical => Self::Vertical,
+        }
+    }
 }
 
 impl Cli {
@@ -155,16 +185,51 @@ mod tests {
     fn parses_run_subcommand() {
         assert!(matches!(
             parse(&["run"]).command,
-            Some(Command::Run { duration_ms: None })
+            Some(Command::Run {
+                duration_ms: None,
+                initial_mode: None
+            })
         ));
     }
 
     #[test]
     fn parses_run_with_duration_ms() {
         match parse(&["run", "--duration-ms", "2000"]).command {
-            Some(Command::Run { duration_ms }) => assert_eq!(duration_ms, Some(2000)),
+            Some(Command::Run { duration_ms, .. }) => assert_eq!(duration_ms, Some(2000)),
             other => panic!("expected Run with duration, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_run_with_initial_mode_horizontal() {
+        match parse(&["run", "--initial-mode", "horizontal"]).command {
+            Some(Command::Run { initial_mode, .. }) => {
+                assert_eq!(initial_mode, Some(InitialMode::Horizontal));
+            },
+            other => panic!("expected Run with initial_mode horizontal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_run_with_initial_mode_vertical_and_duration() {
+        match parse(&["run", "--initial-mode", "vertical", "--duration-ms", "1000"]).command {
+            Some(Command::Run {
+                duration_ms,
+                initial_mode,
+            }) => {
+                assert_eq!(duration_ms, Some(1000));
+                assert_eq!(initial_mode, Some(InitialMode::Vertical));
+            },
+            other => panic!("expected Run with both flags, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_initial_mode_value() {
+        let err = Cli::try_parse_from(["linerule", "run", "--initial-mode", "diagonal"])
+            .expect_err("unknown initial-mode value should fail");
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "expected non-empty error message");
     }
 
     #[test]
