@@ -52,13 +52,26 @@ pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
 #[cfg(target_os = "windows")]
 fn run_overlay() -> Result<()> {
     use linerule_core::UserConfig;
-    use linerule_platform_windows::{OverlayWindow, monitor_info, run_message_pump};
+    use linerule_platform_windows::{OverlayWindow, RenderClock, monitor_info, run_message_pump};
 
-    let _config = UserConfig::DEFAULT;
+    let config = UserConfig::DEFAULT;
     let monitor = monitor_info::primary_bounds()?;
-    let mut overlay = OverlayWindow::new(monitor)?;
+
+    // Drop order が重要: pacer (`_clock`) は overlay HWND に `PostMessageW` を
+    // 投げ続けるので、overlay HWND が破棄される前に pacer を止める必要がある。
+    // Rust の逆順 Drop（後に宣言した変数が先に Drop される）を活かすため、
+    // overlay → _clock の順に変数を宣言する。
+    let mut overlay = OverlayWindow::new(monitor, config.hud)?;
     overlay.attach_dcomp()?;
-    // TODO Phase E/F: HotkeyHost + RenderClock + TickPipeline を結線
+    overlay.register_hotkeys(&config.hotkeys, config.input.tap_step)?;
+    let _clock = RenderClock::spawn(overlay.hwnd())?;
+
+    tracing::info!(
+        cycle_mode = config.hotkeys.cycle_mode,
+        toggle_visible = config.hotkeys.toggle_visible,
+        quit = config.hotkeys.quit,
+        "overlay running; press Ctrl+Alt+R to cycle modes, Ctrl+Alt+Q to quit"
+    );
     run_message_pump()?;
     Ok(())
 }

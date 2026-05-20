@@ -10,12 +10,17 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use windows::Win32::Foundation::HWND;
 
 use crate::error::Result;
 use crate::messages::WM_APP_TICK;
 use crate::win32_ffi::pacer;
+
+/// `DwmFlush` 失敗時の backoff 間隔。60Hz 1 フレーム相当（~16ms）。hot-loop
+/// 化を防ぐと同時に、UI thread の `WM_APP_TICK` 流量が極端に変動するのを抑える。
+const PACER_BACKOFF: Duration = Duration::from_millis(16);
 
 /// 別 thread で `DwmFlush` ベースの tick を生成し、指定 HWND に
 /// `WM_APP_TICK` を送り続けるペーサ。`Drop` で停止する。
@@ -42,7 +47,7 @@ impl RenderClock {
                 let target = HWND(hwnd_isize as *mut _);
                 pacer_loop(stop_clone, target);
             })
-            .map_err(|_| crate::error::Win32Error::LastError {
+            .map_err(|_| crate::error::PlatformError::LastError {
                 operation: "thread::Builder::spawn",
                 code: 0,
                 symbol: "thread spawn failed",
@@ -69,7 +74,10 @@ fn pacer_loop(stop: Arc<AtomicBool>, target: HWND) {
     tracing::info!(target: "RenderClock", "pacer thread started");
     while !stop.load(Ordering::Acquire) {
         if let Err(e) = pacer::dwm_flush() {
-            tracing::warn!(error = %e, "DwmFlush failed");
+            tracing::warn!(error = %e, "DwmFlush failed; backing off");
+            // hot-loop 回避: DwmFlush が即座に失敗を返す状況（compositor 停止
+            // 中など）で CPU を食い潰さないよう ~16ms 待つ。stop flag も観測する。
+            thread::sleep(PACER_BACKOFF);
             continue;
         }
         if stop.load(Ordering::Acquire) {

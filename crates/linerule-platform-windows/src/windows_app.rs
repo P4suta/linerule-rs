@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::error::{Result, Win32Error};
+use crate::error::{PlatformError, Result};
 use crate::win32_ffi;
 
 /// `GetMessageW` ベースの同期メッセージポンプを実行する。
@@ -20,7 +20,7 @@ pub fn run_message_pump() -> Result<()> {
             Some(true) => continue,
             Some(false) => break,
             None => {
-                return Err(Win32Error::LastError {
+                return Err(PlatformError::LastError {
                     operation: "GetMessageW",
                     code: 0,
                     symbol: "GetMessageW returned -1",

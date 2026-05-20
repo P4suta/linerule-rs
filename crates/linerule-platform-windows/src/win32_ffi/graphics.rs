@@ -41,7 +41,7 @@ use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::core::{IUnknown, Interface};
 use windows_numerics::Matrix3x2;
 
-use crate::error::{Result, Win32Error};
+use crate::error::{PlatformError, Result};
 
 /// D3D11 + DXGI + D2D + DComp の生 COM ハンドル束。 `CompositionRenderer` から
 /// 所有される。 各フィールドは `windows` crate の COM type で、`Drop` で
@@ -95,16 +95,16 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
             None,
         )
     }
-    .map_err(|e| Win32Error::BadHr {
+    .map_err(|e| PlatformError::BadHr {
         operation: "D3D11CreateDevice",
         hr: e.code().0,
     })?;
-    let d3d11 = d3d11.ok_or(Win32Error::NullHandle {
+    let d3d11 = d3d11.ok_or(PlatformError::NullHandle {
         operation: "D3D11CreateDevice (out param null)",
     })?;
 
     // 2. DXGI
-    let dxgi: IDXGIDevice = d3d11.cast().map_err(|e| Win32Error::BadHr {
+    let dxgi: IDXGIDevice = d3d11.cast().map_err(|e| PlatformError::BadHr {
         operation: "ID3D11Device::cast::<IDXGIDevice>",
         hr: e.code().0,
     })?;
@@ -118,7 +118,7 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
             Some(&factory_options),
         )
     }
-    .map_err(|e| Win32Error::BadHr {
+    .map_err(|e| PlatformError::BadHr {
         operation: "D2D1CreateFactory",
         hr: e.code().0,
     })?;
@@ -126,7 +126,7 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
     // 4. D2D device
     // SAFETY: dxgi は valid IDXGIDevice
     let d2d_device: ID2D1Device =
-        unsafe { d2d_factory.CreateDevice(&dxgi) }.map_err(|e| Win32Error::BadHr {
+        unsafe { d2d_factory.CreateDevice(&dxgi) }.map_err(|e| PlatformError::BadHr {
             operation: "ID2D1Factory1::CreateDevice",
             hr: e.code().0,
         })?;
@@ -135,7 +135,7 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
     // SAFETY: d2d_device は valid
     let d2d_context: ID2D1DeviceContext =
         unsafe { d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE) }.map_err(
-            |e| Win32Error::BadHr {
+            |e| PlatformError::BadHr {
                 operation: "ID2D1Device::CreateDeviceContext",
                 hr: e.code().0,
             },
@@ -144,11 +144,11 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
     // 6. DComp device → DesktopDevice
     // SAFETY: d2d_device を rendering device として渡す
     let dcomp_dev: IDCompositionDevice = unsafe { DCompositionCreateDevice2(&d2d_device) }
-        .map_err(|e| Win32Error::BadHr {
+        .map_err(|e| PlatformError::BadHr {
             operation: "DCompositionCreateDevice2",
             hr: e.code().0,
         })?;
-    let dcomp: IDCompositionDesktopDevice = dcomp_dev.cast().map_err(|e| Win32Error::BadHr {
+    let dcomp: IDCompositionDesktopDevice = dcomp_dev.cast().map_err(|e| PlatformError::BadHr {
         operation: "IDCompositionDevice::cast::<IDCompositionDesktopDevice>",
         hr: e.code().0,
     })?;
@@ -156,7 +156,7 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
     // 7. Target for HWND
     // SAFETY: hwnd は valid (OverlayWindow::new で取得済み)
     let target: IDCompositionTarget =
-        unsafe { dcomp.CreateTargetForHwnd(hwnd, true) }.map_err(|e| Win32Error::BadHr {
+        unsafe { dcomp.CreateTargetForHwnd(hwnd, true) }.map_err(|e| PlatformError::BadHr {
             operation: "IDCompositionDesktopDevice::CreateTargetForHwnd",
             hr: e.code().0,
         })?;
@@ -166,7 +166,7 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
 
     // 9. Link target → root
     // SAFETY: target / root は同じ device 由来で valid
-    unsafe { target.SetRoot(&root) }.map_err(|e| Win32Error::BadHr {
+    unsafe { target.SetRoot(&root) }.map_err(|e| PlatformError::BadHr {
         operation: "IDCompositionTarget::SetRoot",
         hr: e.code().0,
     })?;
@@ -186,7 +186,7 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
 /// 1 つのレイヤを表す `IDCompositionVisual2` を作る。
 pub fn create_visual(device: &IDCompositionDesktopDevice) -> Result<IDCompositionVisual2> {
     // SAFETY: device は valid
-    unsafe { device.CreateVisual() }.map_err(|e| Win32Error::BadHr {
+    unsafe { device.CreateVisual() }.map_err(|e| PlatformError::BadHr {
         operation: "IDCompositionDesktopDevice::CreateVisual",
         hr: e.code().0,
     })
@@ -196,11 +196,11 @@ pub fn create_visual(device: &IDCompositionDesktopDevice) -> Result<IDCompositio
 pub fn visual_set_offset(visual: &IDCompositionVisual2, x: f32, y: f32) -> Result<()> {
     // SAFETY: visual は valid、引数は plain f32
     unsafe {
-        visual.SetOffsetX2(x).map_err(|e| Win32Error::BadHr {
+        visual.SetOffsetX2(x).map_err(|e| PlatformError::BadHr {
             operation: "IDCompositionVisual2::SetOffsetX",
             hr: e.code().0,
         })?;
-        visual.SetOffsetY2(y).map_err(|e| Win32Error::BadHr {
+        visual.SetOffsetY2(y).map_err(|e| PlatformError::BadHr {
             operation: "IDCompositionVisual2::SetOffsetY",
             hr: e.code().0,
         })?;
@@ -220,12 +220,12 @@ pub fn visual_set_content(
         surface
             .map(|s| s.cast::<IUnknown>())
             .transpose()
-            .map_err(|e| Win32Error::BadHr {
+            .map_err(|e| PlatformError::BadHr {
                 operation: "IDCompositionSurface::cast<IUnknown>",
                 hr: e.code().0,
             })?;
     // SAFETY: visual は valid、content は None または有効な IUnknown 参照。
-    unsafe { visual.SetContent(content.as_ref()) }.map_err(|e| Win32Error::BadHr {
+    unsafe { visual.SetContent(content.as_ref()) }.map_err(|e| PlatformError::BadHr {
         operation: "IDCompositionVisual2::SetContent",
         hr: e.code().0,
     })
@@ -234,7 +234,7 @@ pub fn visual_set_content(
 /// レイヤを root のチャイルドリストに追加する。
 pub fn root_add_visual(root: &IDCompositionVisual2, child: &IDCompositionVisual2) -> Result<()> {
     // SAFETY: 両者とも同じ device 由来の有効ハンドル
-    unsafe { root.AddVisual(child, false, None) }.map_err(|e| Win32Error::BadHr {
+    unsafe { root.AddVisual(child, false, None) }.map_err(|e| PlatformError::BadHr {
         operation: "IDCompositionVisual2::AddVisual",
         hr: e.code().0,
     })
@@ -243,7 +243,7 @@ pub fn root_add_visual(root: &IDCompositionVisual2, child: &IDCompositionVisual2
 /// レイヤを root から削除する。
 pub fn root_remove_visual(root: &IDCompositionVisual2, child: &IDCompositionVisual2) -> Result<()> {
     // SAFETY: 両者とも有効ハンドル
-    unsafe { root.RemoveVisual(child) }.map_err(|e| Win32Error::BadHr {
+    unsafe { root.RemoveVisual(child) }.map_err(|e| PlatformError::BadHr {
         operation: "IDCompositionVisual2::RemoveVisual",
         hr: e.code().0,
     })
@@ -264,7 +264,7 @@ pub fn create_surface(
             DXGI_ALPHA_MODE_PREMULTIPLIED_BC,
         )
     }
-    .map_err(|e| Win32Error::BadHr {
+    .map_err(|e| PlatformError::BadHr {
         operation: "IDCompositionDesktopDevice::CreateSurface",
         hr: e.code().0,
     })
@@ -279,7 +279,7 @@ pub fn fill_surface(
     // SAFETY: surface / context は valid
     let mut offset = windows::Win32::Foundation::POINT::default();
     let bitmap: windows::Win32::Graphics::Direct2D::ID2D1Bitmap1 =
-        unsafe { surface.BeginDraw(None, &mut offset) }.map_err(|e| Win32Error::BadHr {
+        unsafe { surface.BeginDraw(None, &mut offset) }.map_err(|e| PlatformError::BadHr {
             operation: "IDCompositionSurface::BeginDraw",
             hr: e.code().0,
         })?;
@@ -303,13 +303,13 @@ pub fn fill_surface(
         // EndDraw returns Result<()> on errors
         d2d_context
             .EndDraw(None, None)
-            .map_err(|e| Win32Error::BadHr {
+            .map_err(|e| PlatformError::BadHr {
                 operation: "ID2D1DeviceContext::EndDraw",
                 hr: e.code().0,
             })?;
         // Detach target
         d2d_context.SetTarget(None);
-        surface.EndDraw().map_err(|e| Win32Error::BadHr {
+        surface.EndDraw().map_err(|e| PlatformError::BadHr {
             operation: "IDCompositionSurface::EndDraw",
             hr: e.code().0,
         })?;
@@ -320,7 +320,7 @@ pub fn fill_surface(
 /// `IDCompositionDesktopDevice::Commit` で visual tree をディスプレイに反映する。
 pub fn commit(device: &IDCompositionDesktopDevice) -> Result<()> {
     // SAFETY: device valid
-    unsafe { device.Commit() }.map_err(|e| Win32Error::BadHr {
+    unsafe { device.Commit() }.map_err(|e| PlatformError::BadHr {
         operation: "IDCompositionDesktopDevice::Commit",
         hr: e.code().0,
     })
