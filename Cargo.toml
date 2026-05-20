@@ -14,6 +14,10 @@ rust-version = "1.95"
 version = "0.2.2"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/P4suta/linerule-rs"
+homepage = "https://github.com/P4suta/linerule-rs"
+documentation = "https://p4suta.github.io/linerule-rs/"
+keywords = ["ruler", "reading", "accessibility", "windows", "overlay"]
+categories = ["gui"]
 authors = ["linerule contributors"]
 
 [workspace.dependencies]
