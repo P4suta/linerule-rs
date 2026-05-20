@@ -31,6 +31,7 @@ mod boot;
 mod cli;
 mod console;
 mod crash_dump;
+mod error;
 mod logging;
 
 fn main() -> anyhow::Result<()> {
