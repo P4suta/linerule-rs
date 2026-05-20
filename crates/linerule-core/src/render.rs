@@ -5,8 +5,10 @@
 //! [`Brush`], [`Geometry`], [`OverlayFrame`]). The [`frame`] function in
 //! this file is the only entry point.
 
+pub mod hud_frame;
 pub mod overlay_frame;
 
+pub use hud_frame::{HudFontKey, HudFrame, HudRow, hud_frame};
 pub use overlay_frame::{Brush, Geometry, Layer, OverlayFrame};
 
 use crate::{
