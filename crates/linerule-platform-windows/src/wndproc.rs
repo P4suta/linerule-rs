@@ -27,7 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::cursor_tracker;
 use crate::error::Result;
-use crate::messages::{HTTRANSPARENT, WM_APP_TICK};
+use crate::messages::{HTTRANSPARENT, WM_APP_QUIT_TIMER, WM_APP_TICK};
 use crate::overlay_state::OverlayWndState;
 use crate::win32_ffi;
 
@@ -90,6 +90,14 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> Option
                 tracing::error!(parent: state.span(), error = %e,
                     "tick processing failed");
             }
+            Some(LRESULT(0))
+        },
+        WM_APP_QUIT_TIMER => {
+            // CI smoke test 用の auto-quit message (boot.rs の duration thread
+            // から発行)。`Ctrl+Alt+Q` 経由の Quit と同等の挙動として
+            // `PostQuitMessage(0)` を呼ぶ。
+            tracing::info!(parent: state.span(), "auto-quit timer fired (--duration-ms)");
+            win32_ffi::post_quit(0);
             Some(LRESULT(0))
         },
         WM_PAINT => {

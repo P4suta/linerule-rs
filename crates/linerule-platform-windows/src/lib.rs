@@ -24,6 +24,7 @@
 #![cfg(windows)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod auto_quit;
 pub mod composition_renderer;
 pub mod cursor_tracker;
 pub mod error;
@@ -40,6 +41,7 @@ pub mod window_class;
 pub mod windows_app;
 pub mod wndproc;
 
+pub use auto_quit::AutoQuitTimer;
 pub use error::{PlatformError, Result};
 pub use overlay_state::{HotkeyConflict, HotkeyFailure, OverlayWndState};
 pub use overlay_window::OverlayWindow;

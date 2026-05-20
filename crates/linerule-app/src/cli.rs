@@ -24,7 +24,13 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand, Clone)]
 pub(crate) enum Command {
     /// オーバーレイを起動する（デフォルト）。
-    Run,
+    Run {
+        /// 指定 ms 経過後に自動終了する。CI smoke test 用。`Ctrl+Alt+Q` 等の
+        /// hotkey 経由 quit と同じく `PostQuitMessage` で graceful に終わる。
+        /// 未指定なら hotkey で終了するまで動作。
+        #[arg(long, value_name = "MILLIS")]
+        duration_ms: Option<u64>,
+    },
     /// `%APPDATA%\linerule\` の events.jsonl と crash-*.json を pretty-print する。
     Diagnostics {
         /// data dir 列挙のみで何も書き出さない（exit 0 確認用）。
@@ -147,7 +153,18 @@ mod tests {
 
     #[test]
     fn parses_run_subcommand() {
-        assert!(matches!(parse(&["run"]).command, Some(Command::Run)));
+        assert!(matches!(
+            parse(&["run"]).command,
+            Some(Command::Run { duration_ms: None })
+        ));
+    }
+
+    #[test]
+    fn parses_run_with_duration_ms() {
+        match parse(&["run", "--duration-ms", "2000"]).command {
+            Some(Command::Run { duration_ms }) => assert_eq!(duration_ms, Some(2000)),
+            other => panic!("expected Run with duration, got {other:?}"),
+        }
     }
 
     #[test]

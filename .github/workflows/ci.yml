@@ -129,6 +129,56 @@ jobs:
             Write-Host "::error::linerule.exe diagnostics --dry-run exited with $($proc.ExitCode)"
             exit 1
           }
+      # P0 / Phase α: GUI smoke. `linerule.exe run --duration-ms 3000` で
+      # 実 GUI overlay を 3 秒だけ起動 (`AutoQuitTimer` が `WM_APP_QUIT_TIMER`
+      # を送り `PostQuitMessage` で graceful 終了)。終了後 `events.jsonl` を
+      # scan して `tick processing failed` (PR #57/#59 系の症状) や
+      # `level":"ERROR"` (PR #60 系の symptom) が 0 件であることを確認する。
+      #
+      # これで Phase I で発覚した 4 つの bug (E_NOINTERFACE / D2D
+      # WRONG_STATE / commit 漏れ / ShowWindow 漏れ) はすべて動的に CI で
+      # ブロックされる。
+      - name: smoke - linerule.exe run --duration-ms 3000 (GUI headless)
+        shell: pwsh
+        run: |
+          # 過去 run の events.jsonl をクリーンアップ (誤検知防止)。
+          Remove-Item "target/release/events.jsonl*" -ErrorAction SilentlyContinue
+          Remove-Item "target/release/crash-*.json" -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath "target/release/linerule.exe" `
+            -ArgumentList "run", "--duration-ms", "3000" -Wait -PassThru -NoNewWindow
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "::error::linerule.exe run exited with $($proc.ExitCode)"
+            exit 1
+          }
+          $log = Get-ChildItem -Path "target/release" -Filter "events.jsonl.*" `
+            -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $log) {
+            Write-Host "::error::events.jsonl not produced by 3-second GUI smoke run"
+            exit 1
+          }
+          $errLines = Select-String -Path $log.FullName -Pattern '"level":"ERROR"' `
+            -ErrorAction SilentlyContinue
+          if ($errLines) {
+            Write-Host "::error::found $($errLines.Count) ERROR events during GUI smoke run"
+            Write-Host "--- last 50 lines of $($log.Name) ---"
+            Get-Content $log.FullName | Select-Object -Last 50
+            exit 1
+          }
+          $failLines = Select-String -Path $log.FullName `
+            -Pattern '"message":"tick processing failed"' -ErrorAction SilentlyContinue
+          if ($failLines) {
+            Write-Host "::error::found $($failLines.Count) tick processing failed events"
+            exit 1
+          }
+          Write-Host "GUI smoke OK: $($log.Name) clean, no ERROR / tick processing failed"
+          # crash dump があったら fail
+          $crashes = Get-ChildItem -Path "target/release" -Filter "crash-*.json" `
+            -ErrorAction SilentlyContinue
+          if ($crashes) {
+            Write-Host "::error::found $($crashes.Count) crash dump(s) after GUI smoke"
+            $crashes | ForEach-Object { Get-Content $_.FullName }
+            exit 1
+          }
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
