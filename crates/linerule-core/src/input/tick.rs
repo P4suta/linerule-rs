@@ -166,6 +166,23 @@ pub fn step(
         last_hud_refresh_at_ms: next_last_hud_refresh,
     };
 
+    // Debug build 限定の invariant check。`frame_seq` は `wrapping_add(1)` で常に
+    // +1 されるため u64::MAX 越えの wrap (294 兆 tick = 60Hz で 1500 万年) を
+    // 除いて単調増加する。誤って 0 や減少値を入れた場合 debug_assert! が即捕捉。
+    debug_assert!(
+        next_world.frame_seq == world.frame_seq.wrapping_add(1),
+        "frame_seq must be wrapping_add(1) of previous: prev={}, next={}",
+        world.frame_seq,
+        next_world.frame_seq
+    );
+    debug_assert!(
+        next_world.last_hud_refresh_at_ms >= world.last_hud_refresh_at_ms
+            || world.last_hud_refresh_at_ms == i64::MIN,
+        "last_hud_refresh_at_ms must be monotonic: prev={}, next={}",
+        world.last_hud_refresh_at_ms,
+        next_world.last_hud_refresh_at_ms
+    );
+
     (next_world, effects)
 }
 

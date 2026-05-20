@@ -27,9 +27,19 @@ pub(crate) enum Command {
     Run,
     /// `%APPDATA%\linerule\` の events.jsonl と crash-*.json を pretty-print する。
     Diagnostics {
-        /// 何も書き出さずに pretty-print のみ（exit 0 を確認）。
+        /// data dir 列挙のみで何も書き出さない（exit 0 確認用）。
         #[arg(long)]
         dry_run: bool,
+        /// 最新の `crash-*.json` を pretty-print する。
+        #[arg(long)]
+        last_crash: bool,
+        /// 直近 `N` 件の event を `events.jsonl.<today>` の末尾から表示する。
+        #[arg(long, value_name = "N")]
+        recent_events: Option<usize>,
+        /// data dir の絶対 path を 1 行だけ stdout に出す (script から `xargs ls`
+        /// などで使う用)。
+        #[arg(long)]
+        data_dir: bool,
     },
     /// バージョン情報を出力する。
     Version,
@@ -70,7 +80,7 @@ mod tests {
     #[test]
     fn parses_diagnostics_with_dry_run() {
         match parse(&["diagnostics", "--dry-run"]).command {
-            Some(Command::Diagnostics { dry_run }) => assert!(dry_run),
+            Some(Command::Diagnostics { dry_run, .. }) => assert!(dry_run),
             other => panic!("got {other:?}"),
         }
     }
@@ -78,7 +88,59 @@ mod tests {
     #[test]
     fn parses_diagnostics_without_dry_run_defaults_false() {
         match parse(&["diagnostics"]).command {
-            Some(Command::Diagnostics { dry_run }) => assert!(!dry_run),
+            Some(Command::Diagnostics { dry_run, .. }) => assert!(!dry_run),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_diagnostics_last_crash() {
+        match parse(&["diagnostics", "--last-crash"]).command {
+            Some(Command::Diagnostics { last_crash, .. }) => assert!(last_crash),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_diagnostics_recent_events_with_n() {
+        match parse(&["diagnostics", "--recent-events", "20"]).command {
+            Some(Command::Diagnostics { recent_events, .. }) => {
+                assert_eq!(recent_events, Some(20));
+            },
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_diagnostics_data_dir() {
+        match parse(&["diagnostics", "--data-dir"]).command {
+            Some(Command::Diagnostics { data_dir, .. }) => assert!(data_dir),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_diagnostics_all_flags_combined() {
+        match parse(&[
+            "diagnostics",
+            "--data-dir",
+            "--last-crash",
+            "--recent-events",
+            "5",
+        ])
+        .command
+        {
+            Some(Command::Diagnostics {
+                dry_run,
+                last_crash,
+                recent_events,
+                data_dir,
+            }) => {
+                assert!(!dry_run);
+                assert!(last_crash);
+                assert_eq!(recent_events, Some(5));
+                assert!(data_dir);
+            },
             other => panic!("got {other:?}"),
         }
     }

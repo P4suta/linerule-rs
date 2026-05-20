@@ -187,8 +187,16 @@ impl OverlayWndState {
     }
 
     /// `register_hotkeys` から hotkey id と action の対応を仕込む。
+    ///
+    /// debug build では同 id を二重登録すると `debug_assert!` で即捕捉する。
+    /// release では `HashMap::insert` の上書き挙動に委ねる (last-write-wins)。
     pub fn record_hotkey(&self, id: i32, action: OverlayAction) {
-        self.id_to_action.borrow_mut().insert(id, action);
+        let prev = self.id_to_action.borrow_mut().insert(id, action);
+        debug_assert!(
+            prev.is_none(),
+            "duplicate hotkey id {id} registered (prev action: {prev:?}); \
+             this is a bug — each `RegisterHotKey` call must use a unique id"
+        );
     }
 
     /// 現在登録済みの hotkey id 一覧。Drop で `UnregisterHotKey` する際に使う。
