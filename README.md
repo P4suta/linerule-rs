@@ -1,6 +1,19 @@
 # linerule-rs
 
+[![CI](https://img.shields.io/github/actions/workflow/status/P4suta/linerule-rs/ci.yml?branch=main&label=CI)](https://github.com/P4suta/linerule-rs/actions/workflows/ci.yml?query=branch%3Amain)
+[![docs](https://img.shields.io/badge/docs-Pages-blue)](https://p4suta.github.io/linerule-rs/)
+[![Release](https://img.shields.io/github/v/release/P4suta/linerule-rs?include_prereleases)](https://github.com/P4suta/linerule-rs/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#ライセンス)
+
 Rust 製の Windows 用 reading ruler（読書補助オーバーレイ）。透明 click-through ウィンドウで画面上に水平／垂直のスリットを表示し、視線追跡を助ける。
+
+## Quick Links
+
+- 📚 [Documentation (rustdoc)](https://p4suta.github.io/linerule-rs/) — `linerule-core` / `linerule-app` の API リファレンス（`main` push ごとに自動更新）
+- 📦 [Latest Release (Windows EXE + PDB)](https://github.com/P4suta/linerule-rs/releases/latest) — 安定版バイナリ（release / dist-dev 両 profile を tag ごとに添付）
+- 🔬 [Latest main CI build](https://github.com/P4suta/linerule-rs/actions/workflows/ci.yml?query=branch%3Amain+is%3Asuccess) — bleeding-edge 開発版（90 日保持の per-run artifact、リリース前の動作確認に）
+- 🐛 [Issues](https://github.com/P4suta/linerule-rs/issues) — バグ報告 / 機能リクエスト
+- 📝 [CHANGELOG](./CHANGELOG.md) — release-please 自動生成
 
 実機での操作:
 
