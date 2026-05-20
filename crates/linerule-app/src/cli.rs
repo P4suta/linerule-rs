@@ -201,4 +201,98 @@ mod tests {
         assert!(!parse(&[]).needs_console());
         assert!(parse(&["--cli"]).needs_console());
     }
+
+    // ---- error path (Cli::try_parse_from が Err を返すケース) ----------------
+
+    /// 未知の subcommand は `UnknownArgument` 系の error で reject される。
+    #[test]
+    fn rejects_unknown_subcommand() {
+        let err = Cli::try_parse_from(["linerule", "bogus-subcommand"])
+            .expect_err("unknown subcommand should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bogus-subcommand") || msg.contains("unrecognized"),
+            "expected unknown-subcommand error, got: {msg}"
+        );
+    }
+
+    /// 未知の global flag (`--bogus`) は reject される。
+    #[test]
+    fn rejects_unknown_global_flag() {
+        let err = Cli::try_parse_from(["linerule", "--bogus-flag"])
+            .expect_err("unknown global flag should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bogus-flag") || msg.contains("unrecognized") || msg.contains("--bogus"),
+            "expected unknown-flag error, got: {msg}"
+        );
+    }
+
+    /// `--duration-ms` に整数として parse できない値を渡すと reject。
+    #[test]
+    fn rejects_non_numeric_duration_ms() {
+        let err = Cli::try_parse_from(["linerule", "run", "--duration-ms", "abc"])
+            .expect_err("non-numeric duration should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("duration-ms") || msg.contains("invalid value"),
+            "expected duration parse error, got: {msg}"
+        );
+    }
+
+    /// `--duration-ms` に負値を渡すと reject (型が u64 のため "-100" は parse 失敗)。
+    #[test]
+    fn rejects_negative_duration_ms() {
+        let err = Cli::try_parse_from(["linerule", "run", "--duration-ms", "-100"])
+            .expect_err("negative duration should fail (u64)");
+        let msg = err.to_string();
+        // clap が `-100` を別の flag と解釈して fail することもあるので寛容に check
+        assert!(!msg.is_empty(), "expected non-empty error message");
+    }
+
+    /// `--recent-events` に非整数を渡すと reject。
+    #[test]
+    fn rejects_non_numeric_recent_events() {
+        let err = Cli::try_parse_from(["linerule", "diagnostics", "--recent-events", "abc"])
+            .expect_err("non-numeric recent-events should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("recent-events") || msg.contains("invalid value"),
+            "expected recent-events parse error, got: {msg}"
+        );
+    }
+
+    /// subcommand 直後の余計な positional 引数は reject (subcommand は値を取らない)。
+    #[test]
+    fn rejects_extra_positional_after_subcommand() {
+        let err = Cli::try_parse_from(["linerule", "version", "extra-positional"])
+            .expect_err("extra positional should fail");
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "expected non-empty error message");
+    }
+
+    /// `--duration-ms` だけ subcommand なし は reject (Run subcommand の flag)。
+    #[test]
+    fn rejects_duration_ms_without_run_subcommand() {
+        // duration-ms は Run subcommand 側にしかない flag なので、
+        // top-level で渡すと unknown global flag として reject される。
+        let err = Cli::try_parse_from(["linerule", "--duration-ms", "1000"])
+            .expect_err("duration-ms outside Run subcommand should fail");
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "expected non-empty error message");
+    }
+
+    /// `version` は `--help` flag を持たない (`disable_help_subcommand` のため)。
+    /// ただし `--help` global flag は parse 可能 (clap 標準)。これは reject では
+    /// なく `DisplayHelp` で正常終了する系統 — error path とは別カテゴリ。
+    /// ここでは "help" subcommand が定義されていないことを確認する。
+    #[test]
+    fn rejects_help_as_subcommand() {
+        // `disable_help_subcommand = true` のため `help` という名前の
+        // subcommand は存在しない (`linerule help` は Run の bogus arg 相当)。
+        let err =
+            Cli::try_parse_from(["linerule", "help"]).expect_err("help subcommand is disabled");
+        let msg = err.to_string();
+        assert!(!msg.is_empty(), "expected non-empty error message");
+    }
 }

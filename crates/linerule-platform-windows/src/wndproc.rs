@@ -279,6 +279,8 @@ fn hud_panel_rect(state: &OverlayWndState) -> ScreenRect<Logical> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     #[test]
@@ -287,5 +289,41 @@ mod tests {
         assert_eq!(wparam_as_hotkey_id(WPARAM(7)), 7);
         // usize::MAX を渡しても i32::MAX に潰れて panic しない
         assert_eq!(wparam_as_hotkey_id(WPARAM(usize::MAX)), i32::MAX);
+    }
+
+    /// `wparam_as_hotkey_id` の境界条件: `i32::MAX` 以下の usize は完全保存、
+    /// それを超える値は `i32::MAX` に saturate。負値はそもそも usize なので
+    /// 起こらない。proptest で全範囲を網羅する。
+    #[test]
+    fn wparam_to_id_at_i32_max_boundary_is_preserved() {
+        assert_eq!(
+            wparam_as_hotkey_id(WPARAM(i32::MAX as usize)),
+            i32::MAX,
+            "i32::MAX boundary should pass through exactly"
+        );
+    }
+
+    proptest! {
+        /// 任意の usize 入力に対し、戻り値が `[0, i32::MAX]` の範囲に必ず収まる。
+        #[test]
+        fn wparam_to_id_stays_in_i32_positive_range(raw in any::<usize>()) {
+            let id = wparam_as_hotkey_id(WPARAM(raw));
+            prop_assert!(id >= 0);
+            prop_assert!(id <= i32::MAX);
+        }
+
+        /// `i32::MAX` 以下の値は完全保存される (lossless round-trip)。
+        #[test]
+        fn wparam_to_id_preserves_small_values(small in 0i32..=i32::MAX) {
+            let id = wparam_as_hotkey_id(WPARAM(small as usize));
+            prop_assert_eq!(id, small);
+        }
+
+        /// `i32::MAX` を超える値はすべて `i32::MAX` に saturate する。
+        #[test]
+        fn wparam_to_id_saturates_above_i32_max(huge in (i32::MAX as usize + 1)..=usize::MAX) {
+            let id = wparam_as_hotkey_id(WPARAM(huge));
+            prop_assert_eq!(id, i32::MAX);
+        }
     }
 }

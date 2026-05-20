@@ -234,4 +234,68 @@ mod tests {
         let e: PlatformError = ChordError::Empty.into();
         assert_eq!(e.class(), ErrorClass::Recoverable);
     }
+
+    /// 完全な class 対称性テスト: `RECOVERABLE_WIN32_OPS` に登録された全 operation
+    /// は `BoolFalse` でも `LastError` でも Recoverable に解釈される。
+    #[test]
+    fn recoverable_ops_recover_in_both_bool_false_and_last_error() {
+        for op in RECOVERABLE_WIN32_OPS {
+            let bool_false = PlatformError::BoolFalse {
+                operation: op,
+                code: 1409,
+                symbol: "ERROR_HOTKEY_ALREADY_REGISTERED",
+            };
+            assert_eq!(
+                bool_false.class(),
+                ErrorClass::Recoverable,
+                "BoolFalse({op})"
+            );
+
+            let last_error = PlatformError::LastError {
+                operation: op,
+                code: 1409,
+                symbol: "ERROR_HOTKEY_ALREADY_REGISTERED",
+            };
+            assert_eq!(
+                last_error.class(),
+                ErrorClass::Recoverable,
+                "LastError({op})"
+            );
+        }
+    }
+
+    /// case-sensitive: `"registerhotkey"` (小文字) は recoverable リストに
+    /// 一致しないので Fatal。Win32 API 名は PascalCase で文献にも書かれて
+    /// いるので、誤って小文字で渡されたケースは Fatal 側に倒して気付く設計。
+    #[test]
+    fn lowercase_register_hotkey_is_fatal_due_to_case_sensitivity() {
+        let e = PlatformError::BoolFalse {
+            operation: "registerhotkey",
+            code: 1409,
+            symbol: "ERROR_HOTKEY_ALREADY_REGISTERED",
+        };
+        assert_eq!(e.class(), ErrorClass::Fatal);
+    }
+
+    /// 空文字列 operation は recoverable リストに無いので Fatal。
+    /// 防御的: `&'static str` で空文字を渡す経路は通常ないが、念のため。
+    #[test]
+    fn empty_operation_is_fatal() {
+        let e = PlatformError::LastError {
+            operation: "",
+            code: 0,
+            symbol: "ERROR_SUCCESS",
+        };
+        assert_eq!(e.class(), ErrorClass::Fatal);
+    }
+
+    /// `NullHandle` は operation 名に関係なく必ず Fatal (HWND 経路で recover
+    /// する仕組みはないため)。
+    #[test]
+    fn null_handle_is_fatal_regardless_of_operation_name() {
+        for op in ["CreateWindowExW", "RegisterHotKey", "", "garbage"] {
+            let e = PlatformError::NullHandle { operation: op };
+            assert_eq!(e.class(), ErrorClass::Fatal, "NullHandle({op})");
+        }
+    }
 }
