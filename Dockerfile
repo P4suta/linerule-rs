@@ -150,13 +150,18 @@ RUN groupadd --gid ${USER_GID} dev \
     && chown -R dev:dev /home/dev/.cache
 
 USER dev
-ENV INSIDE_CONTAINER=1
+# clang backend pulls a single ~283 MB tarball from
+# trcrsired/windows-msvc-sysroot in ~25 s; the clang-cl/xwin backend would
+# stream 500 MB of CAB/MSI shards from microsoft.com and hits per-file
+# bottlenecking (xwin issue #165) for ~7 min. Set the env-var globally so
+# `cargo xwin ...` at runtime picks the same backend as the cached sysroot.
+ENV INSIDE_CONTAINER=1 \
+    XWIN_CROSS_COMPILER=clang
 
-# Pre-cache the Windows cross-compilation sysroot (MSVC CRT + Windows SDK,
-# ~500 MB) inside the image so the first `just cross-check` doesn't sit on
-# a silent 7-minute microsoft.com download. Runs as dev so the cache lands
-# under /home/dev/.cache/cargo-xwin — the path cargo-xwin uses at runtime.
-RUN cargo xwin cache xwin
+# Pre-cache the windows-msvc-sysroot inside the image so the first
+# `just cross-check` is instant. Runs as dev so the cache lands under
+# /home/dev/.cache/cargo-xwin — the path cargo-xwin uses at runtime.
+RUN cargo xwin cache windows-msvc-sysroot
 
 WORKDIR /workspace
 CMD ["bash"]

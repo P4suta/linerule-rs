@@ -20,6 +20,10 @@ services:
       INSIDE_CONTAINER: "1"
       CARGO_TARGET_DIR: /workspace/target
       LINERULE_LOG: "${LINERULE_LOG:-debug,wnd_proc=info,heartbeat=info,cursor_tracker=info}"
+      # cargo-xwin の clang backend (single-tarball sysroot) を強制し、
+      # 旧 clang-cl backend の遅い MSVC CRT 分割 DL を回避。Dockerfile で
+      # 焼き込んだ sysroot もこちらの path にある。
+      XWIN_CROSS_COMPILER: clang
     volumes:
       - .:/workspace:cached
       - cargo-registry:/usr/local/cargo/registry
