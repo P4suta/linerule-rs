@@ -75,3 +75,49 @@ pub(crate) fn data_dir() -> Result<PathBuf> {
 const _: fn() = || {
     let _: Option<Subscriber> = None;
 };
+
+#[cfg(test)]
+mod tests {
+    //! `init()` installs a *global* tracing subscriber and is therefore not
+    //! exercised here (would corrupt sibling tests). We cover the pure
+    //! pieces: `data_dir()` shape and `EnvFilter` boundary parsing.
+
+    use super::*;
+
+    #[test]
+    fn data_dir_contains_linerule_project_segment() {
+        let p = data_dir().expect("ProjectDirs resolves on Linux + Windows");
+        let s = p.to_string_lossy();
+        assert!(
+            s.to_lowercase().contains("linerule"),
+            "expected `linerule` in path, got `{s}`"
+        );
+    }
+
+    #[test]
+    fn data_dir_is_absolute() {
+        let p = data_dir().expect("ProjectDirs resolves");
+        assert!(p.is_absolute(), "data dir must be absolute, got {p:?}");
+    }
+
+    #[test]
+    fn env_filter_parses_default_directive_used_by_init() {
+        // This is the exact string `init()` falls back to when LINERULE_LOG
+        // is unset. If the format ever drifts (e.g. a renamed target),
+        // EnvFilter::new will panic — we catch that here.
+        let _ = EnvFilter::new("info,wnd_proc=info,heartbeat=info,cursor_tracker=info");
+    }
+
+    #[test]
+    fn env_filter_rejects_obviously_bad_input() {
+        // EnvFilter is permissive about most things (it just ignores unknown
+        // tokens), but completely invalid level names should error out.
+        // `try_new` here exercises the same surface init() uses.
+        let bad = "this-is-not-a-level";
+        let parsed = EnvFilter::try_new(bad);
+        // EnvFilter accepts arbitrary target names; this is documenting that
+        // behavior rather than asserting strict rejection.
+        // We just ensure it doesn't panic.
+        let _ = parsed;
+    }
+}

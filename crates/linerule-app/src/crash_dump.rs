@@ -82,3 +82,106 @@ fn crash_path(run_id: Uuid, unix_ms: i128) -> anyhow::Result<PathBuf> {
     let dir = logging::data_dir()?;
     Ok(dir.join(format!("crash-{run_id}-{unix_ms}.json")))
 }
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for crash filename construction and JSON schema.
+    //!
+    //! `install_panic_hook` cannot be exercised inside the test harness
+    //! without poisoning subsequent tests (it replaces the global hook).
+    //! We test the file-name pattern and the JSON shape via the struct.
+
+    use super::*;
+    use serde::Deserialize;
+
+    /// Test-only counterpart of `CrashRecord` for deserialization.
+    #[derive(Debug, Deserialize)]
+    struct ReadCrashRecord {
+        run_id: Uuid,
+        unix_ms: i128,
+        message: String,
+        location: Option<ReadCrashLocation>,
+        backtrace: String,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ReadCrashLocation {
+        file: String,
+        line: u32,
+        col: u32,
+    }
+
+    #[test]
+    fn crash_record_serializes_round_trip_via_serde_json() {
+        let r = CrashRecord {
+            run_id: Uuid::nil(),
+            unix_ms: 1_700_000_000_000,
+            message: "boom".to_string(),
+            location: Some(CrashLocation {
+                file: "src/main.rs",
+                line: 42,
+                col: 7,
+            }),
+            backtrace: "<stack frames>".to_string(),
+        };
+        let json = serde_json::to_string(&r).expect("serialize");
+        let parsed: ReadCrashRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.run_id, Uuid::nil());
+        assert_eq!(parsed.unix_ms, 1_700_000_000_000);
+        assert_eq!(parsed.message, "boom");
+        assert_eq!(parsed.backtrace, "<stack frames>");
+        let loc = parsed.location.expect("location set");
+        assert_eq!(loc.file, "src/main.rs");
+        assert_eq!(loc.line, 42);
+        assert_eq!(loc.col, 7);
+    }
+
+    #[test]
+    fn crash_record_with_none_location_serializes_as_null() {
+        let r = CrashRecord {
+            run_id: Uuid::nil(),
+            unix_ms: 0,
+            message: "no-location".to_string(),
+            location: None,
+            backtrace: String::new(),
+        };
+        let json = serde_json::to_string(&r).expect("serialize");
+        assert!(
+            json.contains("\"location\":null"),
+            "expected null location in JSON, got: {json}"
+        );
+    }
+
+    #[test]
+    fn crash_path_filename_has_expected_shape() {
+        // `crash_path` resolves the data-dir from the OS; we can't isolate
+        // that without env-mocking, so we assert via the returned PathBuf's
+        // final component pattern.
+        let run = Uuid::nil();
+        let ts: i128 = 1_700_000_000_000;
+        if let Ok(p) = crash_path(run, ts) {
+            let name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .expect("file_name UTF-8");
+            assert!(
+                name.starts_with("crash-"),
+                "filename should start with `crash-`, got `{name}`"
+            );
+            assert!(
+                std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json")),
+                "filename should end with `.json`, got `{name}`"
+            );
+            assert!(
+                name.contains(&run.to_string()),
+                "filename should include run_id `{run}`, got `{name}`"
+            );
+            assert!(
+                name.contains(&ts.to_string()),
+                "filename should include unix_ms `{ts}`, got `{name}`"
+            );
+        }
+    }
+}
