@@ -1,5 +1,5 @@
-//! Pure data mapping from [`ChordSpec`](crate::input::chord::ChordSpec) to the
-//! `(modifiers, vk)` integer pair that `RegisterHotKey` on Win32 expects.
+//! Pure data mapping from [`ChordSpec`] to the `(modifiers, vk)` integer
+//! pair that `RegisterHotKey` on Win32 expects.
 //!
 //! Lives in `linerule-core` (not in `linerule-platform-windows`) because:
 //! - it depends only on `linerule-core` ADTs (no `windows` crate);
