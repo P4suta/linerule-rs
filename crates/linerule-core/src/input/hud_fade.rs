@@ -132,4 +132,65 @@ mod tests {
         assert!(far > 0.9);
         assert!(inside.abs() < 1e-3);
     }
+
+    // ---- axis_gap --------------------------------------------------------
+
+    #[test]
+    fn axis_gap_overlapping_intervals_yields_zero() {
+        // [0, 10) overlaps [5, 15) → gap = 0
+        assert!((axis_gap(0.0, 10.0, 5.0, 15.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn axis_gap_touching_intervals_yields_zero() {
+        // [0, 10) touches [10, 20) → gap = 0 (half-open)
+        assert!((axis_gap(0.0, 10.0, 10.0, 20.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn axis_gap_a_before_b_yields_positive_gap() {
+        // [0, 5) then [10, 20) → gap = 10 - 5 = 5
+        assert!((axis_gap(0.0, 5.0, 10.0, 20.0) - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn axis_gap_b_before_a_is_symmetric() {
+        assert!((axis_gap(10.0, 20.0, 0.0, 5.0) - 5.0).abs() < 1e-6);
+    }
+
+    // ---- point_to_rect_distance ------------------------------------------
+
+    #[test]
+    fn point_inside_rect_yields_zero_distance() {
+        // Rect (0,0)-(100,100), point (50,50) → distance ~0
+        let d = point_to_rect_distance(50.0, 50.0, 0.0, 0.0, 100.0, 100.0);
+        assert!(d < 2.0, "expected ~0 (inside), got {d}");
+    }
+
+    #[test]
+    fn point_outside_rect_to_the_right() {
+        // Rect (0,0)-(100,100), point (200,50) → horizontal gap = 100
+        let d = point_to_rect_distance(200.0, 50.0, 0.0, 0.0, 100.0, 100.0);
+        assert!((d - 100.0).abs() < 2.0, "expected ~100, got {d}");
+    }
+
+    #[test]
+    fn point_outside_rect_diagonally() {
+        // Rect (0,0)-(100,100), point (200,200) → distance ~ sqrt(100^2 + 100^2) ≈ 141.42
+        let d = point_to_rect_distance(200.0, 200.0, 0.0, 0.0, 100.0, 100.0);
+        let expected = (100.0_f32).hypot(100.0);
+        assert!((d - expected).abs() < 2.0, "expected ~{expected}, got {d}");
+    }
+
+    // ---- slit_range ------------------------------------------------------
+
+    #[test]
+    fn slit_range_centered_around_zero_with_even_thickness() {
+        let t = crate::color::Thickness::try_new(28).unwrap();
+        let (lo, hi) = slit_range(0.0, t);
+        assert!((hi - lo - 28.0).abs() < 1e-6);
+        // half = 14, extra = 14 → symmetric
+        assert!((lo + 14.0).abs() < 1e-6);
+        assert!((hi - 14.0).abs() < 1e-6);
+    }
 }

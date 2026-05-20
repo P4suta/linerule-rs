@@ -500,4 +500,107 @@ mod tests {
             (Duration::from_millis(400), 1)
         );
     }
+
+    // ---- classify ---------------------------------------------------------
+
+    #[test]
+    fn classify_bump_actions_are_acceleration_repeat() {
+        assert_eq!(
+            classify(OverlayAction::BumpThickness(8)),
+            Classification::AccelRepeat
+        );
+        assert_eq!(
+            classify(OverlayAction::BumpOpacity(-4)),
+            Classification::AccelRepeat
+        );
+    }
+
+    #[test]
+    fn classify_cycle_mode_is_slow_repeat() {
+        assert_eq!(
+            classify(OverlayAction::CycleMode),
+            Classification::SlowRepeat
+        );
+    }
+
+    #[test]
+    fn classify_toggle_visible_awaits_release_and_undoes_with_self() {
+        match classify(OverlayAction::ToggleVisible) {
+            Classification::AwaitRelease { undo_on_long_press } => {
+                assert_eq!(undo_on_long_press, OverlayAction::ToggleVisible);
+            },
+            other => panic!("expected AwaitRelease, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_quit_is_one_shot() {
+        assert_eq!(classify(OverlayAction::Quit), Classification::OneShot);
+    }
+
+    // ---- with_magnitude --------------------------------------------------
+
+    #[test]
+    fn with_magnitude_scales_bump_thickness() {
+        assert_eq!(
+            with_magnitude(OverlayAction::BumpThickness(8), 4),
+            OverlayAction::BumpThickness(32)
+        );
+    }
+
+    #[test]
+    fn with_magnitude_scales_bump_opacity() {
+        assert_eq!(
+            with_magnitude(OverlayAction::BumpOpacity(-2), 5),
+            OverlayAction::BumpOpacity(-10)
+        );
+    }
+
+    #[test]
+    fn with_magnitude_saturates_on_overflow() {
+        assert_eq!(
+            with_magnitude(OverlayAction::BumpThickness(i32::MAX), 2),
+            OverlayAction::BumpThickness(i32::MAX)
+        );
+        assert_eq!(
+            with_magnitude(OverlayAction::BumpThickness(i32::MIN), 2),
+            OverlayAction::BumpThickness(i32::MIN)
+        );
+    }
+
+    #[test]
+    fn with_magnitude_leaves_non_bump_actions_unchanged() {
+        for a in [
+            OverlayAction::CycleMode,
+            OverlayAction::ToggleVisible,
+            OverlayAction::Quit,
+        ] {
+            assert_eq!(with_magnitude(a, 99), a);
+        }
+    }
+
+    // ---- duration_between ------------------------------------------------
+
+    #[test]
+    fn duration_between_positive_diff() {
+        assert_eq!(duration_between(100, 250), Duration::from_millis(150));
+    }
+
+    #[test]
+    fn duration_between_zero_diff() {
+        assert_eq!(duration_between(500, 500), Duration::ZERO);
+    }
+
+    #[test]
+    fn duration_between_negative_diff_saturates_to_zero() {
+        // now < started — clock went backwards; we still return a non-negative Duration.
+        assert_eq!(duration_between(500, 100), Duration::ZERO);
+    }
+
+    #[test]
+    fn duration_between_handles_i64_extremes_without_panic() {
+        // started_at = i64::MIN, now = i64::MAX: saturating_sub avoids overflow.
+        let d = duration_between(i64::MIN, i64::MAX);
+        assert!(d > Duration::ZERO, "expected positive duration, got {d:?}");
+    }
 }
