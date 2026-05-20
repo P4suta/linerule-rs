@@ -94,17 +94,36 @@ pre-push:
   #   - test          ↔ `build + test (linux)` の `cargo nextest run` と `cargo test --doc`
   #   - cross-check   ↔ `cross-check (linux → win-x64)` (`--all-targets` で examples/tests も含む)
   #   - rustdoc-check ↔ `.github/workflows/docs.yml` (`RUSTDOCFLAGS=-D warnings` の rustdoc build)
+  #
+  # 重要 (lefthook v2 の挙動):
+  # - lefthook v2 は pre-push で `git diff HEAD @{push}` で「push 対象 file」を
+  #   判定する。`files:` を override しても push file 判定は別経路で実行され、
+  #   `@{push}` が空 (新規 branch の初回 push で upstream 未設定 / no-op 再 push)
+  #   だと全 step が `(skip) no matching push files` で空振りする
+  # - 解決策: `run: ` 内で workspace 全体に対する検査を実行する command を直接
+  #   叩き、lefthook の file filter を bypass する。`only:` で push 自体が
+  #   発生していること (`@{push}` が解決可能であること) は条件として残し、
+  #   no-op re-push では skip させる
+  # - 関連 issue: lefthook v2 の @{push} resolution と new branch の組み合わせ
   piped: true
   commands:
     lint:
       tags: lint
       run: just lint
+      only:
+        - run: git rev-list --count HEAD ^@{upstream} 2>/dev/null || git rev-list --count HEAD
     test:
       tags: test
       run: just test
+      only:
+        - run: git rev-list --count HEAD ^@{upstream} 2>/dev/null || git rev-list --count HEAD
     cross-check:
       tags: build
       run: just cross-check
+      only:
+        - run: git rev-list --count HEAD ^@{upstream} 2>/dev/null || git rev-list --count HEAD
     rustdoc-check:
       tags: docs
       run: just rustdoc-check
+      only:
+        - run: git rev-list --count HEAD ^@{upstream} 2>/dev/null || git rev-list --count HEAD
