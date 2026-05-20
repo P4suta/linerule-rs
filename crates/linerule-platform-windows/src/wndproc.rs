@@ -173,7 +173,14 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
             TickEffect::RefreshHud(s) => {
                 let hz = crate::render_timing::refresh_rate_hz();
                 let notifications = build_notifications(state);
-                let frame = hud_frame(s, *state.hud_config(), state.monitor(), hz, &notifications);
+                let frame = hud_frame(
+                    s,
+                    *state.hud_config(),
+                    state.monitor(),
+                    hz,
+                    &notifications,
+                    state.hotkeys(),
+                );
                 apply_hud_frame(state, &frame)?;
             },
             TickEffect::SetHudOpacity { state: s, cursor } => {

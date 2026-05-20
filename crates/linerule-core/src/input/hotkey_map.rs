@@ -27,13 +27,20 @@ pub struct HotkeyMap {
 
 impl HotkeyMap {
     /// Default chord assignments (`Ctrl+Alt+...`).
+    ///
+    /// Bump / opacity adjustments are bound to arrow keys instead of OEM keys
+    /// (`]`/`[`/`=`/`-`) because the latter map to different virtual-key codes
+    /// depending on the active keyboard layout / IME on Windows — e.g. a JIS
+    /// keyboard with the English IME does *not* deliver `VK_OEM_4` for the
+    /// physical `[` key, so `RegisterHotKey(VK_OEM_4, ...)` silently misses.
+    /// Arrow keys (`VK_UP/DOWN/LEFT/RIGHT`) are layout-independent.
     pub const DEFAULT: Self = Self {
         cycle_mode: "Ctrl+Alt+R",
         toggle_visible: "Ctrl+Alt+H",
-        thicker: "Ctrl+Alt+]",
-        thinner: "Ctrl+Alt+[",
-        more_opaque: "Ctrl+Alt+=",
-        less_opaque: "Ctrl+Alt+-",
+        thicker: "Ctrl+Alt+Up",
+        thinner: "Ctrl+Alt+Down",
+        more_opaque: "Ctrl+Alt+Right",
+        less_opaque: "Ctrl+Alt+Left",
         quit: "Ctrl+Alt+Q",
     };
 }

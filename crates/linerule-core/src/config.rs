@@ -243,8 +243,15 @@ pub struct HudColors {
 
 impl HudColors {
     /// Default dark palette.
+    ///
+    /// `background.alpha` is `0xFF` (fully opaque): the HUD panel sits on top of
+    /// the overlay mask in `DComp` z-order, and a translucent background would let
+    /// that mask bleed through and darken the panel further. Per-frame fade is
+    /// still applied via [`HudConfig::base_opacity`] / `compute_opacity`, so the
+    /// HUD can still ease out near the cursor without baking translucency into
+    /// the palette itself.
     pub const DEFAULT: Self = Self {
-        background: Rgba::new(0x10, 0x12, 0x18, 0xD8),
+        background: Rgba::new(0x10, 0x12, 0x18, 0xFF),
         foreground: Rgba::new(0xE6, 0xE9, 0xEF, 0xFF),
         subtle: Rgba::new(0x9A, 0xA0, 0xAE, 0xFF),
         accent: Rgba::new(0x6C, 0x9F, 0xFF, 0xFF),

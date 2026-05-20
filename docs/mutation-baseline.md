@@ -7,6 +7,11 @@ gate policy live in [ADR-0004](adr/0004-coverage-policy.md).
 
 ## How to run
 
+`cargo-mutants` is a **local-only** check. There is no CI workflow that runs it
+automatically — the gate is "the developer touching `linerule-core` runs it
+before they push". The wall time is ~12 minutes per full run, which is too
+much per-PR cost when most PRs land 0 new mutations.
+
 Locally (inside the dev container):
 
 ```sh
@@ -15,9 +20,9 @@ cargo mutants --package linerule-core --baseline skip --no-times \
   --output target/mutants --test-tool nextest
 ```
 
-In CI: `.github/workflows/mutants.yml` runs the same command on every PR
-that touches `crates/linerule-core/**`, plus on manual `workflow_dispatch`.
-Reports are uploaded as the `mutants-report` artifact.
+After the run, inspect `target/mutants/mutants.out/missed.txt`. Any line there
+is a test gap to close (write a focused test) or, in rare equivalent-mutant
+cases, to annotate with `// mutants: skip` plus a justification comment.
 
 ## Reading the report
 
@@ -68,8 +73,9 @@ that triggered this work), each cluster was killed by a focused test:
   not silenced with `// mutants: skip`. Use that annotation only when
   the mutant is provably equivalent (e.g. asserting a `1`-token offset
   in dead branches) — explain why in a comment on the annotation.
-- The CI gate fails on any new missed mutant. Adjust the baseline in
-  this file (and in `--ratio` / `--baseline-*` flags, if introduced) in
-  the same PR that intentionally relaxes it.
+- The gate is **local, not CI-enforced**. When you change `linerule-core`,
+  rerun `cargo mutants` before pushing. Update this file (and any
+  `// mutants: skip` annotations) in the same PR that intentionally
+  changes the baseline.
 - Target kill ratio: **≥ 95%** of viable mutants. Current baseline is
   100%; allow a small buffer for unavoidable equivalences.
