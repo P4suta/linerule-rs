@@ -50,6 +50,17 @@ impl Opacity {
     }
 
     /// Add `delta` saturating against `[MIN, MAX]`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use linerule_core::Opacity;
+    /// let o = Opacity::try_new(0x80).unwrap();
+    /// assert_eq!(o.saturating_add(16).get(), 0x90);
+    /// // Overflows clamp to the legal range:
+    /// assert_eq!(Opacity::try_new(1).unwrap().saturating_add(-1024).get(), 1);
+    /// assert_eq!(Opacity::try_new(255).unwrap().saturating_add(1).get(), 255);
+    /// ```
     #[must_use]
     pub fn saturating_add(self, delta: i32) -> Self {
         let next = i32::from(self.0).saturating_add(delta).clamp(1, 255);

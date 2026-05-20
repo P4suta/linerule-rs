@@ -25,6 +25,28 @@ const INDICATOR_MARGIN: i32 = 12;
 /// `cursor` is the latest cursor position polled from the OS; `monitor` is
 /// the bounding rect of the screen the cursor is on. Both are in logical
 /// pixels.
+///
+/// # Examples
+///
+/// `Mode::Off` (the default) renders nothing:
+///
+/// ```
+/// use linerule_core::{frame, Point, ScreenRect, State};
+/// let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
+/// let out = frame(State::DEFAULT, Point::new(0, 0), monitor);
+/// assert!(out.is_empty());
+/// ```
+///
+/// In an active mode, the frame has the two dim halves plus the indicator
+/// (three layers total when the cursor is in the middle of the screen):
+///
+/// ```
+/// use linerule_core::{frame, Mode, Point, ScreenRect, State};
+/// let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
+/// let state = State { mode: Mode::Horizontal, ..State::DEFAULT };
+/// let out = frame(state, Point::new(960, 540), monitor);
+/// assert_eq!(out.layer_count(), 3);
+/// ```
 #[must_use]
 pub fn frame(state: State, cursor: Point<Logical>, monitor: ScreenRect<Logical>) -> OverlayFrame {
     if !state.visible {
