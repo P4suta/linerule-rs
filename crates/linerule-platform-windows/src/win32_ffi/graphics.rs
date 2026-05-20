@@ -16,7 +16,7 @@
 use linerule_core::Rgba;
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_POINT_2F, D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_OPTIONS, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET,
@@ -356,5 +356,4 @@ const _: D2D_RECT_F = D2D_RECT_F {
     right: 0.0,
     bottom: 0.0,
 };
-const _: D2D_POINT_2F = D2D_POINT_2F { x: 0.0, y: 0.0 };
 const _: D2D1_BITMAP_OPTIONS = D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
