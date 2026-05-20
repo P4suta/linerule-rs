@@ -193,4 +193,53 @@ mod tests {
         assert!((lo + 14.0).abs() < 1e-6);
         assert!((hi - 14.0).abs() < 1e-6);
     }
+
+    /// `point_to_rect_distance` の `x + 1.0` (L65) を spot で pin する。
+    /// 点を「1 px 幅の rect」扱いするための +1.0 が `-` / `*` に mutate される
+    /// ケース (Phase ε mutation baseline) を catch するため、結果が +1.0 に
+    /// 1px だけ依存する geometry を作る。
+    ///
+    /// rect (2, 0)-(100, 100), point (0, 50):
+    /// - 元 (`x + 1.0`):   dx = `axis_gap(0, 1, 2, 100)` = 1.0
+    /// - mutant `+ → -`:   dx = `axis_gap(0, -1, 2, 100)` = 3.0
+    /// - mutant `+ → *`:   dx = `axis_gap(0, 0, 2, 100)` = 2.0
+    #[test]
+    fn point_to_rect_distance_pins_x_plus_one_unit_offset() {
+        let d = point_to_rect_distance(0.0, 50.0, 2.0, 0.0, 100.0, 100.0);
+        assert!(
+            (d - 1.0).abs() < 0.01,
+            "expected dx ≈ 1.0 (1px gap), got {d}"
+        );
+    }
+
+    /// `point_to_rect_distance` の `y + 1.0` (L66) を spot で pin する。
+    /// rect (0, 2)-(100, 100), point (50, 0): dy ≈ 1.0 (1 px gap)。
+    #[test]
+    fn point_to_rect_distance_pins_y_plus_one_unit_offset() {
+        let d = point_to_rect_distance(50.0, 0.0, 0.0, 2.0, 100.0, 100.0);
+        assert!(
+            (d - 1.0).abs() < 0.01,
+            "expected dy ≈ 1.0 (1px gap), got {d}"
+        );
+    }
+
+    /// `compute_opacity` の `-distance / fade_decay_px.max(1.0)` (L46) を
+    /// spot で pin する。`Off` mode で hud から ~120px 離れた cursor を作り
+    /// linear ≈ 0.629, smooth ≈ 0.811。`/` を `%` / `*` に mutate すると
+    /// `linear ≈ 1`, opacity ≈ 1 にしか落ち着かず明確に区別できる。
+    #[test]
+    fn compute_opacity_pins_fade_curve_at_one_decay_distance() {
+        // hud_rect = (1376, 24, 520, 560): left = 1376, top = 24, right = 1896, bottom = 584
+        // cursor (1256, 50) は hud left edge から 120 px 左 ⇒ distance ≈ 119
+        let s = State {
+            mode: Mode::Off,
+            ..State::DEFAULT
+        };
+        let v = compute_opacity(s, Point::new(1256, 50), hud_rect(), 120.0);
+        // 1 - exp(-119/120) ≈ 0.629, smooth(0.629) ≈ 0.811
+        assert!(
+            v > 0.70 && v < 0.90,
+            "expected opacity ≈ 0.81 (one decay distance), got {v}"
+        );
+    }
 }
