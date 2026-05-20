@@ -111,3 +111,16 @@ debug = "full"
 inherits = "dev"
 debug = "line-tables-only"
 incremental = false
+
+# 配布可能な Debug Build。`linerule-win-x64-debug` artifact として CI から配る。
+# release を base にして実用速度を保ちつつ、PDB を残し、`catch_unwind` を実機
+# 検証可能にする (release の `panic = "abort"` だと win32_ffi の catch_unwind が
+# effectively dead = wndproc panic で即終了)。詳細は ADR-0007。
+[profile.dist-dev]
+inherits = "release"
+debug = "full"         # PDB 完全シンボル
+strip = "none"         # シンボル残し
+lto = "thin"           # `fat` + `debug=full` は PDB 不整合の既知問題
+panic = "unwind"       # catch_unwind 経路を実機検証可能に
+overflow-checks = true
+incremental = false    # CI 再現性

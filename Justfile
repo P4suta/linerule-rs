@@ -122,6 +122,13 @@ build-release:
     @echo "==> cargo build --release --workspace"
     {{cargo}} build --release --workspace
 
+# 配布可能 Debug Build。CI の `debug-build (win-x64, native, PDB)` と同じ
+# `[profile.dist-dev]` をローカルで生成し、`target/dist-dev/linerule.{exe,pdb}`
+# が出る。Linux からでも `cargo xwin` 経由でクロスビルドできる場合あり。
+build-debug:
+    @echo "==> cargo build --profile dist-dev -p linerule-app"
+    {{cargo}} build --profile dist-dev -p linerule-app
+
 # Inner-loop alias: skips dependency resolution checks.
 b:
     @echo "==> cargo build --workspace"
