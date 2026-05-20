@@ -25,6 +25,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # .cargo/config.toml forces -fuse-ld=mold for x86_64-unknown-linux-gnu;
+      # install mold so the link step actually finds the linker.
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo doc
         env:
@@ -40,7 +43,7 @@ jobs:
           cat > target/doc/index.html <<'HTML'
           <!doctype html><meta http-equiv="refresh" content="0; url=linerule_core/index.html">
           HTML
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: target/doc
 
