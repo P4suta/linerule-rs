@@ -183,4 +183,57 @@ mod tests {
         let r: ScreenRect<Logical> = ScreenRect::new(Point::new(0, 0), 100, 50);
         assert!(r.contains_rect(r));
     }
+
+    /// `top()` / `left()` が `origin` の値をそのまま返すことを non-zero origin
+    /// で pin する。`top -> i32 with 0` mutation を catch するため `Point::new(0,0)`
+    /// 以外で確かめる必要がある (Phase ε mutation baseline)。
+    #[test]
+    fn top_and_left_reflect_origin_for_nonzero_points() {
+        let r: ScreenRect<Logical> = ScreenRect::new(Point::new(7, 11), 100, 50);
+        assert_eq!(r.left(), 7);
+        assert_eq!(r.top(), 11);
+        // bottom / right も周辺確認のため pin
+        assert_eq!(r.right(), 107);
+        assert_eq!(r.bottom(), 61);
+    }
+
+    /// `contains_rect` の 4 つの境界条件をそれぞれ独立に破る test。`&& with ||`
+    /// mutation を 4 か所すべて検出するには「3 条件は満たすが 1 条件だけ破る」
+    /// rect を作って false を確認する必要がある (Phase ε mutation baseline)。
+    #[test]
+    fn contains_rect_rejects_each_boundary_independently() {
+        let outer: ScreenRect<Logical> = ScreenRect::new(Point::new(0, 0), 100, 100);
+        // 完全に内側にある rect は含まれる
+        let inner: ScreenRect<Logical> = ScreenRect::new(Point::new(10, 10), 50, 50);
+        assert!(outer.contains_rect(inner));
+
+        // left 方向にはみ出し: other.left = -1 (outer.left = 0)
+        let off_left: ScreenRect<Logical> = ScreenRect::new(Point::new(-1, 10), 50, 50);
+        assert!(!outer.contains_rect(off_left), "left edge must be rejected");
+
+        // top 方向にはみ出し: other.top = -1 (outer.top = 0)
+        let off_top: ScreenRect<Logical> = ScreenRect::new(Point::new(10, -1), 50, 50);
+        assert!(!outer.contains_rect(off_top), "top edge must be rejected");
+
+        // right 方向にはみ出し: other.right = 101 (outer.right = 100)
+        let off_right: ScreenRect<Logical> = ScreenRect::new(Point::new(60, 10), 41, 50);
+        assert!(
+            !outer.contains_rect(off_right),
+            "right edge must be rejected"
+        );
+
+        // bottom 方向にはみ出し: other.bottom = 101 (outer.bottom = 100)
+        let off_bottom: ScreenRect<Logical> = ScreenRect::new(Point::new(10, 60), 50, 41);
+        assert!(
+            !outer.contains_rect(off_bottom),
+            "bottom edge must be rejected"
+        );
+
+        // 全条件破る (true で吸収されない): true を返す mutant も検出。
+        let totally_outside: ScreenRect<Logical> = ScreenRect::new(Point::new(200, 200), 10, 10);
+        assert!(
+            !outer.contains_rect(totally_outside),
+            "fully-outside rect must be rejected"
+        );
+    }
 }

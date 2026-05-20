@@ -177,4 +177,29 @@ mod tests {
         assert_eq!(s1, s0);
         assert!(!d.is_any());
     }
+
+    /// `BumpOpacity` が `opacity` field を実際に更新することを pin する。
+    /// `OverlayConfig` リテラル内で `opacity: ...` を `..c` のみ
+    /// (= field 省略) に変えた mutation が、saturating_add(-8) で MIN から MIN
+    /// のままになる test では検出できなかった (Phase ε mutation baseline)。
+    /// `Horizontal` mode + DEFAULT (= 0xAA) から +8 すると 0xB2 になる、これは
+    /// `..c` だと 0xAA のままで失敗する。
+    #[test]
+    fn bump_opacity_actually_mutates_opacity_field() {
+        let s0 = State {
+            mode: Mode::Horizontal,
+            ..State::DEFAULT
+        };
+        let (s1, d) = apply(s0, OverlayAction::BumpOpacity(8));
+        assert_eq!(s1.config.opacity, Opacity::DEFAULT.saturating_add(8));
+        assert_ne!(
+            s1.config.opacity,
+            Opacity::DEFAULT,
+            "opacity must change from DEFAULT after BumpOpacity(+8)"
+        );
+        assert!(d.config_changed);
+        // 同時に thickness と mask_color は変化しない (他 field を巻き込まない)
+        assert_eq!(s1.config.thickness, s0.config.thickness);
+        assert_eq!(s1.config.mask_color, s0.config.mask_color);
+    }
 }

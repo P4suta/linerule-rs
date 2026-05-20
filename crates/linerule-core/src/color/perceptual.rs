@@ -80,4 +80,59 @@ mod tests {
             assert!(w[0] <= w[1], "l_star must be non-decreasing: {ys:?}");
         }
     }
+
+    /// `smooth(0.5)` の具体値を pin する。`1.0 / 2.2` を `1.0 % 2.2` (= `1.0`)
+    /// や `1.0 * 2.2` (= `2.2`) に mutate された場合と区別するため、 公式値
+    /// `0.5^(1/2.2) ≈ 0.7297` を tolerance 0.005 で挟む (Phase ε mutation
+    /// baseline)。
+    #[test]
+    fn smooth_midpoint_value_is_pinned() {
+        // 0.5^(1/2.2) ≈ 0.7297400
+        let v = smooth(0.5);
+        assert!(
+            (v - 0.729_740).abs() < 0.005,
+            "smooth(0.5): expected ≈ 0.7297, got {v}"
+        );
+        // 0.25 の場合も別 spot で確認 (0.25^(1/2.2) ≈ 0.5325)
+        let v2 = smooth(0.25);
+        assert!(
+            (v2 - 0.532_5).abs() < 0.005,
+            "smooth(0.25): expected ≈ 0.5325, got {v2}"
+        );
+    }
+
+    /// `l_star` の toe 以下 (linear 部分, L38) と toe 以上 (cube-root 部分, L40)
+    /// の両方を pin する。L38 `*` / `/` の mutation を spot で catch する。
+    #[test]
+    fn l_star_segment_values_are_pinned() {
+        // toe 以下: linear * 9.032962 / 1.16
+        // linear = 0.005 → 0.005 * 9.032962 / 1.16 ≈ 0.038935
+        let v_toe = l_star(0.005);
+        assert!(
+            (v_toe - 0.038_935).abs() < 0.001,
+            "l_star(0.005) toe segment: expected ≈ 0.03894, got {v_toe}"
+        );
+        // toe 以上: 1.16 * linear.cbrt() - 0.16
+        // linear = 0.5 → 1.16 * 0.5^(1/3) - 0.16 ≈ 1.16 * 0.7937 - 0.16 ≈ 0.7607
+        let v_cbrt = l_star(0.5);
+        assert!(
+            (v_cbrt - 0.760_67).abs() < 0.005,
+            "l_star(0.5) cube-root segment: expected ≈ 0.7607, got {v_cbrt}"
+        );
+    }
+
+    /// `l_star` が NaN / 負値で 0.0 を返すことを pin する。L31 `||` を `&&`
+    /// に mutate すると NaN は `is_finite=false` だが `<= 0.0=false` なので
+    /// `&&` の方は false で 0.0 ガードを抜けてしまう。
+    #[test]
+    fn l_star_handles_nan_and_negatives() {
+        assert!(l_star(f32::NAN).abs() < 1e-6, "NaN must map to 0.0");
+        assert!(l_star(-0.5).abs() < 1e-6, "negative must map to 0.0");
+        assert!(
+            l_star(f32::INFINITY).abs() < 1e-6,
+            "infinity must map to 0.0"
+        );
+        // > 1 は 1.0 にクランプ
+        assert!((l_star(2.0) - 1.0).abs() < 1e-6);
+    }
 }

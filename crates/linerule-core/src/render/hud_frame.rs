@@ -405,4 +405,79 @@ mod tests {
         // baseline 5 rows (title + status + thickness + opacity + telemetry)
         assert_eq!(f.rows.len(), 5);
     }
+
+    /// 各 row の `origin_y` を `HudConfig::DEFAULT` 由来の算術で pin する。
+    ///
+    /// `hud_frame` 内部の `y += font + padding` 累積が単一の `+=` / `+`
+    /// 演算子変更 (mutation) でズレた場合に確実に検知するための回帰テスト。
+    /// 既存の ordering test (`origin_y[i] <= origin_y[i+1]`) は ordering を
+    /// 守るが値域を pin しないので、`+= title + section` を `*= title + section`
+    /// に変えるような mutation を捕捉できなかった (Phase ε mutation baseline)。
+    ///
+    /// 期待値はすべて `HudConfig::DEFAULT` から手計算:
+    /// - `panel_top` = `monitor_top + margin` = `0 + 24` = `24`
+    /// - row 0 (Title)     `y0 = 24 + 24 (edge)` = `48`
+    /// - row 1 (Status)    `y1 = 48 + 24 (title font) + 16 (section)` = `88`
+    /// - row 2 (Thickness) `y2 = 88 + 22 (status font) + 8 (row)` = `118`
+    /// - row 3 (Opacity)   `y3 = 118 + 20 (body font) + 8 (row)` = `146`
+    /// - row 4 (Telemetry) `y4 = 146 + 20 (body font) + 16 (section)` = `182`
+    ///
+    /// `HudConfig::DEFAULT` 自体が変わったらこの test を更新する (回帰検知の
+    /// 重みを残すために、寛容な許容差ではなく `EPSILON` 級で pin する)。
+    #[test]
+    fn row_origin_y_pins_default_layout_arithmetic() {
+        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[]);
+        assert_eq!(f.rows.len(), 5, "5 baseline rows expected");
+
+        // `panel_top` itself は monitor_top + margin。
+        assert!(
+            (f.panel_top - 24.0).abs() < 0.001,
+            "panel_top expected 24.0, got {}",
+            f.panel_top
+        );
+
+        let expected_y = [48.0_f32, 88.0, 118.0, 146.0, 182.0];
+        for (i, exp) in expected_y.iter().enumerate() {
+            let actual = f.rows[i].origin_y;
+            assert!(
+                (actual - exp).abs() < 0.001,
+                "row {i} ({:?}): expected origin_y = {exp}, got {actual}",
+                f.rows[i].text
+            );
+        }
+    }
+
+    /// notification rows の `origin_y` を pin する。`hud_frame` 内 L211 (
+    /// `y += telemetry + section`) と L224 (`y += telemetry + row`) の演算子
+    /// 変更を検知するための回帰テスト。
+    ///
+    /// 期待値:
+    /// - telemetry row の y = 182 (上の test 参照)
+    /// - 1 件目 notification y = `182 + 18 (telemetry font) + 16 (section)` = `216`
+    /// - 2 件目 notification y = `216 + 18 (telemetry font) + 8 (row)` = `242`
+    #[test]
+    fn notification_origin_y_pins_default_layout_arithmetic() {
+        let n1 = HudNotification {
+            class: NotificationClass::Info,
+            message: "first".to_string(),
+            until_ms: i64::MAX,
+        };
+        let n2 = HudNotification {
+            class: NotificationClass::Warn,
+            message: "second".to_string(),
+            until_ms: i64::MAX,
+        };
+        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[n1, n2]);
+        assert_eq!(f.rows.len(), 7, "5 baseline + 2 notification rows");
+        let actual_n1 = f.rows[5].origin_y;
+        let actual_n2 = f.rows[6].origin_y;
+        assert!(
+            (actual_n1 - 216.0).abs() < 0.001,
+            "notification[0] origin_y expected 216.0, got {actual_n1}"
+        );
+        assert!(
+            (actual_n2 - 242.0).abs() < 0.001,
+            "notification[1] origin_y expected 242.0, got {actual_n2}"
+        );
+    }
 }

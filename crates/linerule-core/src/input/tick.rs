@@ -254,4 +254,43 @@ mod tests {
         let (_, fx2) = step(w1, &input(100), TELEMETRY);
         assert!(!fx2.iter().any(|e| matches!(e, TickEffect::RefreshHud(_))));
     }
+
+    /// `cursor_moved = polled_cursor != last_cursor` (L148) を pin する。
+    /// cursor が同位置に留まる tick では `SetHudOpacity` が emit されないこと、
+    /// cursor が動いた tick では emit されることを両方確かめる。
+    /// `!=` を `==` に mutate すると両 assert を同時に満たせない (Phase ε)。
+    #[test]
+    fn set_hud_opacity_is_emitted_iff_cursor_changed_position() {
+        // Tick 1: 初期 (last_cursor = None) → polled = Some(P1) なので cursor_moved=true
+        let mut i1 = input(0);
+        let p1 = Point::new(100, 100);
+        i1.polled_cursor = Some(p1);
+        let (w1, fx1) = step(world(), &i1, TELEMETRY);
+        assert!(
+            fx1.iter()
+                .any(|e| matches!(e, TickEffect::SetHudOpacity { .. })),
+            "first tick (None → Some(P1)): SetHudOpacity must be emitted"
+        );
+
+        // Tick 2: 同位置 P1 → cursor_moved = false なので SetHudOpacity 出ない
+        let mut i2 = input(50);
+        i2.polled_cursor = Some(p1);
+        let (w2, fx2) = step(w1, &i2, TELEMETRY);
+        assert!(
+            !fx2.iter()
+                .any(|e| matches!(e, TickEffect::SetHudOpacity { .. })),
+            "second tick (Some(P1) → Some(P1) ): SetHudOpacity must NOT be emitted"
+        );
+
+        // Tick 3: 別位置 P2 → cursor_moved = true なので SetHudOpacity 出る
+        let mut i3 = input(100);
+        let p2 = Point::new(200, 100);
+        i3.polled_cursor = Some(p2);
+        let (_, fx3) = step(w2, &i3, TELEMETRY);
+        assert!(
+            fx3.iter()
+                .any(|e| matches!(e, TickEffect::SetHudOpacity { .. })),
+            "third tick (Some(P1) → Some(P2)): SetHudOpacity must be emitted again"
+        );
+    }
 }

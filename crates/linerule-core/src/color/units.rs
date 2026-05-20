@@ -187,4 +187,34 @@ mod tests {
         assert_eq!(Thickness::DEFAULT.saturating_add(99_999), Thickness::MAX);
         assert_eq!(Thickness::DEFAULT.saturating_add(-99_999), Thickness::MIN);
     }
+
+    /// `Opacity::get` が constructor で渡した byte をそのまま返すことを pin
+    /// する。`saturating_add` 経由でしか間接的に踏まれていなかったので
+    /// `get -> u8 with 0/1` mutation が逃げていた (Phase ε mutation baseline)。
+    #[test]
+    fn opacity_get_returns_constructor_byte() {
+        assert_eq!(Opacity::DEFAULT.get(), 0xAA);
+        assert_eq!(Opacity::INDICATOR_DEFAULT.get(), 0x80);
+        assert_eq!(Opacity::MIN.get(), 1);
+        assert_eq!(Opacity::MAX.get(), 255);
+        assert_eq!(Opacity::try_new(42).unwrap().get(), 42);
+    }
+
+    /// 同上で `DimLevel::get`。`DEFAULT = 0xCC` を pin する。
+    #[test]
+    fn dim_level_get_returns_constructor_byte() {
+        assert_eq!(DimLevel::DEFAULT.get(), 0xCC);
+        assert_eq!(DimLevel::new(0).get(), 0);
+        assert_eq!(DimLevel::new(255).get(), 255);
+        assert_eq!(DimLevel::new(42).get(), 42);
+    }
+
+    /// 同上で `Thickness::get`。
+    #[test]
+    fn thickness_get_returns_constructor_value() {
+        assert_eq!(Thickness::DEFAULT.get(), 28);
+        assert_eq!(Thickness::MIN.get(), 1);
+        assert_eq!(Thickness::MAX.get(), 2048);
+        assert_eq!(Thickness::try_new(100).unwrap().get(), 100);
+    }
 }
