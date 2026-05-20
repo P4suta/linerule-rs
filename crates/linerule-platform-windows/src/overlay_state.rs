@@ -34,8 +34,8 @@ use std::time::Instant;
 
 use linerule_core::input::tick::TickWorld;
 use linerule_core::{
-    ChordError, ChordSpec, HudConfig, HudNotification, Logical, NotificationClass, OverlayAction,
-    ScreenRect,
+    ChordError, ChordSpec, HotkeyMap, HudConfig, HudNotification, Logical, NotificationClass,
+    OverlayAction, ScreenRect,
 };
 use tracing::Span;
 
@@ -96,6 +96,10 @@ pub struct OverlayWndState {
     monitor: ScreenRect<Logical>,
     /// HUD の見た目・タイミング設定。
     hud_config: HudConfig,
+    /// `RegisterHotKey` 経由で確定したユーザー向け chord 表示。`hud_frame()` の
+    /// 操作説明セクションに渡して画面上に「Ctrl+Alt+R」等を出すために保持する。
+    /// `register_hotkeys` 経由で一度書き込まれ、以降は読み取り専用。
+    hotkeys: RefCell<HotkeyMap>,
     /// `RegisterHotKey` / chord parse に失敗した chord のリスト。HUD に
     /// `NotificationClass::Warn` で永続表示する。
     hotkey_conflicts: RefCell<Vec<HotkeyConflict>>,
@@ -138,6 +142,7 @@ impl OverlayWndState {
             id_to_action: RefCell::new(HashMap::new()),
             monitor,
             hud_config,
+            hotkeys: RefCell::new(HotkeyMap::DEFAULT),
             hotkey_conflicts: RefCell::new(Vec::new()),
             notifications: RefCell::new(Vec::new()),
             start_time: Instant::now(),
@@ -275,6 +280,17 @@ impl OverlayWndState {
     #[must_use]
     pub fn hud_config(&self) -> &HudConfig {
         &self.hud_config
+    }
+
+    /// `register_hotkeys` から HUD 表示用に chord map を仕込む。
+    pub fn record_hotkeys(&self, hotkeys: HotkeyMap) {
+        *self.hotkeys.borrow_mut() = hotkeys;
+    }
+
+    /// HUD 表示用の chord map を借りる。`hud_frame()` の操作説明 rows に渡す。
+    #[must_use]
+    pub fn hotkeys(&self) -> HotkeyMap {
+        *self.hotkeys.borrow()
     }
 
     /// 起動時刻からの経過 ms。`tick::step` の `now_ms` に使う。

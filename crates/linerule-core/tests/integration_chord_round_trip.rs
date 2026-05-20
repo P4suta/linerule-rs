@@ -8,7 +8,7 @@
 //! refuses to listen for that action.
 
 use linerule_core::HotkeyMap;
-use linerule_core::input::chord;
+use linerule_core::input::chord::{self, Direction, KeyCode};
 use linerule_core::input::win32_vk::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, chord_to_win32};
 
 /// Every default chord must parse and produce a non-zero VK.
@@ -73,6 +73,38 @@ fn every_default_chord_display_round_trips() {
         assert_eq!(
             parsed, reparsed,
             "round-trip failed: `{spec}` → `{printed}` → ChordSpec differs"
+        );
+    }
+}
+
+/// Bump / opacity default chords must resolve to arrow keys (layout-independent
+/// VKs). OEM keys (`[`/`]`/`=`/`-`) are layout / IME sensitive on Windows — JIS
+/// keyboard × English IME silently delivers different VKs and `RegisterHotKey`
+/// misses. This test fails immediately if someone restores OEM-key defaults
+/// without first solving the layout problem.
+#[test]
+fn bump_and_opacity_default_chords_are_layout_independent_arrow_keys() {
+    let map = HotkeyMap::DEFAULT;
+    let expected: [(&str, &str, KeyCode); 4] = [
+        ("thicker", map.thicker, KeyCode::Arrow(Direction::Up)),
+        ("thinner", map.thinner, KeyCode::Arrow(Direction::Down)),
+        (
+            "more_opaque",
+            map.more_opaque,
+            KeyCode::Arrow(Direction::Right),
+        ),
+        (
+            "less_opaque",
+            map.less_opaque,
+            KeyCode::Arrow(Direction::Left),
+        ),
+    ];
+    for (name, spec, expected_key) in expected {
+        let parsed = chord::parse(spec).unwrap_or_else(|e| panic!("{name} parse `{spec}`: {e}"));
+        assert_eq!(
+            parsed.key, expected_key,
+            "{name} `{spec}`: expected arrow key {expected_key:?}, got {:?}",
+            parsed.key
         );
     }
 }

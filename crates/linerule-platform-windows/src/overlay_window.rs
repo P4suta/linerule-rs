@@ -164,23 +164,52 @@ impl OverlayWindow {
     /// 将来 OS レベルで catastrophic に失敗する API を呼ぶようになった場合のみ
     /// `Err` を返す可能性を残す。
     pub fn register_hotkeys(&self, hotkeys: &HotkeyMap, tap_step: TapStepConfig) -> Result<()> {
+        // HUD 操作説明セクションが表示する chord 文字列の取得元として state に控える。
+        self.state().record_hotkeys(*hotkeys);
         let bumps = (tap_step.thickness, tap_step.opacity);
-        let pairs: [(i32, &'static str, OverlayAction); 7] = [
-            (1, hotkeys.cycle_mode, OverlayAction::CycleMode),
-            (2, hotkeys.toggle_visible, OverlayAction::ToggleVisible),
-            (3, hotkeys.thicker, OverlayAction::BumpThickness(bumps.0)),
-            (4, hotkeys.thinner, OverlayAction::BumpThickness(-bumps.0)),
-            (5, hotkeys.more_opaque, OverlayAction::BumpOpacity(bumps.1)),
-            (6, hotkeys.less_opaque, OverlayAction::BumpOpacity(-bumps.1)),
-            (7, hotkeys.quit, OverlayAction::Quit),
+        // 4 番目の field は `repeatable`: Bump 系のみ `true` (`MOD_NOREPEAT` 抜き) で
+        // 長押し連続調整を許可、Toggle 系 (Cycle / Visible / Quit) は `false` で誤連打を防ぐ。
+        let pairs: [(i32, &'static str, OverlayAction, bool); 7] = [
+            (1, hotkeys.cycle_mode, OverlayAction::CycleMode, false),
+            (
+                2,
+                hotkeys.toggle_visible,
+                OverlayAction::ToggleVisible,
+                false,
+            ),
+            (
+                3,
+                hotkeys.thicker,
+                OverlayAction::BumpThickness(bumps.0),
+                true,
+            ),
+            (
+                4,
+                hotkeys.thinner,
+                OverlayAction::BumpThickness(-bumps.0),
+                true,
+            ),
+            (
+                5,
+                hotkeys.more_opaque,
+                OverlayAction::BumpOpacity(bumps.1),
+                true,
+            ),
+            (
+                6,
+                hotkeys.less_opaque,
+                OverlayAction::BumpOpacity(-bumps.1),
+                true,
+            ),
+            (7, hotkeys.quit, OverlayAction::Quit, false),
         ];
-        for (id, spec, action) in pairs {
-            self.register_one(id, spec, action);
+        for (id, spec, action, repeatable) in pairs {
+            self.register_one(id, spec, action, repeatable);
         }
         Ok(())
     }
 
-    fn register_one(&self, id: i32, spec: &'static str, action: OverlayAction) {
+    fn register_one(&self, id: i32, spec: &'static str, action: OverlayAction, repeatable: bool) {
         let state = self.state();
         let chord = match chord::parse(spec) {
             Ok(c) => c,
@@ -195,7 +224,7 @@ impl OverlayWindow {
             },
         };
         let (mods, vk) = chord_to_win32(chord);
-        match hotkey_ffi::register_hotkey(self.hwnd, id, mods, vk) {
+        match hotkey_ffi::register_hotkey(self.hwnd, id, mods, vk, repeatable) {
             Ok(()) => {
                 state.record_hotkey(id, action);
                 tracing::info!(spec, ?action, id, "hotkey registered");

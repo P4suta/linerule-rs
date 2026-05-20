@@ -18,16 +18,35 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 
 use crate::error::{PlatformError, Result};
 
+/// `MOD_NOREPEAT` flag value (windows-rs では `HOT_KEY_MODIFIERS` 経由でしか露出
+/// していないため定数として再宣言)。`RegisterHotKey` の `fsModifiers` に OR で
+/// 付与すると Windows が auto-repeat による `WM_HOTKEY` の連続発火を抑制する。
+const MOD_NOREPEAT: u32 = 0x4000;
+
 /// `RegisterHotKey(hwnd, id, modifiers, vk)` の薄い safe wrapper。
-/// MOD_NOREPEAT を自動付与し OS の auto-repeat を抑止する（hold-to-repeat は
-/// HoldFsm 側で扱う将来拡張のため）。
+///
+/// `repeatable = false` のとき `MOD_NOREPEAT` を自動付与し、長押し中の連続発火を
+/// 抑止する。CycleMode / ToggleVisible / Quit のような toggle 系 action 向け。
+///
+/// `repeatable = true` のとき `MOD_NOREPEAT` を付与しないため、Windows のキー
+/// リピート速度に従って `WM_HOTKEY` が連続で飛ぶ。BumpThickness / BumpOpacity の
+/// ような連続調整 action 向け。
 ///
 /// # Errors
 /// `RegisterHotKey` が FALSE を返したとき (重複登録等)。
-pub fn register_hotkey(hwnd: HWND, id: i32, modifiers: u32, vk: u32) -> Result<()> {
-    // Add MOD_NOREPEAT (0x4000) to suppress OS-level key repeat; HoldFsm のみが repeat を制御する。
-    const MOD_NOREPEAT: u32 = 0x4000;
-    let m = HOT_KEY_MODIFIERS(modifiers | MOD_NOREPEAT);
+pub fn register_hotkey(
+    hwnd: HWND,
+    id: i32,
+    modifiers: u32,
+    vk: u32,
+    repeatable: bool,
+) -> Result<()> {
+    let mods = if repeatable {
+        modifiers
+    } else {
+        modifiers | MOD_NOREPEAT
+    };
+    let m = HOT_KEY_MODIFIERS(mods);
     // SAFETY: hwnd は valid (overlay HWND)、id / modifiers / vk は plain int
     unsafe { RegisterHotKey(Some(hwnd), id, m, vk) }.map_err(|e| PlatformError::BadHr {
         operation: "RegisterHotKey",

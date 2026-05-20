@@ -17,6 +17,7 @@ use serde::Serialize;
 use crate::color::Rgba;
 use crate::config::HudConfig;
 use crate::geometry::{Logical, ScreenRect};
+use crate::input::hotkey_map::HotkeyMap;
 use crate::state::{Mode, State};
 
 /// HUD パネル + 行群。プラットフォーム側はパネルを塗って各 row を描画する。
@@ -116,23 +117,36 @@ pub enum NotificationClass {
 /// # Examples
 ///
 /// ```
-/// use linerule_core::{HudConfig, Point, ScreenRect, State, hud_frame};
+/// use linerule_core::{HotkeyMap, HudConfig, Point, ScreenRect, State, hud_frame};
 ///
 /// let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
-/// let frame = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor, 144, &[]);
+/// let frame = hud_frame(
+///     State::DEFAULT,
+///     HudConfig::DEFAULT,
+///     monitor,
+///     144,
+///     &[],
+///     HotkeyMap::DEFAULT,
+/// );
 /// // 右上アンカー: パネル右端は monitor 右端から margin だけ左
 /// let expected_right = 1920.0 - HudConfig::DEFAULT.geometry.margin;
 /// assert!((frame.panel_left + frame.panel_width - expected_right).abs() < 0.5);
-/// // 4 行以上 (title + status + thickness + opacity + telemetry)
-/// assert!(frame.rows.len() >= 5);
+/// // 5 baseline + 1 header + 7 hotkey rows = 13 行 (Quit 含む)
+/// assert!(frame.rows.len() >= 13);
 /// ```
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "row 構築は逐次的でラインアウト計算が局所的に追跡できる方が読みやすい。\
+              分割すると `y` 累積を渡し回す必要があり可読性が落ちる"
+)]
 pub fn hud_frame(
     state: State,
     hud: HudConfig,
     monitor: ScreenRect<Logical>,
     refresh_hz: u32,
     notifications: &[HudNotification],
+    hotkeys: HotkeyMap,
 ) -> HudFrame {
     let panel_width = hud.geometry.width;
     let panel_height = hud.geometry.height;
@@ -210,6 +224,42 @@ pub fn hud_frame(
     });
     y += hud.fonts.telemetry + hud.padding.section;
 
+    // Hotkey help section. C# 版相当の操作説明を panel に常時表示する。
+    // section header (body サイズ, title font) → 7 hotkey rows (telemetry サイズ,
+    // mono font) で chord 表記を揃える。Quit は emergency 退避手段なので必ず出す。
+    rows.push(HudRow {
+        origin_x: x,
+        origin_y: y,
+        text: "Hotkeys".to_string(),
+        font_size: hud.fonts.body,
+        font: HudFontKey::Title,
+        color: hud.colors.foreground,
+    });
+    y += hud.fonts.body + hud.padding.row;
+
+    let hotkey_lines: [(&str, &str); 7] = [
+        ("Mode cycle", hotkeys.cycle_mode),
+        ("Show/Hide", hotkeys.toggle_visible),
+        ("Thicker", hotkeys.thicker),
+        ("Thinner", hotkeys.thinner),
+        ("More opaque", hotkeys.more_opaque),
+        ("Less opaque", hotkeys.less_opaque),
+        ("Quit", hotkeys.quit),
+    ];
+    for (label, chord) in hotkey_lines {
+        rows.push(HudRow {
+            origin_x: x,
+            origin_y: y,
+            text: format!("{label:<12} {chord}"),
+            font_size: hud.fonts.telemetry,
+            font: HudFontKey::Mono,
+            color: hud.colors.subtle,
+        });
+        y += hud.fonts.telemetry + hud.padding.row;
+    }
+    // section の終わりに余白を入れて notifications との視認分離を作る
+    y += hud.padding.section - hud.padding.row;
+
     // Notifications (短寿命 toast or 永続 conflict 表示)。
     // 行間は `padding.row`、 font は telemetry size を使う (status より控えめ)。
     for notification in notifications {
@@ -266,9 +316,22 @@ mod tests {
         ScreenRect::new(Point::new(0, 0), 1920, 1080)
     }
 
+    /// `hud_frame()` を default 引数で呼ぶ test helper。Phase ζ で hotkeys 引数が
+    /// 必須化されたため、12+ 件の test を一行で書き直せるよう小さな wrapper を置く。
+    fn default_frame(state: State, refresh_hz: u32, notifications: &[HudNotification]) -> HudFrame {
+        hud_frame(
+            state,
+            HudConfig::DEFAULT,
+            monitor(),
+            refresh_hz,
+            notifications,
+            HotkeyMap::DEFAULT,
+        )
+    }
+
     #[test]
     fn panel_anchored_top_right_with_margin() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[]);
+        let f = default_frame(State::DEFAULT, 60, &[]);
         let expected_right = 1920.0_f32 - HudConfig::DEFAULT.geometry.margin;
         assert!((f.panel_left + f.panel_width - expected_right).abs() < 0.5);
         assert!((f.panel_top - HudConfig::DEFAULT.geometry.margin).abs() < 0.5);
@@ -276,10 +339,10 @@ mod tests {
 
     #[test]
     fn default_state_rows_are_present_and_ordered_top_to_bottom() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 144, &[]);
+        let f = default_frame(State::DEFAULT, 144, &[]);
         assert!(
-            f.rows.len() >= 5,
-            "expected at least 5 rows, got {}",
+            f.rows.len() >= 13,
+            "expected at least 13 rows (5 baseline + 1 header + 7 hotkeys), got {}",
             f.rows.len()
         );
         for w in f.rows.windows(2) {
@@ -296,7 +359,7 @@ mod tests {
     fn mode_label_reflects_state() {
         let mut s = State::DEFAULT;
         s.mode = Mode::Horizontal;
-        let f = hud_frame(s, HudConfig::DEFAULT, monitor(), 60, &[]);
+        let f = default_frame(s, 60, &[]);
         assert!(
             f.rows.iter().any(|r| r.text == "Mode: Horizontal"),
             "rows: {:?}",
@@ -309,7 +372,7 @@ mod tests {
         let mut s = State::DEFAULT;
         s.mode = Mode::Horizontal;
         s.visible = false;
-        let f = hud_frame(s, HudConfig::DEFAULT, monitor(), 60, &[]);
+        let f = default_frame(s, 60, &[]);
         assert!(
             f.rows.iter().any(|r| r.text == "Mode: Hidden"),
             "rows: {:?}",
@@ -319,7 +382,7 @@ mod tests {
 
     #[test]
     fn refresh_hz_appears_in_telemetry_row_with_mono_font() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 144, &[]);
+        let f = default_frame(State::DEFAULT, 144, &[]);
         let telemetry = f
             .rows
             .iter()
@@ -331,13 +394,13 @@ mod tests {
 
     #[test]
     fn opacity_reflects_base_opacity_from_config() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[]);
+        let f = default_frame(State::DEFAULT, 60, &[]);
         assert!((f.opacity - HudConfig::DEFAULT.base_opacity).abs() < f32::EPSILON);
     }
 
     #[test]
     fn rows_fit_within_panel_horizontally() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[]);
+        let f = default_frame(State::DEFAULT, 60, &[]);
         let panel_right = f.panel_left + f.panel_width;
         for r in &f.rows {
             assert!(
@@ -356,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn notifications_appended_below_telemetry_row() {
+    fn notifications_appended_below_hotkey_help_section() {
         let warn = HudNotification {
             class: NotificationClass::Warn,
             message: "Ctrl+Alt+R → already in use".to_string(),
@@ -367,15 +430,9 @@ mod tests {
             message: "Device rebuilt".to_string(),
             until_ms: 1_000,
         };
-        let f = hud_frame(
-            State::DEFAULT,
-            HudConfig::DEFAULT,
-            monitor(),
-            60,
-            &[warn, info],
-        );
-        // baseline 5 rows + 2 notifications = 7 rows or more
-        assert!(f.rows.len() >= 7, "rows: {:?}", f.rows);
+        let f = default_frame(State::DEFAULT, 60, &[warn, info]);
+        // baseline 5 + hotkey help 1+7 = 13 + 2 notifications = 15 rows or more
+        assert!(f.rows.len() >= 15, "rows: {:?}", f.rows);
         let n1 = &f.rows[f.rows.len() - 2];
         let n2 = &f.rows[f.rows.len() - 1];
         assert_eq!(n1.text, "Ctrl+Alt+R → already in use");
@@ -401,9 +458,11 @@ mod tests {
 
     #[test]
     fn empty_notifications_preserve_default_row_count() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[]);
-        // baseline 5 rows (title + status + thickness + opacity + telemetry)
-        assert_eq!(f.rows.len(), 5);
+        let f = default_frame(State::DEFAULT, 60, &[]);
+        // baseline 5 (title + status + thickness + opacity + telemetry)
+        // + 1 hotkey help header + 7 hotkey rows (cycle / show / thicker /
+        // thinner / more / less / quit) = 13 rows
+        assert_eq!(f.rows.len(), 13);
     }
 
     /// 各 row の `origin_y` を `HudConfig::DEFAULT` 由来の算術で pin する。
@@ -416,18 +475,25 @@ mod tests {
     ///
     /// 期待値はすべて `HudConfig::DEFAULT` から手計算:
     /// - `panel_top` = `monitor_top + margin` = `0 + 24` = `24`
-    /// - row 0 (Title)     `y0 = 24 + 24 (edge)` = `48`
-    /// - row 1 (Status)    `y1 = 48 + 24 (title font) + 16 (section)` = `88`
-    /// - row 2 (Thickness) `y2 = 88 + 22 (status font) + 8 (row)` = `118`
-    /// - row 3 (Opacity)   `y3 = 118 + 20 (body font) + 8 (row)` = `146`
-    /// - row 4 (Telemetry) `y4 = 146 + 20 (body font) + 16 (section)` = `182`
+    /// - row 0 (Title)            `y0 = 24 + 24 (edge)` = `48`
+    /// - row 1 (Status)           `y1 = 48 + 24 (title font) + 16 (section)` = `88`
+    /// - row 2 (Thickness)        `y2 = 88 + 22 (status font) + 8 (row)` = `118`
+    /// - row 3 (Opacity)          `y3 = 118 + 20 (body font) + 8 (row)` = `146`
+    /// - row 4 (Telemetry)        `y4 = 146 + 20 (body font) + 16 (section)` = `182`
+    /// - row 5 (Hotkeys header)   `y5 = 182 + 18 (telemetry) + 16 (section)` = `216`
+    /// - row 6 (Mode cycle)       `y6 = 216 + 20 (body font) + 8 (row)` = `244`
+    /// - row 7..12 (Hotkey rows)  `y{n+1} = y{n} + 18 (telemetry) + 8 (row)` = `+26 each`
     ///
     /// `HudConfig::DEFAULT` 自体が変わったらこの test を更新する (回帰検知の
     /// 重みを残すために、寛容な許容差ではなく `EPSILON` 級で pin する)。
     #[test]
     fn row_origin_y_pins_default_layout_arithmetic() {
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[]);
-        assert_eq!(f.rows.len(), 5, "5 baseline rows expected");
+        let f = default_frame(State::DEFAULT, 60, &[]);
+        assert_eq!(
+            f.rows.len(),
+            13,
+            "5 baseline + 1 header + 7 hotkeys expected"
+        );
 
         // `panel_top` itself は monitor_top + margin。
         assert!(
@@ -436,7 +502,11 @@ mod tests {
             f.panel_top
         );
 
-        let expected_y = [48.0_f32, 88.0, 118.0, 146.0, 182.0];
+        // row 0..5: baseline + Hotkeys header
+        let baseline_y = [48.0_f32, 88.0, 118.0, 146.0, 182.0, 216.0];
+        // row 6..12: 7 hotkey rows, starting at 244 with +26 step
+        let hotkey_y = [244.0_f32, 270.0, 296.0, 322.0, 348.0, 374.0, 400.0];
+        let expected_y: Vec<f32> = baseline_y.iter().chain(hotkey_y.iter()).copied().collect();
         for (i, exp) in expected_y.iter().enumerate() {
             let actual = f.rows[i].origin_y;
             assert!(
@@ -447,14 +517,14 @@ mod tests {
         }
     }
 
-    /// notification rows の `origin_y` を pin する。`hud_frame` 内 L211 (
-    /// `y += telemetry + section`) と L224 (`y += telemetry + row`) の演算子
-    /// 変更を検知するための回帰テスト。
+    /// notification rows の `origin_y` を pin する。hotkey help section の後ろに
+    /// section 余白を挟んで notifications が並ぶ。
     ///
     /// 期待値:
-    /// - telemetry row の y = 182 (上の test 参照)
-    /// - 1 件目 notification y = `182 + 18 (telemetry font) + 16 (section)` = `216`
-    /// - 2 件目 notification y = `216 + 18 (telemetry font) + 8 (row)` = `242`
+    /// - 最後の hotkey row (Quit) の y = 400 (上 test 参照)
+    /// - hotkey loop 終了後 `y += telemetry(18) + row(8) + (section - row)(8)` = +34 → 434
+    /// - notification[0] y = 434
+    /// - notification[1] y = `434 + 18 (telemetry) + 8 (row)` = `460`
     #[test]
     fn notification_origin_y_pins_default_layout_arithmetic() {
         let n1 = HudNotification {
@@ -467,17 +537,61 @@ mod tests {
             message: "second".to_string(),
             until_ms: i64::MAX,
         };
-        let f = hud_frame(State::DEFAULT, HudConfig::DEFAULT, monitor(), 60, &[n1, n2]);
-        assert_eq!(f.rows.len(), 7, "5 baseline + 2 notification rows");
-        let actual_n1 = f.rows[5].origin_y;
-        let actual_n2 = f.rows[6].origin_y;
+        let f = default_frame(State::DEFAULT, 60, &[n1, n2]);
+        assert_eq!(f.rows.len(), 15, "13 baseline+hotkey + 2 notification rows");
+        let actual_n1 = f.rows[13].origin_y;
+        let actual_n2 = f.rows[14].origin_y;
         assert!(
-            (actual_n1 - 216.0).abs() < 0.001,
-            "notification[0] origin_y expected 216.0, got {actual_n1}"
+            (actual_n1 - 434.0).abs() < 0.001,
+            "notification[0] origin_y expected 434.0, got {actual_n1}"
         );
         assert!(
-            (actual_n2 - 242.0).abs() < 0.001,
-            "notification[1] origin_y expected 242.0, got {actual_n2}"
+            (actual_n2 - 460.0).abs() < 0.001,
+            "notification[1] origin_y expected 460.0, got {actual_n2}"
         );
+    }
+
+    /// `hotkeys` 引数で渡した chord 文字列が各 hotkey row に正しく反映されることを
+    /// pin する。custom `HotkeyMap` を渡したら row の text が変わることを確認 (これが
+    /// 効かないと「HUD 操作説明が常に DEFAULT 表示」という degenerate state が
+    /// 発生する。Phase ζ の主要機能の retainer test)。
+    #[test]
+    fn hotkey_help_rows_reflect_hotkey_map_argument() {
+        // DEFAULT と完全に異なる chord にして substring 混同を避ける (`Ctrl+Alt+R`
+        // のような短い prefix が `Ctrl+Alt+Right` にマッチする問題を回避)。
+        let custom = HotkeyMap {
+            cycle_mode: "Ctrl+Shift+M",
+            toggle_visible: "Ctrl+Shift+V",
+            thicker: "Ctrl+Shift+T",
+            thinner: "Ctrl+Shift+N",
+            more_opaque: "Ctrl+Shift+O",
+            less_opaque: "Ctrl+Shift+S",
+            quit: "Ctrl+Shift+X",
+        };
+        let f = hud_frame(
+            State::DEFAULT,
+            HudConfig::DEFAULT,
+            monitor(),
+            60,
+            &[],
+            custom,
+        );
+        let texts: Vec<&str> = f.rows.iter().map(|r| r.text.as_str()).collect();
+        // hotkey rows は telemetry 行の後の 1 header + 7 rows
+        let cycle_row = texts
+            .iter()
+            .find(|t| t.contains("Mode cycle"))
+            .expect("cycle row");
+        assert!(cycle_row.contains("Ctrl+Shift+M"), "cycle row: {cycle_row}");
+        let quit_row = texts.iter().find(|t| t.contains("Quit")).expect("quit row");
+        assert!(quit_row.contains("Ctrl+Shift+X"), "quit row: {quit_row}");
+        // DEFAULT chord は custom map に上書きされて表面化しないこと
+        for r in &f.rows {
+            assert!(
+                !r.text.contains("Ctrl+Alt+"),
+                "custom map should never surface any DEFAULT Ctrl+Alt+* chord: {}",
+                r.text
+            );
+        }
     }
 }
