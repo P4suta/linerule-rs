@@ -63,6 +63,25 @@ pre-commit:
       glob: "{**/Cargo.toml,Cargo.lock}"
       run: just _hook-xtask-dep-graph
 
+    # Rust ファイルが staged されているコミットでは clippy + rustdoc-check
+    # + cross-check を走らせる。workspace の incremental compile が効くため
+    # 通常は数秒で完了する。CI と同じゲートをローカル commit 時にも適用し、
+    # push 前ではなく commit 前に気づける範囲を広げる ([[linerule-rs-trust-lefthook]])。
+    clippy:
+      tags: lint
+      glob: "*.rs"
+      run: just clippy
+
+    rustdoc-check:
+      tags: docs
+      glob: "*.rs"
+      run: just rustdoc-check
+
+    cross-check:
+      tags: build
+      glob: "*.rs"
+      run: just cross-check
+
 commit-msg:
   commands:
     commitlint:
