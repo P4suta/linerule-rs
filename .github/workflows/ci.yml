@@ -90,7 +90,9 @@ jobs:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-clang-sysroot-${{ runner.os }}
       - run: rustup target add x86_64-pc-windows-msvc
-      - run: cargo xwin check --workspace --target x86_64-pc-windows-msvc
+      # `--all-targets` で examples / tests / benches も対象にし、Windows
+      # native CI (`cargo build --workspace --all-targets`) と検出範囲を揃える。
+      - run: cargo xwin check --workspace --all-targets --target x86_64-pc-windows-msvc
 
   release-build:
     name: release build (win-x64, native)
