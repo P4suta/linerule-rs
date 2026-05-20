@@ -48,6 +48,13 @@ impl CompositionRenderer {
         })
     }
 
+    /// DComp + D2D パイプラインを参照で借りる。`HudRenderer::new` 等、同じ
+    /// pipeline を共有して visual を attach する別 renderer を構築するために
+    /// `pub(crate)` で公開する。
+    pub(crate) fn pipeline(&self) -> &crate::win32_ffi::graphics::DcompPipeline {
+        &self.pipeline
+    }
+
     /// `OverlayFrame` の内容を visual tree に反映し、`Commit` で表示する。
     ///
     /// # Errors

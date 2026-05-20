@@ -6,10 +6,14 @@
 //!
 //! - [`core`] — Window / message pump / instance state (Phase C)
 //! - [`graphics`] — D3D11 + DXGI + D2D + DComposition pipeline (Phase D)
-//! - [`hotkey`] — `RegisterHotKey` / message-only HWND (Phase E)
+//! - [`hotkey`] — `RegisterHotKey` (Phase E)
 //! - [`pacer`] — `DwmFlush` + `PostMessageW` (Phase F)
+//! - [`dwrite`] — DirectWrite text formats + DrawText (Phase G, ADR-0006)
 
 pub mod core;
+
+#[cfg(any(doc, target_os = "windows"))]
+pub mod dwrite;
 
 #[cfg(any(doc, target_os = "windows"))]
 pub mod graphics;
