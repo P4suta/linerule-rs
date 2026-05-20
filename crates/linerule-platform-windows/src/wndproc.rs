@@ -127,7 +127,17 @@ fn wparam_as_hotkey_id(wparam: WPARAM) -> i32 {
 }
 
 /// 1 tick 分の処理: cursor poll → hotkey drain → `tick::step` → `apply_effects`。
+#[allow(
+    unused_variables,
+    unreachable_code,
+    clippy::needless_pass_by_value,
+    reason = "PoC: smoke test verification, force-returns Err to validate that CI smoke catches `tick processing failed`. Revert before merging."
+)]
 fn apply_tick(state: &OverlayWndState) -> Result<()> {
+    return Err(crate::error::PlatformError::BadHr {
+        operation: "PoC: forced error for smoke test verification",
+        hr: 0xdead_beef_u32 as i32,
+    });
     let polled_cursor = cursor_tracker::poll();
     let drained_hotkeys = state.drain_hotkeys();
     let now_ms = state.now_ms();
