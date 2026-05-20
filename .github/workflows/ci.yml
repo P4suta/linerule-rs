@@ -100,6 +100,28 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo build --release -p linerule-app
+      # P2-4: native smoke. The binary built above must actually start and
+      # respond to subcommands — bare-minimum "did clap parsing survive?"
+      # gate. Run hits stdout + exit code; we don't try to invoke `run` here
+      # because it blocks on the message pump.
+      - name: smoke - linerule.exe version
+        shell: pwsh
+        run: |
+          $exe = "target/release/linerule.exe"
+          & $exe version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::linerule.exe version exited with $LASTEXITCODE"
+            exit 1
+          }
+      - name: smoke - linerule.exe diagnostics --dry-run
+        shell: pwsh
+        run: |
+          $exe = "target/release/linerule.exe"
+          & $exe diagnostics --dry-run
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::linerule.exe diagnostics --dry-run exited with $LASTEXITCODE"
+            exit 1
+          }
       - name: Upload binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -235,7 +257,10 @@ jobs:
       - run: cargo audit --no-fetch --deny warnings
 
   coverage:
-    name: coverage (advisory)
+    # P2-3: required gate. Scope = linerule-core + linerule-app
+    # (linerule-platform-windows is `#![cfg(windows)]` and excluded on the
+    # Linux runner; see docs/adr/0004-coverage-policy.md).
+    name: coverage
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -246,7 +271,15 @@ jobs:
         with:
           tool: cargo-llvm-cov,cargo-nextest
       - run: rustup component add llvm-tools-preview
-      - run: cargo llvm-cov nextest --workspace --exclude linerule-platform-windows --lcov --output-path lcov.info
+      - name: cargo llvm-cov (fail under 80% lines)
+        run: |
+          cargo llvm-cov nextest \
+            --workspace \
+            --exclude linerule-platform-windows \
+            --exclude xtask \
+            --lcov \
+            --output-path lcov.info \
+            --fail-under-lines 80
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -24,8 +24,12 @@ We previously left `coverage` as an advisory job with no threshold. The plan mov
 The required `coverage` gate measures **`linerule-core` + `linerule-app` only**.
 
 - **Linux job (`coverage`)**:
-  - Command: `cargo llvm-cov nextest --workspace --exclude linerule-platform-windows --fail-under-lines <threshold>`
+  - Command: `cargo llvm-cov nextest --workspace --exclude linerule-platform-windows --exclude xtask --fail-under-lines <threshold>`
   - Threshold: starts at `80` after Phase 1 lands, raised to `85` once Phase 2 stabilizes.
+  - `xtask` is also excluded: it's a build-time helper binary executed via
+    `cargo xtask ...`, not exercised by `cargo nextest`, and lifting it to
+    full coverage would require duplicating the workflow inside the test
+    harness.
 - **Windows job (`coverage-windows`, future)**:
   - Command: `cargo llvm-cov nextest -p linerule-platform-windows`
   - Uploads an HTML / LCOV artifact for inspection.
