@@ -65,3 +65,128 @@ pub const fn key_to_vk(key: KeyCode) -> u32 {
         KeyCode::Arrow(Direction::Right) => 0x27,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::chord::Letter;
+
+    fn letter(b: u8) -> Letter {
+        Letter::from_ascii(b).expect("ASCII letter")
+    }
+
+    fn spec(modifiers: Modifiers, key: KeyCode) -> ChordSpec {
+        ChordSpec::new(modifiers, key)
+    }
+
+    // ---- key_to_vk -------------------------------------------------------
+
+    #[test]
+    fn letter_a_through_z_uppercase_maps_to_0x41_through_0x5a() {
+        for b in b'A'..=b'Z' {
+            let vk = key_to_vk(KeyCode::Letter(letter(b)));
+            assert_eq!(vk, u32::from(b), "letter {} → vk {:#x}", b as char, vk);
+        }
+    }
+
+    #[test]
+    fn letter_a_through_z_lowercase_folds_to_uppercase_vk() {
+        for b in b'a'..=b'z' {
+            // Lowercase folds to uppercase: b'a' (0x61) → 0x41, etc.
+            let vk = key_to_vk(KeyCode::Letter(letter(b)));
+            assert_eq!(
+                vk,
+                u32::from(b - 32),
+                "lowercase {} folds to uppercase VK {:#x}",
+                b as char,
+                vk
+            );
+        }
+    }
+
+    #[test]
+    fn punctuation_keys_map_to_vk_oem() {
+        assert_eq!(key_to_vk(KeyCode::BracketLeft), 0xDB);
+        assert_eq!(key_to_vk(KeyCode::BracketRight), 0xDD);
+        assert_eq!(key_to_vk(KeyCode::Minus), 0xBD);
+        assert_eq!(key_to_vk(KeyCode::Equal), 0xBB);
+    }
+
+    #[test]
+    fn arrow_keys_map_to_vk_arrow_table() {
+        // The Win32 docs ordering is Left=0x25, Up=0x26, Right=0x27, Down=0x28.
+        assert_eq!(key_to_vk(KeyCode::Arrow(Direction::Left)), 0x25);
+        assert_eq!(key_to_vk(KeyCode::Arrow(Direction::Up)), 0x26);
+        assert_eq!(key_to_vk(KeyCode::Arrow(Direction::Right)), 0x27);
+        assert_eq!(key_to_vk(KeyCode::Arrow(Direction::Down)), 0x28);
+    }
+
+    // ---- chord_to_win32 --------------------------------------------------
+
+    #[test]
+    fn no_modifier_yields_zero_mods() {
+        let (mods, _) = chord_to_win32(spec(Modifiers::empty(), KeyCode::Letter(letter(b'A'))));
+        assert_eq!(mods, 0);
+    }
+
+    #[test]
+    fn each_modifier_maps_to_its_win32_flag() {
+        let (m, _) = chord_to_win32(spec(Modifiers::ALT, KeyCode::Letter(letter(b'A'))));
+        assert_eq!(m, MOD_ALT);
+        let (m, _) = chord_to_win32(spec(Modifiers::CTRL, KeyCode::Letter(letter(b'A'))));
+        assert_eq!(m, MOD_CONTROL);
+        let (m, _) = chord_to_win32(spec(Modifiers::SHIFT, KeyCode::Letter(letter(b'A'))));
+        assert_eq!(m, MOD_SHIFT);
+        let (m, _) = chord_to_win32(spec(Modifiers::META, KeyCode::Letter(letter(b'A'))));
+        assert_eq!(m, MOD_WIN);
+    }
+
+    #[test]
+    fn all_sixteen_modifier_combinations_produce_correct_flag_set() {
+        // Enumerate every possible (CTRL? ALT? SHIFT? META?) combination and
+        // assert that the OR'd MOD_* flags match exactly. This is the bit
+        // invariant we rely on at the RegisterHotKey boundary.
+        for bits in 0u8..16u8 {
+            let mods = Modifiers::from_bits_truncate(bits);
+            let expected = (u32::from(mods.contains(Modifiers::ALT)) * MOD_ALT)
+                | (u32::from(mods.contains(Modifiers::CTRL)) * MOD_CONTROL)
+                | (u32::from(mods.contains(Modifiers::SHIFT)) * MOD_SHIFT)
+                | (u32::from(mods.contains(Modifiers::META)) * MOD_WIN);
+            let (got, _) = chord_to_win32(spec(mods, KeyCode::Letter(letter(b'A'))));
+            assert_eq!(got, expected, "modifiers {bits:#b}");
+        }
+    }
+
+    #[test]
+    fn ctrl_alt_r_matches_default_cycle_mode_chord() {
+        let (mods, vk) = chord_to_win32(spec(
+            Modifiers::CTRL | Modifiers::ALT,
+            KeyCode::Letter(letter(b'R')),
+        ));
+        assert_eq!(mods, MOD_CONTROL | MOD_ALT);
+        assert_eq!(vk, 0x52); // 'R'
+    }
+
+    // ---- Letter sanity ---------------------------------------------------
+
+    #[test]
+    fn letter_from_ascii_rejects_non_letters() {
+        for b in 0u8..=255 {
+            let v = Letter::from_ascii(b);
+            assert_eq!(v.is_some(), b.is_ascii_alphabetic(), "byte {b:#x}");
+        }
+    }
+
+    #[test]
+    fn letter_as_u8_is_always_uppercase_ascii() {
+        for b in b'a'..=b'z' {
+            let l = Letter::from_ascii(b).unwrap();
+            assert!(
+                l.as_u8().is_ascii_uppercase(),
+                "lowercase {} folded to non-uppercase {:#x}",
+                b as char,
+                l.as_u8()
+            );
+        }
+    }
+}

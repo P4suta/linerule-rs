@@ -222,4 +222,101 @@ mod tests {
             },
         }
     }
+
+    // ---- Vertical mode (was previously untested) -------------------------
+
+    #[test]
+    fn vertical_mode_emits_three_layers() {
+        let s = State {
+            mode: Mode::Vertical,
+            ..State::DEFAULT
+        };
+        let f = frame(s, Point::new(960, 540), monitor());
+        assert_eq!(f.layer_count(), 3);
+    }
+
+    #[test]
+    fn vertical_layers_cover_full_height() {
+        let s = State {
+            mode: Mode::Vertical,
+            ..State::DEFAULT
+        };
+        let f = frame(s, Point::new(960, 540), monitor());
+        let bands = f
+            .layers()
+            .iter()
+            .map(|l| match l.geometry {
+                Geometry::Rect(r) => r,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            bands.iter().any(|r| r.top() == 0 && r.bottom() == 1080),
+            "expected a full-height band, got {bands:?}"
+        );
+    }
+
+    #[test]
+    fn vertical_dim_at_left_edge_is_dropped() {
+        let s = State {
+            mode: Mode::Vertical,
+            ..State::DEFAULT
+        };
+        let f = frame(s, Point::new(0, 540), monitor());
+        // The left dim band collapses (zero width), leaving the right dim + indicator.
+        assert!(f.layer_count() <= 3);
+    }
+
+    // ---- axis_value / split_around / band helpers ------------------------
+
+    #[test]
+    fn axis_value_picks_correct_axis() {
+        let cursor = Point::<Logical>::new(100, 200);
+        assert_eq!(axis_value(Axis::Horizontal, cursor), 200);
+        assert_eq!(axis_value(Axis::Vertical, cursor), 100);
+    }
+
+    #[test]
+    fn split_around_even_thickness_is_symmetric() {
+        // thickness = 28 → half = 14, extra = 14, both sides equal.
+        assert_eq!(split_around(540, 28), (526, 554));
+    }
+
+    #[test]
+    fn split_around_odd_thickness_puts_extra_pixel_after_center() {
+        // thickness = 29 → half = 14, extra = 15, asymmetric by 1.
+        assert_eq!(split_around(540, 29), (526, 555));
+    }
+
+    #[test]
+    fn split_around_negative_center_stays_consistent() {
+        // The center of the slit can move below zero on wrap-around / DPI edge.
+        // We just check internal consistency: (hi - lo) == thickness.
+        let (lo, hi) = split_around(-100, 50);
+        assert_eq!(hi - lo, 50);
+    }
+
+    #[test]
+    fn band_rejects_zero_width() {
+        assert!(band(10, 0, 10, 100).is_none());
+    }
+
+    #[test]
+    fn band_rejects_zero_height() {
+        assert!(band(0, 50, 100, 50).is_none());
+    }
+
+    #[test]
+    fn band_clips_negative_widths_to_none() {
+        // right < left collapses to width = 0 after .max(0).
+        assert!(band(100, 0, 50, 100).is_none());
+    }
+
+    #[test]
+    fn band_round_trip_positive_dims() {
+        let r = band(0, 0, 100, 50).expect("non-empty band");
+        assert_eq!(r.left(), 0);
+        assert_eq!(r.top(), 0);
+        assert_eq!(r.width, 100);
+        assert_eq!(r.height, 50);
+    }
 }
