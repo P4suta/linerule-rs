@@ -29,7 +29,7 @@ cargo_metadata = "0.18"
 clap = { version = "4", features = ["derive"] }
 
 # Utilities
-directories = "5"
+directories = "6"
 embed-resource = "3"
 
 # Dev-only
