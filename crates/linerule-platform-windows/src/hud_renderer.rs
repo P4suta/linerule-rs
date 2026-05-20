@@ -174,6 +174,8 @@ fn ceil_to_u32(v: f32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::{ceil_to_u32, size_to_centi};
 
     #[test]
@@ -200,5 +202,46 @@ mod tests {
         assert_eq!(ceil_to_u32(-1.0), 0);
         assert_eq!(ceil_to_u32(f32::NAN), 0);
         assert_eq!(ceil_to_u32(f32::INFINITY), 0);
+    }
+
+    proptest! {
+        /// `ceil_to_u32` は任意の f32 入力に対し panic せず u32 を返す。
+        /// NaN / Inf / 負値 / u32 範囲超え でも安全。
+        #[test]
+        fn ceil_to_u32_is_total(v in any::<f32>()) {
+            let _ = ceil_to_u32(v); // not panicking is the assertion
+        }
+
+        /// 有限の非負 f32 (u32 範囲内) は ceil の結果と一致する。
+        #[test]
+        fn ceil_to_u32_matches_ceil_for_well_formed_input(v in 0.0_f32..=(u32::MAX as f32 - 1.0)) {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss,
+                reason = "test scope, v は 0..u32::MAX 範囲内の有限値で proptest が保証")]
+            let expected = v.ceil() as u32;
+            prop_assert_eq!(ceil_to_u32(v), expected);
+        }
+
+        /// NaN / 負値 / 負無限 は 0 に clamp される。
+        #[test]
+        fn ceil_to_u32_invalid_returns_zero(v in -1.0e10_f32..-0.001_f32) {
+            prop_assert_eq!(ceil_to_u32(v), 0);
+        }
+
+        /// `size_to_centi` は size * 100.0 round に等しい (整数 size の場合)。
+        /// 非整数 size の場合は f32 表現誤差で稀に処理系依存になるが、整数
+        /// 0..=327 (327 * 100 = 32700 で u16 範囲) で確認する。
+        #[test]
+        fn size_to_centi_is_proportional(s in 0u32..=327u32) {
+            let f = s as f32;
+            prop_assert_eq!(size_to_centi(f), s * 100);
+        }
+
+        /// 任意の有限非負 size でも panic しない。
+        #[test]
+        fn size_to_centi_is_total_for_nonneg_finite(
+            s in 0.0_f32..=(u32::MAX as f32 / 100.0 - 1.0)
+        ) {
+            let _ = size_to_centi(s); // not panicking
+        }
     }
 }

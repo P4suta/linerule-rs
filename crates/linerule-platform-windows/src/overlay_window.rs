@@ -218,3 +218,84 @@ impl Drop for OverlayWindow {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! `OverlayWindow::new` 自体は HWND 作成を伴い Windows 環境必須なので、
+    //! ここでは pure const `OVERLAY_EX_STYLE` の bit pattern を検証する。
+    //! ex-style の組み合わせは PR で簡単に変わるため、各 flag が確実に立って
+    //! いることを test で固定する (ADR-0003 系: Win32 設計判断の test 化)。
+
+    use super::*;
+
+    #[test]
+    fn overlay_ex_style_contains_layered() {
+        assert_ne!(
+            OVERLAY_EX_STYLE.0 & WS_EX_LAYERED.0,
+            0,
+            "OVERLAY_EX_STYLE must include WS_EX_LAYERED (DComp per-pixel alpha)"
+        );
+    }
+
+    #[test]
+    fn overlay_ex_style_contains_no_redirection_bitmap() {
+        assert_ne!(
+            OVERLAY_EX_STYLE.0 & WS_EX_NOREDIRECTIONBITMAP.0,
+            0,
+            "OVERLAY_EX_STYLE must include WS_EX_NOREDIRECTIONBITMAP (skip DWM redirection)"
+        );
+    }
+
+    #[test]
+    fn overlay_ex_style_contains_transparent() {
+        assert_ne!(
+            OVERLAY_EX_STYLE.0 & WS_EX_TRANSPARENT.0,
+            0,
+            "OVERLAY_EX_STYLE must include WS_EX_TRANSPARENT (click-through)"
+        );
+    }
+
+    #[test]
+    fn overlay_ex_style_contains_no_activate() {
+        assert_ne!(
+            OVERLAY_EX_STYLE.0 & WS_EX_NOACTIVATE.0,
+            0,
+            "OVERLAY_EX_STYLE must include WS_EX_NOACTIVATE (no focus steal)"
+        );
+    }
+
+    #[test]
+    fn overlay_ex_style_contains_tool_window() {
+        assert_ne!(
+            OVERLAY_EX_STYLE.0 & WS_EX_TOOLWINDOW.0,
+            0,
+            "OVERLAY_EX_STYLE must include WS_EX_TOOLWINDOW (Alt+Tab/taskbar exclusion)"
+        );
+    }
+
+    #[test]
+    fn overlay_ex_style_contains_topmost() {
+        assert_ne!(
+            OVERLAY_EX_STYLE.0 & WS_EX_TOPMOST.0,
+            0,
+            "OVERLAY_EX_STYLE must include WS_EX_TOPMOST (always on top)"
+        );
+    }
+
+    /// `OVERLAY_EX_STYLE` には 6 つの WS_EX_* フラグだけが立っている。
+    /// 余計な flag が混入していないか (例: 誤って WS_EX_APPWINDOW を加えると
+    /// taskbar に出てしまう) を XOR check で監視する。
+    #[test]
+    fn overlay_ex_style_has_no_unintended_flags() {
+        let expected = WS_EX_LAYERED.0
+            | WS_EX_TRANSPARENT.0
+            | WS_EX_NOREDIRECTIONBITMAP.0
+            | WS_EX_NOACTIVATE.0
+            | WS_EX_TOOLWINDOW.0
+            | WS_EX_TOPMOST.0;
+        assert_eq!(
+            OVERLAY_EX_STYLE.0, expected,
+            "OVERLAY_EX_STYLE has unexpected extra flags"
+        );
+    }
+}

@@ -152,8 +152,10 @@ pub(crate) fn decompose(layer: Layer) -> (ScreenRect<Logical>, Rgba) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use linerule_core::Point;
+    use proptest::prelude::*;
+
+    use super::*;
 
     #[test]
     fn decompose_round_trips_layer_into_constructor_args() {
@@ -180,5 +182,40 @@ mod tests {
         let (r, _) = decompose(Layer::solid_rect(rect, color));
         assert_eq!(r.left(), -500);
         assert_eq!(r.top(), -200);
+    }
+
+    proptest! {
+        /// 任意の `(rect, color)` で `decompose(Layer::solid_rect(rect, color))`
+        /// が `(rect, color)` をそのまま返す (lossless round-trip)。
+        #[test]
+        fn decompose_round_trip_is_lossless(
+            x in -10_000i32..10_000,
+            y in -10_000i32..10_000,
+            w in 0u32..10_000,
+            h in 0u32..10_000,
+            r in any::<u8>(),
+            g in any::<u8>(),
+            b in any::<u8>(),
+            a in any::<u8>(),
+        ) {
+            let rect = ScreenRect::new(Point::new(x, y), w, h);
+            let color = Rgba::new(r, g, b, a);
+            let (back_rect, back_color) = decompose(Layer::solid_rect(rect, color));
+            prop_assert_eq!(back_rect, rect);
+            prop_assert_eq!(back_color, color);
+        }
+
+        /// `decompose` は negative coord + zero-size rect でも panic しない。
+        #[test]
+        fn decompose_handles_pathological_rect(
+            x in i32::MIN..i32::MAX,
+            y in i32::MIN..i32::MAX,
+        ) {
+            let rect = ScreenRect::new(Point::new(x, y), 0, 0);
+            let layer = Layer::solid_rect(rect, Rgba::new(0, 0, 0, 0));
+            let (back_rect, _) = decompose(layer);
+            prop_assert_eq!(back_rect.left(), x);
+            prop_assert_eq!(back_rect.top(), y);
+        }
     }
 }
