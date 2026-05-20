@@ -50,8 +50,8 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
 /// # Errors
 /// 各サブコマンドが失敗したとき。
 pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
-    match cli.command.unwrap_or(Command::Run) {
-        Command::Run => run_overlay(),
+    match cli.command.unwrap_or(Command::Run { duration_ms: None }) {
+        Command::Run { duration_ms } => run_overlay(duration_ms),
         Command::Diagnostics {
             dry_run,
             last_crash,
@@ -82,10 +82,12 @@ struct DiagnosticsArgs {
 }
 
 #[cfg(target_os = "windows")]
-fn run_overlay() -> Result<()> {
+fn run_overlay(duration_ms: Option<u64>) -> Result<()> {
+    use std::time::Duration;
+
     use linerule_core::UserConfig;
     use linerule_platform_windows::{
-        OverlayWindow, RenderClock, monitor_info, run_message_pump, set_dpi_aware,
+        AutoQuitTimer, OverlayWindow, RenderClock, monitor_info, run_message_pump, set_dpi_aware,
     };
 
     // 最初に DPI awareness を Per-Monitor V2 に設定する。Window 作成前に呼ぶ
@@ -100,19 +102,23 @@ fn run_overlay() -> Result<()> {
     // overlay HWND がモニタ境界を跨いで slit を引けるようにする。
     let monitor = monitor_info::virtual_screen_bounds()?;
 
-    // Drop order が重要: pacer (`_clock`) は overlay HWND に `PostMessageW` を
-    // 投げ続けるので、overlay HWND が破棄される前に pacer を止める必要がある。
-    // Rust の逆順 Drop（後に宣言した変数が先に Drop される）を活かすため、
-    // overlay → _clock の順に変数を宣言する。
+    // Drop order が重要: 各 thread (`_clock`, `_auto_quit`) は overlay HWND に
+    // `PostMessageW` を投げる可能性があるので、overlay HWND が破棄される前に
+    // thread を join する必要がある。Rust の逆順 Drop を活かすため
+    // overlay → _clock → _auto_quit の順に宣言する。
     let mut overlay = OverlayWindow::new(monitor, config.hud)?;
     overlay.attach_dcomp()?;
     overlay.register_hotkeys(&config.hotkeys, config.input.tap_step)?;
     let _clock = RenderClock::spawn(overlay.hwnd())?;
+    let _auto_quit = duration_ms
+        .map(|ms| AutoQuitTimer::spawn(overlay.hwnd(), Duration::from_millis(ms)))
+        .transpose()?;
 
     tracing::info!(
         cycle_mode = config.hotkeys.cycle_mode,
         toggle_visible = config.hotkeys.toggle_visible,
         quit = config.hotkeys.quit,
+        duration_ms = duration_ms.unwrap_or(0),
         "overlay running; press Ctrl+Alt+R to cycle modes, Ctrl+Alt+Q to quit"
     );
     run_message_pump()?;
@@ -120,7 +126,7 @@ fn run_overlay() -> Result<()> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn run_overlay() -> Result<()> {
+fn run_overlay(_duration_ms: Option<u64>) -> Result<()> {
     anyhow::bail!("`linerule run` is Windows-only");
 }
 
