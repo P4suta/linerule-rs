@@ -30,6 +30,7 @@ cargo_metadata = "0.23"
 
 # CLI / config
 clap = { version = "4", features = ["derive"] }
+criterion = { version = "0.5", features = ["html_reports"] }
 
 # Utilities
 directories = "6"
