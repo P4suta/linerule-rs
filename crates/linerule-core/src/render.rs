@@ -37,8 +37,8 @@ pub fn frame(state: State, cursor: Point<Logical>, monitor: ScreenRect<Logical>)
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Axis {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Axis {
     Horizontal,
     Vertical,
 }
@@ -70,7 +70,7 @@ fn mask_color(config: OverlayConfig) -> Rgba {
         .with_alpha(config.opacity.to_perceptual_byte())
 }
 
-const fn axis_value(axis: Axis, cursor: Point<Logical>) -> i32 {
+pub(crate) const fn axis_value(axis: Axis, cursor: Point<Logical>) -> i32 {
     match axis {
         Axis::Horizontal => cursor.y,
         Axis::Vertical => cursor.x,
@@ -78,7 +78,7 @@ const fn axis_value(axis: Axis, cursor: Point<Logical>) -> i32 {
 }
 
 /// Cursor-anchored slit split: returns `(slit_lo, slit_hi)` along the axis.
-const fn split_around(center: i32, thickness: i32) -> (i32, i32) {
+pub(crate) const fn split_around(center: i32, thickness: i32) -> (i32, i32) {
     let half = thickness / 2;
     let extra = thickness - half;
     (center - half, center + extra)
@@ -119,7 +119,7 @@ fn dim_half(
 /// Construct a clipped rectangle from `(left, top, right, bottom)`, returning
 /// `None` when the resulting width or height is zero (after clipping against
 /// the monitor edge).
-fn band(left: i32, top: i32, right: i32, bottom: i32) -> Option<ScreenRect<Logical>> {
+pub(crate) fn band(left: i32, top: i32, right: i32, bottom: i32) -> Option<ScreenRect<Logical>> {
     let width = u32::try_from((right - left).max(0)).ok()?;
     let height = u32::try_from((bottom - top).max(0)).ok()?;
     if width == 0 || height == 0 {

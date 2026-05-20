@@ -137,7 +137,7 @@ impl CompositionRenderer {
 
 /// `Layer` を (rect, color) に分解する純粋関数。`Brush::Solid` / `Geometry::Rect`
 /// 以外は将来拡張点。
-fn decompose(layer: Layer) -> (ScreenRect<Logical>, Rgba) {
+pub(crate) fn decompose(layer: Layer) -> (ScreenRect<Logical>, Rgba) {
     let Geometry::Rect(rect) = layer.geometry;
     let Brush::Solid(color) = layer.brush;
     (rect, color)

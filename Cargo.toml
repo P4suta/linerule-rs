@@ -19,6 +19,9 @@ authors = ["linerule contributors"]
 [workspace.dependencies]
 anyhow = "1"
 
+# Dev-only — testing
+assert_cmd = "2"
+
 # Bitflag DSL (Modifiers)
 bitflags = "2"
 
@@ -31,8 +34,8 @@ clap = { version = "4", features = ["derive"] }
 # Utilities
 directories = "6"
 embed-resource = "3"
-
-# Dev-only
+insta = { version = "1", features = ["yaml", "json", "redactions"] }
+predicates = "3"
 proptest = "1"
 
 # Serialization / errors
@@ -45,6 +48,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt", "registry"] }
+tracing-test = "0.2"
 uuid = { version = "1", features = ["v4", "fast-rng", "serde"] }
 # Win32 / COM
 windows = "0.62"

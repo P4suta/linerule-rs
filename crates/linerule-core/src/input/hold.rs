@@ -245,15 +245,15 @@ pub const fn compute_next_step(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Classification {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Classification {
     AccelRepeat,
     SlowRepeat,
     AwaitRelease { undo_on_long_press: OverlayAction },
     OneShot,
 }
 
-const fn classify(action: OverlayAction) -> Classification {
+pub(crate) const fn classify(action: OverlayAction) -> Classification {
     use OverlayAction as A;
     match action {
         A::BumpThickness(_) | A::BumpOpacity(_) => Classification::AccelRepeat,
@@ -265,7 +265,7 @@ const fn classify(action: OverlayAction) -> Classification {
     }
 }
 
-const fn with_magnitude(action: OverlayAction, magnitude: i32) -> OverlayAction {
+pub(crate) const fn with_magnitude(action: OverlayAction, magnitude: i32) -> OverlayAction {
     use OverlayAction as A;
     match action {
         A::BumpThickness(d) => A::BumpThickness(d.saturating_mul(magnitude)),
@@ -274,7 +274,7 @@ const fn with_magnitude(action: OverlayAction, magnitude: i32) -> OverlayAction 
     }
 }
 
-fn duration_between(started_at_ms: i64, now_ms: i64) -> Duration {
+pub(crate) fn duration_between(started_at_ms: i64, now_ms: i64) -> Duration {
     let diff = now_ms.saturating_sub(started_at_ms).max(0);
     Duration::from_millis(u64::try_from(diff).unwrap_or(0))
 }
