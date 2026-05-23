@@ -18,8 +18,12 @@ use crate::{
     state::{Mode, State},
 };
 
-const INDICATOR_W: u32 = 18;
-const INDICATOR_H: u32 = 18;
+// Mode-aware indicator: a slim bar oriented along the active axis (horizontal
+// mode → 18×4 horizontal bar, vertical mode → 4×18 vertical bar). Matches the
+// C# implementation's `IndicatorLong` / `IndicatorShort` convention so the
+// user can tell the axis at a glance from the indicator alone.
+const INDICATOR_LONG: u32 = 18;
+const INDICATOR_SHORT: u32 = 4;
 const INDICATOR_MARGIN: i32 = 12;
 
 /// Build the frame for the current tick.
@@ -84,7 +88,7 @@ fn slit_frame(
     if let Some(layer) = dim_half(axis, monitor, DimSide::After, after, mask) {
         layers.push(layer);
     }
-    layers.push(indicator_layer(monitor));
+    layers.push(indicator_layer(axis, monitor));
     OverlayFrame::from_layers(layers)
 }
 
@@ -152,13 +156,17 @@ pub(crate) fn band(left: i32, top: i32, right: i32, bottom: i32) -> Option<Scree
     Some(ScreenRect::new(Point::new(left, top), width, height))
 }
 
-fn indicator_layer(monitor: ScreenRect<Logical>) -> Layer {
-    let w_i32 = i32::try_from(INDICATOR_W).unwrap_or(i32::MAX);
+fn indicator_layer(axis: Axis, monitor: ScreenRect<Logical>) -> Layer {
+    let (width, height) = match axis {
+        Axis::Horizontal => (INDICATOR_LONG, INDICATOR_SHORT),
+        Axis::Vertical => (INDICATOR_SHORT, INDICATOR_LONG),
+    };
+    let w_i32 = i32::try_from(width).unwrap_or(i32::MAX);
     let x = monitor.right() - INDICATOR_MARGIN - w_i32;
     let y = monitor.top() + INDICATOR_MARGIN;
     let alpha = Opacity::INDICATOR_DEFAULT.to_perceptual_byte();
     Layer::solid_rect(
-        ScreenRect::new(Point::new(x, y), INDICATOR_W, INDICATOR_H),
+        ScreenRect::new(Point::new(x, y), width, height),
         Rgba::WHITE.with_alpha(alpha),
     )
 }
@@ -342,5 +350,42 @@ mod tests {
         assert_eq!(r.top(), 0);
         assert_eq!(r.width, 100);
         assert_eq!(r.height, 50);
+    }
+
+    // ---- mode-aware indicator shape (cs parity) --------------------------
+
+    fn indicator_rect_for(mode: Mode) -> ScreenRect<Logical> {
+        let s = State {
+            mode,
+            ..State::DEFAULT
+        };
+        let f = frame(s, Point::new(960, 540), monitor());
+        let last = f.layers().last().expect("indicator layer present");
+        match last.geometry {
+            Geometry::Rect(r) => r,
+        }
+    }
+
+    #[test]
+    fn indicator_in_horizontal_mode_is_18x4() {
+        let r = indicator_rect_for(Mode::Horizontal);
+        assert_eq!(r.width, INDICATOR_LONG);
+        assert_eq!(r.height, INDICATOR_SHORT);
+    }
+
+    #[test]
+    fn indicator_in_vertical_mode_is_4x18() {
+        let r = indicator_rect_for(Mode::Vertical);
+        assert_eq!(r.width, INDICATOR_SHORT);
+        assert_eq!(r.height, INDICATOR_LONG);
+    }
+
+    #[test]
+    fn indicator_anchored_top_right_with_margin() {
+        let m = monitor();
+        let r = indicator_rect_for(Mode::Horizontal);
+        let w_i32 = i32::try_from(r.width).unwrap();
+        assert_eq!(r.left(), m.right() - INDICATOR_MARGIN - w_i32);
+        assert_eq!(r.top(), m.top() + INDICATOR_MARGIN);
     }
 }
