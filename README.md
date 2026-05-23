@@ -79,6 +79,13 @@ just publish-windows-cross  # 反復用のクロスビルド (shippable では�
 
 shippable な `linerule.exe` は CI の windows-latest runner からのみ produce される（ABI / SEH 事故回避のため）。
 
+### 配布物
+
+GitHub Release では tag push のたびに以下が attach される (`.github/workflows/release-assets.yml`、ADR-0010 / ADR-0011)。
+
+- `linerule-vX.Y.Z-win-x64.exe` — `cargo build --release -p linerule-app` の native Windows ビルド (Phase J 以降 1 binary のみ、PDB / `dist-dev` profile は廃止)
+- `linerule-vX.Y.Z-sbom.cdx.json` — `cargo-sbom` が生成する CycloneDX 1.6 JSON 形式の Software Bill of Materials。`linerule-app` の依存閉包をスキャナで直接読める
+
 ### ログとクラッシュダンプ
 
 ランタイム時に `linerule.exe` と同じディレクトリの `events.jsonl.YYYY-MM-DD` へ tracing JSON Lines を流す（portable 運用、ADR-0011）。panic 時は同階層に `crash-<run_id>-<unix_ms>.json` が出る。

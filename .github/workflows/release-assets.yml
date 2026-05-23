@@ -42,17 +42,35 @@ jobs:
       - name: cargo build --release (shipping profile, panic=abort, strip=symbols)
         run: cargo build --release -p linerule-app
 
+      - name: install cargo-sbom (CycloneDX generator)
+        shell: pwsh
+        run: cargo install cargo-sbom --locked --version "^0.10"
+
+      - name: generate SBOM (CycloneDX 1.6 JSON)
+        shell: pwsh
+        run: |-
+          $tag = "${{ github.event.release.tag_name || inputs.tag }}"
+          # 1 binary 配布 (Phase J、ADR-0011) のため linerule-app の依存閉包のみを
+          # 対象にする (workspace 全体だと xtask 等が混じる)。CycloneDX 1.6 JSON は
+          # GitHub Actions Dependency Submission / SBOM scanner 全般で受理される。
+          cargo sbom --output-format=cyclone_dx_json_1_6 --cargo-package linerule-app `
+            > "linerule-${tag}-sbom.cdx.json"
+
       - name: rename artifact with tag
         shell: pwsh
         run: |
           $tag = "${{ github.event.release.tag_name || inputs.tag }}"
           Copy-Item target/release/linerule.exe "linerule-${tag}-win-x64.exe"
 
-      - name: upload asset to GitHub Release
+      - name: upload assets to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |-
           $tag = "${{ github.event.release.tag_name || inputs.tag }}"
-          # `--clobber` で 2 回目以降の upload を冪等にする (manual retry / race condition 対策)
-          gh release upload $tag "linerule-${tag}-win-x64.exe" --clobber
+          # `--clobber` で 2 回目以降の upload を冪等にする (manual retry / race condition 対策)。
+          # SBOM も Release asset として同 tag に添付し、scanner からの直リンクを可能にする。
+          gh release upload $tag `
+            "linerule-${tag}-win-x64.exe" `
+            "linerule-${tag}-sbom.cdx.json" `
+            --clobber
