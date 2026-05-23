@@ -109,6 +109,7 @@ just crash-latest                   # 最新クラッシュダンプ
 
 - [`docs/adr/0001-port-from-csharp.md`](docs/adr/0001-port-from-csharp.md): 旧 C# 版 (`linerule-cs`) からの Rust 全面リライト判断、旧 ADR 処遇マッピング
 - [`docs/adr/0002-architecture-principles.md`](docs/adr/0002-architecture-principles.md): 18 個の merge ブロッカー原則（一方向依存 / RAII / exhaustive match / unsafe 局所化 / `#[non_exhaustive]` を使わない / 等）
+- [`docs/roadmap/phase-eta.md`](docs/roadmap/phase-eta.md): Phase η の draft ロードマップ（code signing / Winget / i18n / accessibility 候補と Out of Scope の整理）
 
 ## ライセンス
 
