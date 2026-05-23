@@ -27,7 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::cursor_tracker;
 use crate::error::Result;
-use crate::messages::{HTTRANSPARENT, WM_APP_QUIT_TIMER, WM_APP_TICK};
+use crate::messages::{HTTRANSPARENT, WM_APP_QUIT_TIMER, WM_APP_REASSERT_TOPMOST, WM_APP_TICK};
 use crate::overlay_state::OverlayWndState;
 use crate::win32_ffi;
 
@@ -98,6 +98,19 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> Option
             // `PostQuitMessage(0)` を呼ぶ。
             tracing::info!(parent: state.span(), "auto-quit timer fired (--duration-ms)");
             win32_ffi::post_quit(0);
+            Some(LRESULT(0))
+        },
+        WM_APP_REASSERT_TOPMOST => {
+            // ForegroundHook の callback (OS hook thread) から PostMessage で
+            // 届く。実 SetWindowPos(HWND_TOPMOST) は UI thread 必須なのでここで
+            // 実行する (ADR-0012)。
+            if let Err(e) = win32_ffi::accessibility::reassert_topmost(hwnd) {
+                tracing::warn!(parent: state.span(), error = %e,
+                    "reassert_topmost failed (foreground hook)");
+            } else {
+                tracing::trace!(parent: state.span(),
+                    "topmost re-asserted after foreground change");
+            }
             Some(LRESULT(0))
         },
         WM_PAINT => {

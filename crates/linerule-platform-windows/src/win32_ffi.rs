@@ -13,6 +13,9 @@
 pub mod core;
 
 #[cfg(any(doc, target_os = "windows"))]
+pub mod accessibility;
+
+#[cfg(any(doc, target_os = "windows"))]
 pub mod dwrite;
 
 #[cfg(any(doc, target_os = "windows"))]

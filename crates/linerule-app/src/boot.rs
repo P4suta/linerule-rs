@@ -97,7 +97,8 @@ fn run_overlay(
     use linerule_core::input::tick::TickWorld;
     use linerule_core::{State, UserConfig};
     use linerule_platform_windows::{
-        AutoQuitTimer, OverlayWindow, RenderClock, monitor_info, run_message_pump, set_dpi_aware,
+        AutoQuitTimer, ForegroundHook, OverlayWindow, RenderClock, monitor_info, run_message_pump,
+        set_dpi_aware,
     };
 
     // 最初に DPI awareness を Per-Monitor V2 に設定する。Window 作成前に呼ぶ
@@ -123,13 +124,23 @@ fn run_overlay(
         })
         .unwrap_or(TickWorld::INITIAL);
 
-    // Drop order が重要: 各 thread (`_clock`, `_auto_quit`) は overlay HWND に
-    // `PostMessageW` を投げる可能性があるので、overlay HWND が破棄される前に
-    // thread を join する必要がある。Rust の逆順 Drop を活かすため
-    // overlay → _clock → _auto_quit の順に宣言する。
+    // Drop order が重要: 各 thread (`_clock`, `_auto_quit`) と `_foreground_hook`
+    // の callback は overlay HWND に `PostMessageW` を投げる可能性があるので、
+    // overlay HWND が破棄される前に解除/join する必要がある。Rust の逆順 Drop
+    // を活かすため overlay → _foreground_hook → _clock → _auto_quit の順に宣言する。
     let mut overlay = OverlayWindow::new_with_initial_world(monitor, config.hud, initial_world)?;
     overlay.attach_dcomp()?;
     overlay.register_hotkeys(&config.hotkeys, config.input.tap_step)?;
+    // Alt+Tab 等で他アプリが前景化した後も overlay を最前面に保つ (ADR-0012)。
+    // 失敗しても fatal にせず log のみ — overlay 自体は WS_EX_TOPMOST で十分
+    // 多くの場合に最前面が保てる。
+    let _foreground_hook = match ForegroundHook::install(overlay.hwnd()) {
+        Ok(h) => Some(h),
+        Err(e) => {
+            tracing::warn!(error = %e, "ForegroundHook install failed; continuing without z-order re-assertion");
+            None
+        },
+    };
     let _clock = RenderClock::spawn(overlay.hwnd())?;
     let _auto_quit = duration_ms
         .map(|ms| AutoQuitTimer::spawn(overlay.hwnd(), Duration::from_millis(ms)))
