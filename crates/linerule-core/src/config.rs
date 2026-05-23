@@ -340,3 +340,30 @@ impl Default for UserConfig {
         Self::DEFAULT
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // cs parity: HUD's base opacity is 0.875. Pinning this default closes a
+    // mutation-gate hole — `HudConfig::DEFAULT.base_opacity` is otherwise only
+    // sampled by the platform layer's render path, which mutation testing can
+    // perturb without any in-process test catching the regression.
+    #[test]
+    fn hud_default_base_opacity_is_pinned_at_cs_value() {
+        assert!((HudConfig::DEFAULT.base_opacity - 0.875).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn hud_default_fade_decay_px_is_pinned() {
+        assert!((HudConfig::DEFAULT.fade_decay_px - 120.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn hud_default_telemetry_refresh_is_pinned_at_200ms() {
+        assert_eq!(
+            HudConfig::DEFAULT.telemetry_refresh,
+            Duration::from_millis(200)
+        );
+    }
+}
