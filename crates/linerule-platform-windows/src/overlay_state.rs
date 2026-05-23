@@ -107,6 +107,10 @@ pub struct OverlayWndState {
     /// `push_notification` で追加、`live_notifications` で expire を除いた
     /// snapshot を取り出す。tick 開始時に expire 済みを drain する想定。
     notifications: RefCell<Vec<HudNotification>>,
+    /// HUD telemetry tracker (`tick_p99_ms` / `frames_dropped` / `commit_timeouts`)。
+    /// `wndproc::apply_tick` で record_tick / record_timeout を呼び、`RefreshHud`
+    /// effect で snapshot を取って `hud_frame()` の telemetry 引数に渡す。
+    frame_timing: RefCell<crate::frame_timing::FrameTimingTracker>,
     /// プロセス起動時刻。`tick::step` に渡す `now_ms` を計算するための原点。
     start_time: Instant,
 }
@@ -145,8 +149,16 @@ impl OverlayWndState {
             hotkeys: RefCell::new(HotkeyMap::DEFAULT),
             hotkey_conflicts: RefCell::new(Vec::new()),
             notifications: RefCell::new(Vec::new()),
+            frame_timing: RefCell::new(crate::frame_timing::FrameTimingTracker::new()),
             start_time: Instant::now(),
         }
+    }
+
+    /// HUD telemetry tracker への可変アクセス。`wndproc` から record_tick /
+    /// record_timeout / snapshot を呼ぶ。
+    #[must_use]
+    pub fn frame_timing(&self) -> &RefCell<crate::frame_timing::FrameTimingTracker> {
+        &self.frame_timing
     }
 
     /// 短寿命 toast を queue する。`lifetime_ms` 経過後に `live_notifications`

@@ -30,6 +30,7 @@ pub mod cursor_tracker;
 pub mod error;
 pub mod ex_style_snapshot;
 pub mod foreground_hook;
+pub mod frame_timing;
 pub mod hud_renderer;
 pub mod messages;
 pub mod monitor_info;
