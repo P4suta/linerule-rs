@@ -92,8 +92,12 @@ pub struct OverlayWndState {
     /// hotkey id → action の lookup。`register_hotkeys` で一度埋めた後、
     /// WndProc 側は読み取りのみ。
     id_to_action: RefCell<HashMap<i32, OverlayAction>>,
-    /// 現在 overlay が掛かっている monitor の bounds（PR 3 で multi-monitor 化）。
-    monitor: ScreenRect<Logical>,
+    /// 現在 overlay が active な monitor の bounds。tick ごとに cursor 位置から
+    /// `monitor_info::bounds_for_point` で解決し直され、active monitor が変
+    /// わったら `set_monitor` で更新される (issue #46)。HUD パネル配置の起点
+    /// として `hud_frame()` に渡される。`RefCell` は WndProc 単一 UI thread 内
+    /// で borrow される前提 (overlay_state.rs 冒頭の RefCell 不変条件参照)。
+    monitor: RefCell<ScreenRect<Logical>>,
     /// HUD の見た目・タイミング設定。
     hud_config: HudConfig,
     /// `RegisterHotKey` 経由で確定したユーザー向け chord 表示。`hud_frame()` の
@@ -144,7 +148,7 @@ impl OverlayWndState {
             hotkey_sender: sender,
             hotkey_inbox: receiver,
             id_to_action: RefCell::new(HashMap::new()),
-            monitor,
+            monitor: RefCell::new(monitor),
             hud_config,
             hotkeys: RefCell::new(HotkeyMap::DEFAULT),
             hotkey_conflicts: RefCell::new(Vec::new()),
@@ -282,10 +286,17 @@ impl OverlayWndState {
         out
     }
 
-    /// 現在 monitor bounds（PR 3 で `RefCell` 化予定）。
+    /// 現在の active monitor bounds の snapshot。`ScreenRect` は `Copy` なので
+    /// 借用のたびに値を取り出して返す。
     #[must_use]
     pub fn monitor(&self) -> ScreenRect<Logical> {
-        self.monitor
+        *self.monitor.borrow()
+    }
+
+    /// active monitor bounds を上書きする。tick ごとに cursor 位置から解決した
+    /// 最新値を反映するために使う (issue #46)。
+    pub fn set_monitor(&self, monitor: ScreenRect<Logical>) {
+        *self.monitor.borrow_mut() = monitor;
     }
 
     /// HUD 設定を借りる。
@@ -318,7 +329,7 @@ impl core::fmt::Debug for OverlayWndState {
             .field("nchit_count", &self.nchit_count.load(Ordering::Relaxed))
             .field("click_count", &self.click_count.load(Ordering::Relaxed))
             .field("id_to_action.len", &self.id_to_action.borrow().len())
-            .field("monitor", &self.monitor)
+            .field("monitor", &self.monitor.borrow())
             .finish_non_exhaustive()
     }
 }
@@ -441,6 +452,16 @@ mod tests {
             conflicts[0].reason,
             HotkeyFailure::ChordParse(ChordError::Empty)
         ));
+    }
+
+    #[test]
+    fn set_monitor_replaces_returned_bounds() {
+        let s = fresh_state();
+        let initial = s.monitor();
+        let next = ScreenRect::new(Point::new(1920, 0), 2560, 1440);
+        assert_ne!(initial, next);
+        s.set_monitor(next);
+        assert_eq!(s.monitor(), next);
     }
 
     #[test]

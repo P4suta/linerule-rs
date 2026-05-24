@@ -28,6 +28,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::cursor_tracker;
 use crate::error::Result;
 use crate::messages::{HTTRANSPARENT, WM_APP_QUIT_TIMER, WM_APP_REASSERT_TOPMOST, WM_APP_TICK};
+use crate::monitor_info;
 use crate::overlay_state::OverlayWndState;
 use crate::win32_ffi;
 
@@ -145,6 +146,7 @@ fn wparam_as_hotkey_id(wparam: WPARAM) -> i32 {
 fn apply_tick(state: &OverlayWndState) -> Result<()> {
     let tick_start = std::time::Instant::now();
     let polled_cursor = cursor_tracker::poll();
+    follow_active_monitor(state, polled_cursor);
     let drained_hotkeys = state.drain_hotkeys();
     let now_ms = state.now_ms();
     let input = TickInput {
@@ -164,6 +166,36 @@ fn apply_tick(state: &OverlayWndState) -> Result<()> {
         .borrow_mut()
         .record_tick(elapsed, over_budget);
     result
+}
+
+/// cursor 位置から active monitor を解決し、現 cache と異なれば
+/// `state.set_monitor` で更新する (issue #46)。`bounds_for_point` は
+/// `MonitorFromPoint(MONITOR_DEFAULTTONEAREST)` 経由で remote desktop 等の
+/// 画面外 cursor にも fallback する。失敗時は warn だけ出して現状維持。
+fn follow_active_monitor(state: &OverlayWndState, polled_cursor: Option<Point<Logical>>) {
+    let Some(cursor) = polled_cursor else {
+        return;
+    };
+    match monitor_info::bounds_for_point(cursor) {
+        Ok(new_monitor) => {
+            if new_monitor != state.monitor() {
+                tracing::debug!(
+                    target: "monitor.follow",
+                    parent: state.span(),
+                    new_left = new_monitor.left(),
+                    new_top = new_monitor.top(),
+                    new_width = new_monitor.width,
+                    new_height = new_monitor.height,
+                    "active monitor changed"
+                );
+                state.set_monitor(new_monitor);
+            }
+        },
+        Err(e) => {
+            tracing::warn!(parent: state.span(), error = %e,
+                "bounds_for_point failed; keeping previous monitor");
+        },
+    }
 }
 
 /// elapsed が `RenderConfig::DEFAULT.warn_ratio * (1000 / refresh_hz)` を
