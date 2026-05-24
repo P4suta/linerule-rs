@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.1](https://github.com/P4suta/linerule-rs/compare/v0.4.0...v0.4.1) (2026-05-24)
+
+
+### Documentation
+
+* **mutation:** bump baseline to 288 caught ([#45](https://github.com/P4suta/linerule-rs/issues/45) device-lost helpers) ([#88](https://github.com/P4suta/linerule-rs/issues/88)) ([8d1db86](https://github.com/P4suta/linerule-rs/commit/8d1db867990fb6958d743c81a1de8c99a413b17f))
+
+
+### Build System
+
+* **deps:** Bump serde_json from 1.0.149 to 1.0.150 in the serde group across 1 directory ([#84](https://github.com/P4suta/linerule-rs/issues/84)) ([94cec8d](https://github.com/P4suta/linerule-rs/commit/94cec8d51cddea49e2da4ffc4da5edf70427d9ee))
+
 ## [0.4.0](https://github.com/P4suta/linerule-rs/compare/v0.3.0...v0.4.0) (2026-05-24)
 
 
