@@ -35,23 +35,31 @@ After a run, `target/mutants/` contains:
   just code that cargo-mutants couldn't perturb).
 - `mutants.out/timeout.txt` — tests that timed out under the mutant.
 
-## Baseline (cs-port residual cleanup — 2026-05-24)
+## Baseline (issue #45 device-lost helpers — 2026-05-24)
 
-Re-run after the cs-port residual cleanup series (#68–#74) added new code to
-`linerule-core` (`HudTelemetry` ADT + `hud_frame()` telemetry arg, mode-aware
-indicator bar, pinned `HudConfig` defaults). +12 viable mutants vs. Phase ε;
-all newly-generated mutants are caught without any new `// mutants: skip`
-annotation.
+Re-run after the issue #45 device-lost rebuild PR (#80) added two new pure
+helpers to `linerule-core::diagnostics`: `is_device_lost_hresult` and
+`record_device_lost_failure` (with the `DeviceLostOutcome` enum). +5 viable
+mutants vs. the prior cs-port baseline; all newly-generated mutants are caught
+by the table-driven and spot tests added in the same PR — no new
+`// mutants: skip` annotation needed.
 
 | Outcome     | Count | Notes                                                          |
 | ----------- | ----- | -------------------------------------------------------------- |
-| **caught**  | 283   | killed by the test suite (+12 vs. Phase ε)                     |
+| **caught**  | 288   | killed by the test suite (+5 vs. cs-port baseline)             |
 | **missed**  | **0** | gate baseline maintained                                       |
-| **unviable**| 45    | compile-failure mutants (not a real test gap, unchanged)       |
+| **unviable**| 46    | compile-failure mutants (+1 vs. cs-port baseline)              |
 | **timeout** | 0     | none                                                           |
-| **total**   | 328   | (+12 vs. Phase ε)                                              |
+| **total**   | 334   | (+6 vs. cs-port baseline)                                      |
 
-Viable kill ratio: **283 / 283 = 100%** (well above the ≥ 85% target).
+Viable kill ratio: **288 / 288 = 100%** (well above the ≥ 85% target).
+
+### cs-port residual cleanup baseline (2026-05-24) — historical
+
+Re-run after the cs-port residual cleanup series (#68–#74) added new code to
+`linerule-core` (`HudTelemetry` ADT + `hud_frame()` telemetry arg, mode-aware
+indicator bar, pinned `HudConfig` defaults). caught 283 / missed 0 / unviable
+45 / total 328.
 
 ### Phase ε baseline (2026-05-21) — historical
 
