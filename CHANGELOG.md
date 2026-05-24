@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.0](https://github.com/P4suta/linerule-rs/compare/v0.3.0...v0.4.0) (2026-05-24)
+
+
+### Features
+
+* **platform-windows:** follow active monitor for HUD panel placement ([#46](https://github.com/P4suta/linerule-rs/issues/46)) ([#78](https://github.com/P4suta/linerule-rs/issues/78)) ([382518d](https://github.com/P4suta/linerule-rs/commit/382518d85220bdeeedbd650d2cbd55ac5221e117))
+* **platform-windows:** handle WM_DPICHANGED for runtime DPI switch ([#44](https://github.com/P4suta/linerule-rs/issues/44)) ([#79](https://github.com/P4suta/linerule-rs/issues/79)) ([2044a35](https://github.com/P4suta/linerule-rs/commit/2044a3567097201c3c2e2ead27249384892cfd86))
+* **platform-windows:** rebuild renderer pipeline on device-lost HRESULT ([#45](https://github.com/P4suta/linerule-rs/issues/45)) ([#80](https://github.com/P4suta/linerule-rs/issues/80)) ([ad0f61d](https://github.com/P4suta/linerule-rs/commit/ad0f61d5a1a6be3a515551106ca38d3d9eb48a54))
+* **platform-windows:** wire HUD opacity via IDCompositionVisual3::SetOpacity2 ([#47](https://github.com/P4suta/linerule-rs/issues/47)) ([#76](https://github.com/P4suta/linerule-rs/issues/76)) ([c3a82e1](https://github.com/P4suta/linerule-rs/commit/c3a82e1b82cd911888678541a6155abd28729bee))
+
 ## [0.3.0](https://github.com/P4suta/linerule-rs/compare/v0.2.2...v0.3.0) (2026-05-24)
 
 
