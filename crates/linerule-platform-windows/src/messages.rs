@@ -19,6 +19,12 @@ pub const WM_APP_TICK: u32 = 0x8001;
 /// 自動化できる (Phase α GUI smoke test、ADR-0004 系)。
 pub const WM_APP_QUIT_TIMER: u32 = 0x8002;
 
+/// `ForegroundHook` (SetWinEventHook) が前景アプリ変更を検出したときに UI
+/// thread へ通知するメッセージ。hook の callback は OS の hook thread から
+/// 呼ばれるので、UI thread 側で `SetWindowPos(HWND_TOPMOST)` を実行するため
+/// `PostMessageW` 経由でディスパッチする (ADR-0012)。
+pub const WM_APP_REASSERT_TOPMOST: u32 = 0x8003;
+
 #[cfg(test)]
 mod tests {
     //! Pin the message constants against the Win32 SDK values.
@@ -54,7 +60,19 @@ mod tests {
     }
 
     #[test]
+    fn wm_app_reassert_topmost_is_inside_wm_app_band() {
+        const WM_APP: u32 = 0x8000;
+        const WM_APP_END: u32 = 0xBFFF;
+        assert!(
+            (WM_APP..=WM_APP_END).contains(&WM_APP_REASSERT_TOPMOST),
+            "WM_APP_REASSERT_TOPMOST = {WM_APP_REASSERT_TOPMOST:#x} outside [{WM_APP:#x}, {WM_APP_END:#x}]"
+        );
+    }
+
+    #[test]
     fn wm_app_messages_are_distinct() {
         assert_ne!(WM_APP_TICK, WM_APP_QUIT_TIMER);
+        assert_ne!(WM_APP_TICK, WM_APP_REASSERT_TOPMOST);
+        assert_ne!(WM_APP_QUIT_TIMER, WM_APP_REASSERT_TOPMOST);
     }
 }
