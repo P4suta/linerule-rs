@@ -17,7 +17,6 @@ use anyhow::{Context, Result};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::fmt::Subscriber;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -78,15 +77,6 @@ pub(crate) fn data_dir() -> Result<PathBuf> {
         .to_path_buf();
     Ok(dir)
 }
-
-// Hidden import 警告抑止（Subscriber は将来 builder 経由でも使うため）。
-#[allow(
-    dead_code,
-    reason = "Phase H 拡張で stderr fmt::Subscriber を直接組む可能性あり"
-)]
-const _: fn() = || {
-    let _: Option<Subscriber> = None;
-};
 
 #[cfg(test)]
 mod tests {

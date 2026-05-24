@@ -34,8 +34,8 @@ use std::time::Instant;
 
 use linerule_core::input::tick::TickWorld;
 use linerule_core::{
-    ChordError, ChordSpec, HotkeyMap, HudConfig, HudNotification, Logical, NotificationClass,
-    OverlayAction, ScreenRect,
+    ChordError, HotkeyMap, HudConfig, HudNotification, Logical, NotificationClass, OverlayAction,
+    ScreenRect,
 };
 use tracing::Span;
 
@@ -326,11 +326,6 @@ impl core::fmt::Debug for OverlayWndState {
 // `Sender` と `Receiver` が `Send + !Sync` であることから [`OverlayWndState`] は
 // 自動で `!Sync` になり、UI thread 越しの shared 参照を型レベルで防ぐ。
 // HWND の thread-affinity が型に伝わる狙い（ADR-0002 §7）。
-// `ChordSpec` は将来 [`HotkeyConflict`] 拡張で使うため import を維持。
-#[allow(dead_code, reason = "ChordSpec は HUD 表示拡張 (PR 2) で参照する")]
-const _: fn() = || {
-    let _: Option<ChordSpec> = None;
-};
 
 #[cfg(test)]
 mod tests {

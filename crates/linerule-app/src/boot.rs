@@ -103,9 +103,16 @@ fn run_overlay(
 
     // 最初に DPI awareness を Per-Monitor V2 に設定する。Window 作成前に呼ぶ
     // 必要があるため `OverlayWindow::new` より前に置く。失敗しても fatal には
-    // せず log のみ（既に dpi awareness が manifested 等のケース）。
+    // せず log のみ（既に dpi awareness が manifested 等のケース）。AppError
+    // 経由で class() に流して classify_and_log を経由させる (ADR-0013)。
+    // overlay handle がまだ無いのでこの時点では HUD push せず、後段で boot 完了
+    // 後に conflict / dpi failure を一括 push する経路に合流させる。
+    let mut early_recoverable: Vec<String> = Vec::new();
     if let Err(e) = set_dpi_aware() {
-        tracing::warn!(error = %e, "SetProcessDpiAwarenessContext failed; continuing with default awareness");
+        let app_err: crate::error::AppError = e.into();
+        if crate::error::classify_and_log(&app_err) == crate::error::RunDecision::Continue {
+            early_recoverable.push(format!("DPI awareness: {app_err}"));
+        }
     }
 
     let config = UserConfig::DEFAULT;
@@ -141,6 +148,16 @@ fn run_overlay(
             None
         },
     };
+
+    // boot 中に積み上がった recoverable errors を HUD notification として push
+    // する (ADR-0013、Phase H PR-E)。AppError::class() = Recoverable と判定された
+    // 項目をユーザーに HUD で 10 秒間 toast する。
+    for message in early_recoverable.drain(..) {
+        overlay
+            .state()
+            .push_notification(linerule_core::NotificationClass::Warn, message, 10_000);
+    }
+
     let _clock = RenderClock::spawn(overlay.hwnd())?;
     let _auto_quit = duration_ms
         .map(|ms| AutoQuitTimer::spawn(overlay.hwnd(), Duration::from_millis(ms)))

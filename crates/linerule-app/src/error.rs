@@ -26,14 +26,20 @@ use thiserror::Error;
 /// linerule-app の集約エラー型。core / platform / I/O / serde を同じ surface に
 /// まとめる。
 ///
-/// PR-C で型を導入、PR-E (HUD notification toast push) で `class()` を実際に
-/// 消費する。それまでは `dead_code` とみなされるため `#[allow]` で明示。
-#[derive(Debug, Error)]
-#[allow(
-    dead_code,
-    reason = "PR-E (HUD notification toast push) で消費する予定の aggregator 型。\
-              本 PR (PR-C) では型・From 変換・class() method だけを先に整備する"
+/// PR-C で型を導入し、PR-E (HUD notification toast push, ADR-0013) で
+/// `boot::run_overlay` のエラーパスから `class()` で分類して使う。
+/// `boot::run_overlay` は `cfg(target_os = "windows")` 限定なので Linux build
+/// では本型の caller が存在しない (test を除く)。`dead_code` allow は Linux
+/// だけに条件付与して、Windows build では実消費パスを保証する。
+#[cfg_attr(
+    not(target_os = "windows"),
+    allow(
+        dead_code,
+        reason = "Linux build では `boot::run_overlay` (caller) が cfg gate で消えるが、\
+                  Windows build では classify_and_log 経由で必ず消費される"
+    )
 )]
+#[derive(Debug, Error)]
 pub(crate) enum AppError {
     /// `linerule-core` 由来 (`CoreError` / `ChordError`)。
     #[error(transparent)]
@@ -54,10 +60,16 @@ impl AppError {
     /// 内部 error の `class()` に委譲する。`Io` / `Serde` は `Fatal` 既定 —
     /// CLI 経路で `diagnostics --last-crash` 等が失敗すると I/O エラーは
     /// `Fatal` (継続不能) として扱うのが自然。
-    #[allow(
-        dead_code,
-        reason = "PR-E (HUD notification toast push) で消費する予定。本 PR では\
-                  まだ caller がいない"
+    ///
+    /// Linux build では `classify_and_log` 自体が cfg gate で消えるため、
+    /// この method の唯一の caller がいなくなる (test を除く)。`dead_code` allow
+    /// を Linux 限定で付ける。
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(
+            dead_code,
+            reason = "Linux build では classify_and_log (caller) が cfg gate で消える"
+        )
     )]
     pub(crate) fn class(&self) -> ErrorClass {
         match self {
@@ -67,6 +79,41 @@ impl AppError {
             Self::Io(_) | Self::Serde(_) => ErrorClass::Fatal,
         }
     }
+}
+
+/// `AppError` を [`ErrorClass`] に応じて log + 必要なら HUD notification として
+/// 通知する helper。`Recoverable` は呼び出し側に「続行可能」を `Continue` で
+/// 伝え、`Fatal` / `ProgrammerError` は `Stop` を返す。HUD push 経路自体は
+/// 呼び出し側の closure で渡す (overlay handle が文脈依存のため)。ADR-0013 参照。
+#[cfg(target_os = "windows")]
+pub(crate) fn classify_and_log(err: &AppError) -> RunDecision {
+    let class = err.class();
+    match class {
+        ErrorClass::Recoverable => {
+            tracing::warn!(error = %err, class = "recoverable", "AppError classified recoverable; continuing");
+            RunDecision::Continue
+        },
+        ErrorClass::Fatal => {
+            tracing::error!(error = %err, class = "fatal", "AppError classified fatal");
+            RunDecision::Stop
+        },
+        ErrorClass::ProgrammerError => {
+            tracing::error!(error = %err, class = "programmer", "AppError classified as programmer error; this is a bug");
+            debug_assert!(false, "ProgrammerError reached classify_and_log: {err}");
+            RunDecision::Stop
+        },
+    }
+}
+
+/// [`classify_and_log`] の戻り値。`Continue` は HUD に push して続行、`Stop` は
+/// `?` 経由で main に bubble up することを期待する。
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RunDecision {
+    /// 続行可能 (Recoverable)。呼び出し側で HUD notification を push する。
+    Continue,
+    /// 中断 (Fatal / ProgrammerError)。呼び出し側で `Err(_)?` する。
+    Stop,
 }
 
 #[cfg(test)]
