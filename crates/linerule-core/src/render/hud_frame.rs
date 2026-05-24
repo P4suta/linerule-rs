@@ -104,6 +104,34 @@ pub enum NotificationClass {
     Error,
 }
 
+/// HUD telemetry の per-tick snapshot。`hud_frame()` の telemetry 行に表示する
+/// 3 指標を運ぶ純粋 ADT。platform 側 (`linerule-platform-windows::frame_timing`)
+/// が計測した値を core に値で渡す (ADR-0012、選択肢 c)。
+///
+/// cs `HudTelemetry.cs` と同じ意味論:
+/// - `tick_p99_ms`: 直近 N フレームの tick 経過時間の 99 パーセンタイル (ms)。
+/// - `frames_dropped`: render budget (`warn_ratio` × frame budget) を超えた tick の累計。
+/// - `commit_timeouts`: `IDCompositionDevice::Commit` 失敗 / timeout の累計。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct HudTelemetry {
+    /// 直近窓の p99 tick latency (ms)。
+    pub tick_p99_ms: f32,
+    /// budget 超過 frame の累計。
+    pub frames_dropped: u64,
+    /// dcomp commit 失敗の累計。
+    pub commit_timeouts: u64,
+}
+
+impl HudTelemetry {
+    /// 計測前のゼロ値。`hud_frame()` の telemetry 引数として渡せる sentinel。
+    /// test helper / boot 直後の "no samples yet" 状態に使う。
+    pub const ZERO: Self = Self {
+        tick_p99_ms: 0.0,
+        frames_dropped: 0,
+        commit_timeouts: 0,
+    };
+}
+
 /// `State` + `HudConfig` + monitor + refresh Hz + notifications から HUD frame を
 /// 組み立てる。
 ///
@@ -117,7 +145,7 @@ pub enum NotificationClass {
 /// # Examples
 ///
 /// ```
-/// use linerule_core::{HotkeyMap, HudConfig, Point, ScreenRect, State, hud_frame};
+/// use linerule_core::{HotkeyMap, HudConfig, HudTelemetry, Point, ScreenRect, State, hud_frame};
 ///
 /// let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
 /// let frame = hud_frame(
@@ -127,6 +155,7 @@ pub enum NotificationClass {
 ///     144,
 ///     &[],
 ///     HotkeyMap::DEFAULT,
+///     HudTelemetry::ZERO,
 /// );
 /// // 右上アンカー: パネル右端は monitor 右端から margin だけ左
 /// let expected_right = 1920.0 - HudConfig::DEFAULT.geometry.margin;
@@ -136,9 +165,13 @@ pub enum NotificationClass {
 /// ```
 #[must_use]
 #[allow(
+    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "row 構築は逐次的でラインアウト計算が局所的に追跡できる方が読みやすい。\
-              分割すると `y` 累積を渡し回す必要があり可読性が落ちる"
+              分割すると `y` 累積を渡し回す必要があり可読性が落ちる。\
+              引数は既存 (refresh_hz/notifications/hotkeys) に並べて per-tick の\
+              非決定値 (telemetry) を 1 つ追加したもので、グルーピング struct を\
+              作るより呼び出し側が読みやすい"
 )]
 pub fn hud_frame(
     state: State,
@@ -147,6 +180,7 @@ pub fn hud_frame(
     refresh_hz: u32,
     notifications: &[HudNotification],
     hotkeys: HotkeyMap,
+    telemetry: HudTelemetry,
 ) -> HudFrame {
     let panel_width = hud.geometry.width;
     let panel_height = hud.geometry.height;
@@ -213,11 +247,17 @@ pub fn hud_frame(
     });
     y += hud.fonts.body + hud.padding.section;
 
-    // Telemetry: Refresh Hz (mono family)
+    // Telemetry (mono family). cs HudRenderer.cs:408 と byte-for-byte 一致:
+    //   "{Hz}Hz · p99 {ms:F2}ms · drops {} · stalls {}"
+    // `·` は U+00B7 MIDDLE DOT。Mono フォントで等幅整列を保つため "Hz" の前後の
+    // 空白は cs と合わせる ("60Hz" は数値直後、 "p99 1.23ms" は数値前後ともスペース)。
     rows.push(HudRow {
         origin_x: x,
         origin_y: y,
-        text: format!("Refresh: {refresh_hz} Hz"),
+        text: format!(
+            "{refresh_hz}Hz · p99 {:.2}ms · drops {} · stalls {}",
+            telemetry.tick_p99_ms, telemetry.frames_dropped, telemetry.commit_timeouts,
+        ),
         font_size: hud.fonts.telemetry,
         font: HudFontKey::Mono,
         color: hud.colors.accent,
@@ -317,7 +357,8 @@ mod tests {
     }
 
     /// `hud_frame()` を default 引数で呼ぶ test helper。Phase ζ で hotkeys 引数が
-    /// 必須化されたため、12+ 件の test を一行で書き直せるよう小さな wrapper を置く。
+    /// 必須化、PR 4 で telemetry 引数が必須化されたため、12+ 件の test を一行で
+    /// 書き直せるよう小さな wrapper を置く。telemetry は `ZERO` 既定。
     fn default_frame(state: State, refresh_hz: u32, notifications: &[HudNotification]) -> HudFrame {
         hud_frame(
             state,
@@ -326,6 +367,7 @@ mod tests {
             refresh_hz,
             notifications,
             HotkeyMap::DEFAULT,
+            HudTelemetry::ZERO,
         )
     }
 
@@ -386,10 +428,53 @@ mod tests {
         let telemetry = f
             .rows
             .iter()
-            .find(|r| r.text.contains("144"))
+            .find(|r| r.text.contains("144Hz"))
             .expect("refresh row");
         assert_eq!(telemetry.font, HudFontKey::Mono);
-        assert!(telemetry.text.starts_with("Refresh:"));
+        assert!(
+            telemetry.text.starts_with("144Hz · p99 "),
+            "telemetry row should start with refresh Hz + p99 (cs format): {}",
+            telemetry.text
+        );
+    }
+
+    /// cs `HudRenderer.cs:408` の format 文字列と byte-for-byte 一致するか pin する。
+    /// `{Hz}Hz · p99 {ms:F2}ms · drops {} · stalls {}`。`·` は U+00B7 MIDDLE DOT。
+    /// telemetry の値が反映されているかも同時に確認する。
+    #[test]
+    fn telemetry_line_format_matches_cs() {
+        let t = HudTelemetry {
+            tick_p99_ms: 1.23,
+            frames_dropped: 7,
+            commit_timeouts: 2,
+        };
+        let f = hud_frame(
+            State::DEFAULT,
+            HudConfig::DEFAULT,
+            monitor(),
+            60,
+            &[],
+            HotkeyMap::DEFAULT,
+            t,
+        );
+        let row = f
+            .rows
+            .iter()
+            .find(|r| r.text.contains("Hz"))
+            .expect("telemetry row");
+        assert_eq!(row.text, "60Hz · p99 1.23ms · drops 7 · stalls 2");
+        assert_eq!(row.font, HudFontKey::Mono);
+    }
+
+    /// `HudTelemetry::ZERO` の serde round-trip。Snapshot 互換のため公開 ADT の
+    /// serialize 安定性を pin する。
+    #[test]
+    fn hud_telemetry_zero_serde_round_trip() {
+        let json = serde_json::to_string(&HudTelemetry::ZERO).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["tick_p99_ms"], 0.0);
+        assert_eq!(parsed["frames_dropped"], 0);
+        assert_eq!(parsed["commit_timeouts"], 0);
     }
 
     #[test]
@@ -575,6 +660,7 @@ mod tests {
             60,
             &[],
             custom,
+            HudTelemetry::ZERO,
         );
         let texts: Vec<&str> = f.rows.iter().map(|r| r.text.as_str()).collect();
         // hotkey rows は telemetry 行の後の 1 header + 7 rows

@@ -140,7 +140,10 @@ fn wparam_as_hotkey_id(wparam: WPARAM) -> i32 {
 }
 
 /// 1 tick 分の処理: cursor poll → hotkey drain → `tick::step` → `apply_effects`。
+/// frame timing は先頭で `Instant::now()` を取り、末尾の elapsed を
+/// `FrameTimingTracker::record_tick` に流す (HUD telemetry の p99 / drops 用)。
 fn apply_tick(state: &OverlayWndState) -> Result<()> {
+    let tick_start = std::time::Instant::now();
     let polled_cursor = cursor_tracker::poll();
     let drained_hotkeys = state.drain_hotkeys();
     let now_ms = state.now_ms();
@@ -153,7 +156,23 @@ fn apply_tick(state: &OverlayWndState) -> Result<()> {
     let telemetry_refresh = state.hud_config().telemetry_refresh;
     let (next_world, effects) = step(world, &input, telemetry_refresh);
     state.store_tick_world(next_world);
-    apply_effects(state, &effects)
+    let result = apply_effects(state, &effects);
+    let elapsed = tick_start.elapsed();
+    let over_budget = is_over_budget(elapsed, crate::render_timing::refresh_rate_hz());
+    state
+        .frame_timing()
+        .borrow_mut()
+        .record_tick(elapsed, over_budget);
+    result
+}
+
+/// elapsed が `RenderConfig::DEFAULT.warn_ratio * (1000 / refresh_hz)` を
+/// 超えたら over-budget と判定する。値は HUD の `drops` カウンタに反映される。
+fn is_over_budget(elapsed: std::time::Duration, refresh_hz: u32) -> bool {
+    let hz = refresh_hz.max(1);
+    let warn_ratio = linerule_core::RenderConfig::DEFAULT.warn_ratio;
+    let budget_ms = warn_ratio * 1000.0 / f64::from(hz);
+    elapsed.as_secs_f64() * 1000.0 > budget_ms
 }
 
 /// `TickEffect` を順に platform へ反映する。
@@ -186,6 +205,7 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
             TickEffect::RefreshHud(s) => {
                 let hz = crate::render_timing::refresh_rate_hz();
                 let notifications = build_notifications(state);
+                let telemetry = state.frame_timing().borrow().snapshot();
                 let frame = hud_frame(
                     s,
                     *state.hud_config(),
@@ -193,6 +213,7 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                     hz,
                     &notifications,
                     state.hotkeys(),
+                    telemetry,
                 );
                 apply_hud_frame(state, &frame)?;
             },

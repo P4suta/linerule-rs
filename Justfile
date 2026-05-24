@@ -229,12 +229,17 @@ doc:
 # (main push 時に GitHub Pages へ publish するジョブ) と同じ厳しさで warning を
 # error 扱いし、`pre-push` で push 前に検出する。
 #
-# `docker compose exec` の `-e` flag を使うため `{{docker_run}}` 展開を手で
+# `docker compose exec/run` の `-e` flag を使うため `{{docker_run}}` 展開を手で
 # 書き分ける（テンプレートは末尾に `dev` を含むため -e を直接挟めない）。
+# `dev` service が起動済みなら `exec` で速い、停止中なら `run --rm` で起動する。
+# 後者を fallback として持たないと、pre-push hook が dev サービス停止時に必ず
+# `service "dev" is not running` で失敗する。
 rustdoc-check:
     @echo "==> cargo doc --workspace --no-deps --exclude linerule-platform-windows (RUSTDOCFLAGS=-D warnings)"
     @if [ "{{inside}}" = "1" ]; then \
         RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude linerule-platform-windows; \
+    elif [ "{{dev_running}}" = "0" ]; then \
+        docker compose run --rm -e RUSTDOCFLAGS="-D warnings" dev cargo doc --workspace --no-deps --exclude linerule-platform-windows; \
     else \
         docker compose exec -e RUSTDOCFLAGS="-D warnings" dev cargo doc --workspace --no-deps --exclude linerule-platform-windows; \
     fi
