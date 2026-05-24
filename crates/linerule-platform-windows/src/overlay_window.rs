@@ -113,6 +113,10 @@ impl OverlayWindow {
 
                 // SAFETY-equivalent: NonNull<_> は Box::into_raw の戻り値で常に non-null
                 let state = NonNull::new(state_ptr).expect("Box::into_raw is never null");
+                // device-lost rebuild (issue #45) で `CompositionRenderer::new(hwnd)`
+                // を呼び直す必要があるため、HWND を state に shelve する。
+                // `OnceCell` で 1 回だけ確定する不変条件を表現。
+                win32_ffi::state_ref(state).set_hwnd(hwnd);
                 Ok(Self { hwnd, state })
             },
             Err(e) => {

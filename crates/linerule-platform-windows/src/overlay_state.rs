@@ -26,7 +26,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -38,6 +38,7 @@ use linerule_core::{
     ScreenRect,
 };
 use tracing::Span;
+use windows::Win32::Foundation::HWND;
 
 use crate::composition_renderer::CompositionRenderer;
 
@@ -115,6 +116,15 @@ pub struct OverlayWndState {
     /// `wndproc::apply_tick` で record_tick / record_timeout を呼び、`RefreshHud`
     /// effect で snapshot を取って `hud_frame()` の telemetry 引数に渡す。
     frame_timing: RefCell<crate::frame_timing::FrameTimingTracker>,
+    /// device-lost rebuild の連続失敗カウンタ (issue #45)。`apply_overlay_frame`
+    /// / `apply_hud_frame` が device-lost HRESULT を検出するたびに increment、
+    /// 成功で 0 に reset。連続 3 回で `OverlayAction::Quit` を要求する。
+    device_lost_count: Cell<u8>,
+    /// overlay HWND の遅延設定値。`OverlayWindow::new_with_initial_world` で
+    /// `CreateWindowExW` 成功直後に `set_hwnd` で書き込む。device-lost rebuild
+    /// 時に `CompositionRenderer::new(hwnd)` で新しい pipeline を作るために使う
+    /// (issue #45)。`OnceCell` で 1 回だけ確定する不変条件を表現。
+    hwnd: OnceCell<HWND>,
     /// プロセス起動時刻。`tick::step` に渡す `now_ms` を計算するための原点。
     start_time: Instant,
 }
@@ -154,6 +164,8 @@ impl OverlayWndState {
             hotkey_conflicts: RefCell::new(Vec::new()),
             notifications: RefCell::new(Vec::new()),
             frame_timing: RefCell::new(crate::frame_timing::FrameTimingTracker::new()),
+            device_lost_count: Cell::new(0),
+            hwnd: OnceCell::new(),
             start_time: Instant::now(),
         }
     }
@@ -320,6 +332,26 @@ impl OverlayWndState {
     #[must_use]
     pub fn now_ms(&self) -> i64 {
         i64::try_from(self.start_time.elapsed().as_millis()).unwrap_or(i64::MAX)
+    }
+
+    /// device-lost 連続失敗カウンタへのアクセサ。`wndproc` の rebuild path で
+    /// `get()` / `set()` を使う (issue #45)。`Cell` なので shared ref で更新可。
+    #[must_use]
+    pub fn device_lost_count(&self) -> &Cell<u8> {
+        &self.device_lost_count
+    }
+
+    /// overlay HWND を 1 度だけ設定する (`OverlayWindow::new` 後に呼ぶ)。
+    /// 既に設定済みの場合は無視 (`OnceCell::set` の挙動)。
+    pub fn set_hwnd(&self, hwnd: HWND) {
+        let _ = self.hwnd.set(hwnd);
+    }
+
+    /// 設定済みであれば overlay HWND を返す。device-lost rebuild の経路で
+    /// `CompositionRenderer::new(hwnd)` に渡すために使う (issue #45)。
+    #[must_use]
+    pub fn hwnd(&self) -> Option<HWND> {
+        self.hwnd.get().copied()
     }
 }
 

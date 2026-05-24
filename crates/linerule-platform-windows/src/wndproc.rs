@@ -18,15 +18,20 @@
 
 use linerule_core::input::hud_fade;
 use linerule_core::input::tick::{TickEffect, TickInput, step};
-use linerule_core::{HudFrame, Logical, OverlayFrame, Point, ScreenRect, State, hud_frame, render};
+use linerule_core::{
+    DeviceLostOutcome, HudFrame, Logical, OverlayAction, OverlayFrame, Point, ScreenRect, State,
+    hud_frame, is_device_lost_hresult, record_device_lost_failure, render,
+};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     WM_APP, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
     WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_RBUTTONDOWN,
 };
 
+use crate::composition_renderer::CompositionRenderer;
 use crate::cursor_tracker;
-use crate::error::Result;
+use crate::error::{PlatformError, Result};
+use crate::hud_renderer::HudRenderer;
 use crate::messages::{HTTRANSPARENT, WM_APP_QUIT_TIMER, WM_APP_REASSERT_TOPMOST, WM_APP_TICK};
 use crate::monitor_info;
 use crate::overlay_state::OverlayWndState;
@@ -277,10 +282,14 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                     cursor,
                     state.monitor(),
                 );
-                apply_overlay_frame(state, &frame)?;
+                with_device_lost_recovery(state, "DrawOverlay", &|s| {
+                    apply_overlay_frame(s, &frame)
+                })?;
             },
             TickEffect::ClearOverlay => {
-                apply_overlay_frame(state, &OverlayFrame::EMPTY)?;
+                with_device_lost_recovery(state, "ClearOverlay", &|s| {
+                    apply_overlay_frame(s, &OverlayFrame::EMPTY)
+                })?;
             },
             TickEffect::RefreshHud(s) => {
                 let hz = crate::render_timing::refresh_rate_hz();
@@ -295,7 +304,7 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                     state.hotkeys(),
                     telemetry,
                 );
-                apply_hud_frame(state, &frame)?;
+                with_device_lost_recovery(state, "RefreshHud", &|st| apply_hud_frame(st, &frame))?;
             },
             TickEffect::SetHudOpacity { state: s, cursor } => {
                 // cursor 距離から fade opacity を pure 関数で計算し、HUD visual
@@ -350,6 +359,92 @@ fn apply_hud_opacity(state: &OverlayWndState, opacity: f32) -> Result<()> {
     if let Some(renderer) = state.hud_renderer().borrow_mut().as_mut() {
         renderer.set_opacity(opacity)?;
     }
+    Ok(())
+}
+
+/// `apply_overlay_frame` / `apply_hud_frame` を device-lost rebuild で wrap する
+/// (issue #45)。失敗 HRESULT が DXGI/D2D の device-lost 系なら一度 renderer を
+/// 作り直して 1 度だけ retry する。連続 3 回で `OverlayAction::Quit` を要求。
+///
+/// `op` は `Fn(&OverlayWndState) -> Result<()>` で、`apply_*_frame` ヘルパーを
+/// 渡す。closure 内で `borrow_mut` を `if let` scope に閉じ込めているので、
+/// Err 復帰時には borrow は drop 済み → `install_renderer` で再 borrow しても
+/// `BorrowMutError` にならない (overlay_state.rs の RefCell 不変条件)。
+fn with_device_lost_recovery(
+    state: &OverlayWndState,
+    operation: &'static str,
+    op: &dyn Fn(&OverlayWndState) -> Result<()>,
+) -> Result<()> {
+    match op(state) {
+        Ok(()) => {
+            // 成功で連続失敗カウンタを reset。
+            state.device_lost_count().set(0);
+            Ok(())
+        },
+        Err(e) => {
+            let Some(hr) = device_lost_hr(&e) else {
+                return Err(e);
+            };
+            let prev = state.device_lost_count().get();
+            match record_device_lost_failure(prev) {
+                DeviceLostOutcome::Retry { next } => {
+                    tracing::warn!(
+                        target: "renderer.device_lost",
+                        parent: state.span(),
+                        operation,
+                        hr = format_args!("{hr:#010x}").to_string(),
+                        consecutive = next,
+                        "device-lost detected; rebuilding pipeline and retrying once"
+                    );
+                    state.device_lost_count().set(next);
+                    rebuild_renderers(state)?;
+                    op(state)
+                },
+                DeviceLostOutcome::Quit => {
+                    tracing::error!(
+                        target: "renderer.device_lost",
+                        parent: state.span(),
+                        operation,
+                        hr = format_args!("{hr:#010x}").to_string(),
+                        "device-lost exhausted (3 consecutive failures); requesting Quit"
+                    );
+                    if let Err(send_err) = state.hotkey_sender().send(OverlayAction::Quit) {
+                        tracing::error!(parent: state.span(), error = %send_err,
+                            "failed to send Quit after device-lost exhaustion");
+                    }
+                    // Quit 経路は async (次 tick で drain される) なので、この
+                    // tick の Err は propagate して caller に通知する。
+                    Err(e)
+                },
+            }
+        },
+    }
+}
+
+/// `PlatformError::BadHr` を分解して、device-lost 系 HRESULT であれば値を返す。
+fn device_lost_hr(e: &PlatformError) -> Option<i32> {
+    match e {
+        PlatformError::BadHr { hr, .. } if is_device_lost_hresult(*hr) => Some(*hr),
+        _ => None,
+    }
+}
+
+/// CompositionRenderer + HudRenderer を新規構築して state に install し直す
+/// (issue #45)。古い renderer は `install_*` で差し替えられた時点で Drop され、
+/// 古い COM オブジェクト (pipeline / visual / surface) は RAII で Release される。
+fn rebuild_renderers(state: &OverlayWndState) -> Result<()> {
+    let hwnd = state.hwnd().ok_or(PlatformError::NullHandle {
+        operation: "rebuild_renderers: HWND unset",
+    })?;
+    let new_renderer = CompositionRenderer::new(hwnd)?;
+    let new_hud = HudRenderer::new(new_renderer.pipeline(), state.hud_config())?;
+    state.install_renderer(new_renderer);
+    state.install_hud_renderer(new_hud);
+    tracing::info!(
+        target: "renderer.device_lost",
+        parent: state.span(),
+        "renderers rebuilt successfully"
+    );
     Ok(())
 }
 

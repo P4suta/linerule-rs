@@ -143,6 +143,60 @@ impl From<Severity> for Level {
     }
 }
 
+/// HRESULT が DXGI / D2D の "device-lost" 系 (= GPU パイプライン再構築が必要)
+/// に該当するかを判定する pure helper。
+///
+/// 一覧 (cs-port + DirectX SDK Reference):
+/// - `DXGI_ERROR_DEVICE_REMOVED` (0x887A0005): adapter removed / driver crash
+/// - `DXGI_ERROR_DEVICE_HUNG` (0x887A0006): hardware fault detected
+/// - `DXGI_ERROR_DEVICE_RESET` (0x887A0007): TDR (Timeout Detection & Recovery)
+/// - `D2DERR_RECREATE_TARGET` (0x8899000C): D2D render target lost
+///
+/// 呼び出し側 (Windows プラットフォーム) が `PlatformError::BadHr { hr, .. }`
+/// から `hr` を取り出して本関数で判定する想定。`linerule-core` に置くことで
+/// Linux 上 `cargo nextest` でも mutation baseline をカバーできる。
+#[must_use]
+pub const fn is_device_lost_hresult(hr: i32) -> bool {
+    // HRESULT は Win32 / D2D で慣例的に「最上位 bit 立ち = 失敗」の符号付き 32-bit。
+    // リテラル `0x887A_0005` は i32 範囲を超えるので `hr as u32` で比較する。
+    #[allow(
+        clippy::cast_sign_loss,
+        reason = "bit pattern 比較のため u32 にキャストする。値ドメインの変換ではない。"
+    )]
+    let hr_bits = hr as u32;
+    matches!(
+        hr_bits,
+        0x887A_0005 | 0x887A_0006 | 0x887A_0007 | 0x8899_000C
+    )
+}
+
+/// `record_device_lost_failure` の結果。Retry なら `next` を新しいカウンタに
+/// 保存して 1 度 rebuild + retry、Quit ならアプリ終了を要求する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeviceLostOutcome {
+    /// 連続失敗回数 `next` を保持して retry する (= `prev + 1`)。
+    Retry {
+        /// 更新後のカウンタ値。
+        next: u8,
+    },
+    /// 連続失敗 3 回到達。`OverlayAction::Quit` を要求する。
+    Quit,
+}
+
+/// device-lost 失敗を 1 回記録し、次のアクションを決定する pure 関数。
+///
+/// 連続 `prev = 2` 回まで Retry、`prev + 1 >= 3` で `Quit`。`linerule-core` 側
+/// で副作用なく決定できるため、`overlay_state.rs` の `Cell<u8>` から取得した
+/// 値を渡して結果を反映する形で使う (issue #45)。
+#[must_use]
+pub const fn record_device_lost_failure(prev: u8) -> DeviceLostOutcome {
+    if prev >= 2 {
+        DeviceLostOutcome::Quit
+    } else {
+        DeviceLostOutcome::Retry { next: prev + 1 }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +268,48 @@ mod tests {
         assert_ne!(ErrorClass::Recoverable, ErrorClass::Fatal);
         assert_ne!(ErrorClass::Fatal, ErrorClass::ProgrammerError);
         assert_ne!(ErrorClass::Recoverable, ErrorClass::ProgrammerError);
+    }
+
+    #[test]
+    fn is_device_lost_hresult_matches_documented_codes() {
+        // table-driven: 4 hit + 1 miss
+        #[allow(
+            clippy::cast_possible_wrap,
+            reason = "bit pattern を i32 として渡すための明示キャスト"
+        )]
+        let table: [(i32, bool); 5] = [
+            (0x887A_0005_u32 as i32, true),  // DXGI_ERROR_DEVICE_REMOVED
+            (0x887A_0006_u32 as i32, true),  // DXGI_ERROR_DEVICE_HUNG
+            (0x887A_0007_u32 as i32, true),  // DXGI_ERROR_DEVICE_RESET
+            (0x8899_000C_u32 as i32, true),  // D2DERR_RECREATE_TARGET
+            (0x8000_4002_u32 as i32, false), // E_NOINTERFACE (失敗だが device-lost ではない)
+        ];
+        for (hr, expected) in table {
+            assert_eq!(
+                is_device_lost_hresult(hr),
+                expected,
+                "hr={hr:#010x} expected device-lost={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn record_device_lost_failure_retries_under_threshold() {
+        assert_eq!(
+            record_device_lost_failure(0),
+            DeviceLostOutcome::Retry { next: 1 }
+        );
+        assert_eq!(
+            record_device_lost_failure(1),
+            DeviceLostOutcome::Retry { next: 2 }
+        );
+    }
+
+    #[test]
+    fn record_device_lost_failure_quits_on_third_failure() {
+        assert_eq!(record_device_lost_failure(2), DeviceLostOutcome::Quit);
+        // 想定外に prev が高くても Quit (上から saturate)
+        assert_eq!(record_device_lost_failure(100), DeviceLostOutcome::Quit);
     }
 
     #[test]
