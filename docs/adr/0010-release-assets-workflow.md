@@ -1,8 +1,8 @@
 # 0010 — Release artifact auto-attach via `release-assets.yml`
 
-**Status:** Accepted (Phase I, 2026-05-20). Phase J (2026-05-20, [[0011-phase-j-slim-down]]) で **PDB / `-debug.{exe,pdb}` 添付を撤廃**し、release profile の 1 binary のみ添付する形に縮退済み (本 ADR の意思決定の骨格は維持、命名規則表とビルド戦略のみ縮退)。
+**Status:** **Superseded by [[0014-immutable-release-asset-flow]]** (2026-05-24)。Accepted (Phase I, 2026-05-20)。Phase J (2026-05-20, [[0011-phase-j-slim-down]]) で **PDB / `-debug.{exe,pdb}` 添付を撤廃**し、release profile の 1 binary のみ添付する形に縮退済み。2026-05-24 に GitHub の immutable releases 機能 (GA: 2025-10-28) と本 ADR の `release: types: [published]` → `gh release upload` フローが両立不能と判明し、ADR-0014 で **draft → upload → publish (= draft=false)** の 3-step に再設計。命名規則表 (`linerule-vX.Y.Z-win-x64.exe`) は維持。
 
-**See also:** [[0007-debug-build-and-panic-strategy]] (release vs dist-dev profile、Phase J で supersede)、[[0011-phase-j-slim-down]]、Phase I plan の PR-2、Phase H ADR の系列。
+**See also:** [[0007-debug-build-and-panic-strategy]] (release vs dist-dev profile、Phase J で supersede)、[[0011-phase-j-slim-down]]、[[0014-immutable-release-asset-flow]] (現行設計)、Phase I plan の PR-2、Phase H ADR の系列。
 
 ## 文脈
 

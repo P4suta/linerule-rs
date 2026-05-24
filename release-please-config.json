@@ -21,6 +21,7 @@
     ".": {
       "package-name": "linerule-rs",
       "release-type": "simple",
+      "skip-github-release": true,
       "extra-files": [
         {
           "type": "toml",
