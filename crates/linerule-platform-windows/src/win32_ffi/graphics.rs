@@ -32,7 +32,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice2, IDCompositionDesktopDevice, IDCompositionDevice,
-    IDCompositionSurface, IDCompositionTarget, IDCompositionVisual2,
+    IDCompositionSurface, IDCompositionTarget, IDCompositionVisual2, IDCompositionVisual3,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED as DXGI_ALPHA_MODE_PREMULTIPLIED_BC, DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -208,12 +208,32 @@ pub fn visual_set_offset(visual: &IDCompositionVisual2, x: f32, y: f32) -> Resul
     Ok(())
 }
 
-// 注: 直接 `IDCompositionVisual2::SetOpacity(f32)` は存在しない。Win32 spec 上、
-// visual の opacity 制御は `IDCompositionVisual3::SetOpacity2` か
-// `IDCompositionEffectGroup` 経由になる。Phase G では opacity を `HudFrame` の
-// 色に bake する設計 (draw_hud_to_surface 側で premultiply) を採用したため、
-// visual 単位の opacity wrapper は導入しない。PR 4 で cursor-distance fade を
-// 実装する際に IDCompositionVisual3 cast or EffectGroup を導入する。
+/// visual の opacity を `[0.0, 1.0]` に設定する。
+///
+/// `IDCompositionVisual2` には直接 `SetOpacity(f32)` がないので
+/// `IDCompositionVisual3::SetOpacity2(f32)` (Windows 8.1+) へ QueryInterface
+/// で cast する。`HudFrame` の base opacity は引き続き
+/// `draw_hud_to_surface` 側で各色 alpha に bake されるが、本関数は cursor
+/// 距離 fade を visual tree レベルで **multiplicative** に適用する経路
+/// (issue #47) として使う — `Commit` までで反映される。
+///
+/// 値は `clamp(0.0, 1.0)` で正規化される。
+///
+/// # Errors
+/// `IDCompositionVisual3` への cast (極めて稀) または `SetOpacity2`
+/// 自身が失敗したとき。
+pub fn visual_set_opacity(visual: &IDCompositionVisual2, opacity: f32) -> Result<()> {
+    let clamped = opacity.clamp(0.0, 1.0);
+    let visual3: IDCompositionVisual3 = visual.cast().map_err(|e| PlatformError::BadHr {
+        operation: "IDCompositionVisual2::cast<IDCompositionVisual3>",
+        hr: e.code().0,
+    })?;
+    // SAFETY: visual3 は valid（cast が成功した直後）、引数は clamp 済みの f32。
+    unsafe { visual3.SetOpacity2(clamped) }.map_err(|e| PlatformError::BadHr {
+        operation: "IDCompositionVisual3::SetOpacity2",
+        hr: e.code().0,
+    })
+}
 
 /// レイヤに描画内容（`IDCompositionSurface`）を接続する。
 pub fn visual_set_content(

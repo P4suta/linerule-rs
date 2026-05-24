@@ -218,17 +218,18 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                 apply_hud_frame(state, &frame)?;
             },
             TickEffect::SetHudOpacity { state: s, cursor } => {
-                // PR 3 では HUD opacity を `HudFrame` の色に bake する設計のため、
-                // visual 単位 opacity 更新は行わない（描画器単位で 1 frame 再描画
-                // するコスト > ベース不透明度のままの視覚差、と判断）。fade 反映は
-                // 次の RefreshHud で `hud_frame()` が computed opacity を入れる
-                // 拡張で対応する。本 handler では tracing のみ。
-                let _ = hud_fade::compute_opacity(
+                // cursor 距離から fade opacity を pure 関数で計算し、HUD visual
+                // の `IDCompositionVisual3::SetOpacity2` で multiplicative に
+                // 適用する (issue #47)。`frame.opacity` の bake (色 alpha) は
+                // RefreshHud 側で別軸として保持されるので、cursor 移動だけで
+                // surface 再描画は走らない。
+                let opacity = hud_fade::compute_opacity(
                     s,
                     cursor,
                     hud_panel_rect(state),
                     state.hud_config().fade_decay_px,
                 );
+                apply_hud_opacity(state, opacity)?;
             },
             TickEffect::LogStateChanged {
                 action,
@@ -258,6 +259,16 @@ fn apply_overlay_frame(state: &OverlayWndState, frame: &OverlayFrame) -> Result<
 fn apply_hud_frame(state: &OverlayWndState, frame: &HudFrame) -> Result<()> {
     if let Some(renderer) = state.hud_renderer().borrow_mut().as_mut() {
         renderer.apply(frame)?;
+    }
+    Ok(())
+}
+
+/// `HudRenderer::set_opacity` の wndproc-side wrapper。`RefCell` の `borrow_mut`
+/// を 1 箇所に閉じ込め、renderer 未 attach の起動直後 (Phase D 前) でも no-op
+/// で済むようにする。
+fn apply_hud_opacity(state: &OverlayWndState, opacity: f32) -> Result<()> {
+    if let Some(renderer) = state.hud_renderer().borrow_mut().as_mut() {
+        renderer.set_opacity(opacity)?;
     }
     Ok(())
 }

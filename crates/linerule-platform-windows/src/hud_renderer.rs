@@ -31,7 +31,8 @@ pub struct HudRenderer {
     surface: Option<IDCompositionSurface>,
     /// 直近のサイズ（surface 再生成判定）。
     last_size: Option<(u32, u32)>,
-    /// 直近の opacity（visual_set_opacity 呼び出し判定）。
+    /// 直近 `IDCompositionVisual3::SetOpacity2` に渡した値。次回 `set_opacity`
+    /// の差分検出に使う (commit コスト節約)。sentinel `-1.0` で初回必ず適用。
     last_opacity: f32,
     /// DWrite ファクトリ。
     dwrite_factory: IDWriteFactory,
@@ -120,14 +121,40 @@ impl HudRenderer {
         let surface = self.surface.as_ref().expect("just created");
         dwrite::draw_hud_to_surface(surface, frame.background, frame.opacity, &drawn)?;
 
-        // visual の位置を反映 (opacity は色に bake 済みなので visual 単位の
-        // SetOpacity は呼ばない。理由は win32_ffi/graphics.rs のコメント参照)。
+        // visual の位置を反映する。
+        //
+        // visual 単位の opacity (`IDCompositionVisual3::SetOpacity2`) はここで
+        // **触らない** — `frame.opacity` は base opacity として既に色 alpha に
+        // bake 済 (上の `draw_hud_to_surface` 経由)。visual の opacity は
+        // [`Self::set_opacity`] 経由でのみ更新され、SetHudOpacity effect の
+        // cursor 距離 fade を multiplicative にかける役割を持つ (issue #47)。
+        // ここで毎 RefreshHud に opacity を 1.0 にリセットしてしまうと cursor
+        // fade 状態が 200ms ごとに消えるので、意図的に no-op にしている。
         graphics::visual_set_offset(&self.visual, frame.panel_left, frame.panel_top)?;
-        self.last_opacity = frame.opacity;
         // DComp visual tree の変更を compositor に push する。HudRenderer は
         // CompositionRenderer とは独立に commit する (起動直後 mode=Off で
         // DrawOverlay が発行されない期間に HUD が見えない事故を防ぐ、Phase I
         // 仕上げで発覚)。
+        graphics::commit(&self.dcomp)
+    }
+
+    /// HUD visual の opacity を `[0.0, 1.0]` に設定する (cursor 距離 fade 用)。
+    ///
+    /// `frame.opacity` の bake (色 alpha 経由) とは独立に、visual tree レベル
+    /// で multiplicative に opacity を乗せる。`apply` は本値を触らないので、
+    /// 毎 RefreshHud で fade 状態が失われない。直近設定値との差分が
+    /// `f32::EPSILON` 未満なら `Commit` を省略する (cursor 不動時の負荷低減)。
+    ///
+    /// # Errors
+    /// `IDCompositionVisual2::cast<IDCompositionVisual3>` /
+    /// `IDCompositionVisual3::SetOpacity2` / `Commit` が失敗したとき。
+    pub fn set_opacity(&mut self, opacity: f32) -> Result<()> {
+        let clamped = opacity.clamp(0.0, 1.0);
+        if (self.last_opacity - clamped).abs() < f32::EPSILON {
+            return Ok(());
+        }
+        graphics::visual_set_opacity(&self.visual, clamped)?;
+        self.last_opacity = clamped;
         graphics::commit(&self.dcomp)
     }
 
