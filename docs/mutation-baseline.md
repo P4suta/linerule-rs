@@ -35,21 +35,31 @@ After a run, `target/mutants/` contains:
   just code that cargo-mutants couldn't perturb).
 - `mutants.out/timeout.txt` — tests that timed out under the mutant.
 
-## Baseline (Phase ε — 2026-05-21)
+## Baseline (cs-port residual cleanup — 2026-05-24)
 
-First full local run on `feat/phase-epsilon-mutants-gate`:
+Re-run after the cs-port residual cleanup series (#68–#74) added new code to
+`linerule-core` (`HudTelemetry` ADT + `hud_frame()` telemetry arg, mode-aware
+indicator bar, pinned `HudConfig` defaults). +12 viable mutants vs. Phase ε;
+all newly-generated mutants are caught without any new `// mutants: skip`
+annotation.
 
 | Outcome     | Count | Notes                                                          |
 | ----------- | ----- | -------------------------------------------------------------- |
-| **caught**  | 271   | killed by the test suite                                       |
-| **missed**  | **0** | gate baseline (`mutants.yml` is now required, no `\|\| true`)  |
-| **unviable**| 45    | compile-failure mutants (not a real test gap)                  |
+| **caught**  | 283   | killed by the test suite (+12 vs. Phase ε)                     |
+| **missed**  | **0** | gate baseline maintained                                       |
+| **unviable**| 45    | compile-failure mutants (not a real test gap, unchanged)       |
 | **timeout** | 0     | none                                                           |
-| **total**   | 316   |                                                                |
+| **total**   | 328   | (+12 vs. Phase ε)                                              |
 
-Viable kill ratio: **271 / 271 = 100%** (well above the ≥ 85% target).
+Viable kill ratio: **283 / 283 = 100%** (well above the ≥ 85% target).
 
-### How this baseline was established
+### Phase ε baseline (2026-05-21) — historical
+
+First full local run on `feat/phase-epsilon-mutants-gate`: caught 271 / missed 0
+/ unviable 45 / total 316. The maintenance rule (write a focused test, don't
+silence) carried the gap closures listed below.
+
+#### How the Phase ε baseline was established
 
 The initial Phase ε run surfaced 47 missed mutants in 8 source files.
 Rather than blanket-skip them (which would have been
