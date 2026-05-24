@@ -126,6 +126,47 @@ pub fn destroy_window(hwnd: HWND) -> Result<()> {
     })
 }
 
+/// `SetWindowPos(hwnd, NULL, x, y, width, height, SWP_NOACTIVATE | SWP_NOZORDER)`
+/// の薄い safe wrapper。`WM_DPICHANGED` ハンドラから OS 推奨 rect で overlay
+/// HWND を再配置するために使う (issue #44)。`SWP_NOACTIVATE` で focus 奪取を
+/// 防ぎ、`SWP_NOZORDER` で WS_EX_TOPMOST の z-order を維持する。
+///
+/// # Errors
+/// `SetWindowPos` が失敗したとき。
+pub fn set_window_pos_rect(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
+    use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
+    // SAFETY: hwnd は overlay が所有する valid HWND、SWP_* は Win32 定数、
+    // hwndinsertafter = None は z-order 変更を伴わない (SWP_NOZORDER と整合)。
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_NOZORDER,
+        )
+    }
+    .map_err(|e| PlatformError::BadHr {
+        operation: "SetWindowPos",
+        hr: e.code().0,
+    })
+}
+
+/// `WM_DPICHANGED` の `lparam` を `RECT` (OS 推奨の新 window rect) に
+/// 解釈して値を返す safe wrapper。`wndproc::dispatch` は
+/// `#![forbid(unsafe_code)]` のため、生 pointer 解参を本ファイルに閉じる。
+///
+/// # Safety
+/// 呼び出し側は `msg == WM_DPICHANGED` のときだけ呼ぶこと。それ以外の
+/// メッセージで呼ぶと未定義動作になる (lparam が RECT* を指していない)。
+pub fn rect_from_wm_dpichanged_lparam(lparam: LPARAM) -> windows::Win32::Foundation::RECT {
+    // SAFETY: WM_DPICHANGED の lparam は (Win32 仕様) `RECT*` で OS が
+    // 提供する有効ポインタ。値を 1 度コピーして即解放する。
+    unsafe { *(lparam.0 as *const windows::Win32::Foundation::RECT) }
+}
+
 /// `ShowWindow(hwnd, SW_SHOWNOACTIVATE)` の safe wrapper。
 ///
 /// `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` の overlay HWND は理論上

@@ -21,8 +21,8 @@ use linerule_core::input::tick::{TickEffect, TickInput, step};
 use linerule_core::{HudFrame, Logical, OverlayFrame, Point, ScreenRect, State, hud_frame, render};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    WM_APP, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_NCDESTROY, WM_NCHITTEST,
-    WM_PAINT, WM_RBUTTONDOWN,
+    WM_APP, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
+    WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_RBUTTONDOWN,
 };
 
 use crate::cursor_tracker;
@@ -42,7 +42,7 @@ const _: () = assert!(WM_APP_TICK >= WM_APP);
 /// - `Some(LRESULT)`: 当該メッセージを処理した。返り値はそのまま `WndProc` の戻り値になる。
 /// - `None`: 処理せず `DefWindowProcW` にフォールバックすることを呼び出し側に依頼。
 #[must_use]
-pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
+pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     let state_ptr = win32_ffi::get_userdata(hwnd)?;
     let state = win32_ffi::state_ref(state_ptr);
 
@@ -100,6 +100,54 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> Option
             tracing::info!(parent: state.span(), "auto-quit timer fired (--duration-ms)");
             win32_ffi::post_quit(0);
             Some(LRESULT(0))
+        },
+        WM_DPICHANGED => {
+            // Per-Monitor DPI Aware V2 で受信。`lparam` は `RECT*` (OS が推奨
+            // する新 window rect、physical px ベースだが Win32 が logical 換算
+            // 済みで渡す)。`wparam` HIWORD/LOWORD は新 Y/X DPI (通常同値)。
+            // overlay は virtual-screen 全体に張られていて、DComp が compositor
+            // 側で per-monitor DPI を適用するため font/HUD layout の再計算は
+            // 不要 (DWrite text format は DIPs 入力, HudConfig は logical px)。
+            // ここでは OS 推奨 rect で SetWindowPos するだけ (issue #44)。
+            let new_rect = win32_ffi::rect_from_wm_dpichanged_lparam(lparam);
+            let width = new_rect.right.saturating_sub(new_rect.left);
+            let height = new_rect.bottom.saturating_sub(new_rect.top);
+            let x_dpi = u32::try_from(wparam.0 & 0xFFFF).unwrap_or(0);
+            let y_dpi = u32::try_from((wparam.0 >> 16) & 0xFFFF).unwrap_or(0);
+            match win32_ffi::set_window_pos_rect(hwnd, new_rect.left, new_rect.top, width, height) {
+                Ok(()) => {
+                    tracing::info!(
+                        target: "monitor.dpichanged",
+                        parent: state.span(),
+                        x_dpi,
+                        y_dpi,
+                        left = new_rect.left,
+                        top = new_rect.top,
+                        width,
+                        height,
+                        "WM_DPICHANGED applied"
+                    );
+                },
+                Err(e) => {
+                    tracing::warn!(parent: state.span(), error = %e,
+                        "SetWindowPos failed on WM_DPICHANGED");
+                },
+            }
+            Some(LRESULT(0))
+        },
+        WM_DISPLAYCHANGE => {
+            // 解像度や monitor 構成が変化した。active monitor cache は
+            // `apply_tick::follow_active_monitor` (issue #46) で per-tick に
+            // 再解決されるため invalidate 不要。event の可観測性のため log
+            // だけ残し DefWindowProcW にフォールバックする。
+            let bpp = u32::try_from(wparam.0 & 0xFFFF).unwrap_or(0);
+            tracing::info!(
+                target: "monitor.displaychange",
+                parent: state.span(),
+                bpp,
+                "WM_DISPLAYCHANGE received"
+            );
+            None
         },
         WM_APP_REASSERT_TOPMOST => {
             // ForegroundHook の callback (OS hook thread) から PostMessage で
