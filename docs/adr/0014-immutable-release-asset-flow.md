@@ -2,7 +2,9 @@
 
 **Status:** Accepted (2026-05-24)。supersedes [[0010-release-assets-workflow]] の trigger 設計部分。命名規則・SBOM 添付・build 戦略は ADR-0010 から継承する。
 
-**See also:** [[0010-release-assets-workflow]] (supersede 元)、[[0011-phase-j-slim-down]] (薄い読書ツール志向)。
+**Errata (2026-05-24, same day):** 初版で `release-please-config.json` の `"skip-github-release": true` を「tag は push される、Release object だけ skip」と解釈していたが、`googleapis/release-please-action@v5` の `action.yml` を直接読むと description は `"if set to true, then do not try to tag releases"` で **tag 自体も push しない**。v0.4.1 リリース時 (2026-05-24, PR #89 merge 後) に tag が push されず release-please workflow が `untagged, merged release PRs outstanding - aborting` で抜けて stuck した。本セッションでは手動で `git tag -s v0.4.1 24545ed` + `git push origin v0.4.1` を打って解消し release-assets workflow の draft → upload → publish flow が initial fire することは検証した。次回以降の release で同じ stuck を避けるため、`release-please.yml` 側で「release-please-action 実行後、`tag_name` output と現 tag 一覧を照合し、未 push なら自前で `git tag` + `git push origin $tag` を打つ補助 step」を追加することを後続 PR で実装する (= 本 ADR を完全に supersede する ADR-0015 が立つまでの暫定運用)。
+
+**See also:** [[0010-release-assets-workflow]] (supersede 元)、[[0011-phase-j-slim-down]] (薄い読書ツール志向)、[[release-please-token-workaround]] (memory: token 問題)、[[immutable-release-asset-block]] (memory: 422 経緯)。
 
 ## 文脈
 
