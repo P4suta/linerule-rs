@@ -5,8 +5,15 @@
 #   2. If user-visible changes are detected (feat / fix / perf / refactor),
 #      a "release PR" is opened or updated. It bumps the workspace version,
 #      updates CHANGELOG.md, and synchronizes Cargo.lock.
-#   3. Merging that PR pushes a `vX.Y.Z` tag and creates a GitHub Release
-#      with auto-generated notes.
+#   3. When that PR merges into main, this workflow runs again — the
+#      release-please-action step itself does NOT push a tag because
+#      `release-please-config.json` has `"skip-github-release": true`
+#      (per action.yml: "do not try to tag releases" — covers both tag
+#      AND GitHub Release object). The "ensure tag" step below picks
+#      up the manifest version and pushes the tag if it's missing.
+#   4. release-assets workflow (`.github/workflows/release-assets.yml`)
+#      takes over from there: draft create → EXE/SBOM upload → publish.
+#      See ADR-0014 for the immutable-release-compatible 3-step flow.
 #
 # Conventional-commit type → SemVer bump:
 #   feat:           minor
@@ -22,6 +29,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write # gh workflow run release-assets.yml
 
 concurrency:
   group: release-please-${{ github.ref }}
@@ -38,3 +46,44 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Self-managed tag push: `skip-github-release: true` (release-please-config.json)
+      # tells release-please-action to skip *both* the GitHub Release AND the tag
+      # (action.yml input description). Without this step, a release PR merge
+      # leaves the repo in a "manifest bumped, no tag" state that release-please
+      # itself rejects on the next run with `untagged, merged release PRs
+      # outstanding - aborting` (encountered in PR #89 -> v0.4.1 stuck, ADR-0014
+      # Errata). We read the manifest, check origin tags, and push the missing
+      # tag ourselves. After pushing, we explicitly dispatch the release-assets
+      # workflow because tags pushed with secrets.GITHUB_TOKEN do not trigger
+      # other workflows by GitHub policy.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ensure release tag is pushed (skip-github-release workaround)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |-
+          set -euo pipefail
+          VERSION=$(jq -r '."."' .release-please-manifest.json)
+          TAG="v${VERSION}"
+          # tag が既に origin に存在すれば no-op (release PR merge 以外の通常 push)
+          if git ls-remote --tags origin "${TAG}" | grep -q "refs/tags/${TAG}$"; then
+            echo "tag ${TAG} already exists on origin, nothing to do"
+            exit 0
+          fi
+          # HEAD は release PR merge 後の bump commit。release-please-action が
+          # この commit に tag を打つはずだったので同じ commit を指す lightweight
+          # tag を作る (過去 v0.2.0–v0.4.0 と整合)。
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${TAG}" "${GITHUB_SHA}"
+          git push origin "${TAG}"
+          echo "pushed tag ${TAG} -> ${GITHUB_SHA}"
+          # GITHUB_TOKEN で push した tag は他 workflow を trigger しないため、
+          # release-assets workflow を明示的に workflow_dispatch で起動する。
+          gh workflow run release-assets.yml -f tag="${TAG}"
+          echo "dispatched release-assets workflow for ${TAG}"
