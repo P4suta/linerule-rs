@@ -11,7 +11,7 @@ default-members = ["crates/linerule-core", "crates/linerule-app"]
 [workspace.package]
 edition = "2024"
 rust-version = "1.95"
-version = "0.2.2"
+version = "0.3.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/P4suta/linerule-rs"
 authors = ["linerule contributors"]
