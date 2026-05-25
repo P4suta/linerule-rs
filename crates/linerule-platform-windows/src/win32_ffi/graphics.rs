@@ -61,8 +61,24 @@ pub struct DcompPipeline {
     pub dcomp: IDCompositionDesktopDevice,
     /// HWND と紐づいた composition target。Drop で composition が切り離される。
     pub target: IDCompositionTarget,
-    /// ルートビジュアル。各 layer の `IDCompositionVisual2` を子として持つ。
-    pub root: IDCompositionVisual2,
+    /// ルートビジュアル。直接の子は `overlay_root` と `hud_root` の 2 つだけ。
+    /// 外から触らせない (子の追加順で z-order が決まるため、ここに直接追加すると
+    /// HUD/overlay の前後関係が崩れる)。構築後は直接参照しないが、
+    /// `IDCompositionTarget::SetRoot` が AddRef しても自前で寿命を握っておく
+    /// ため pipeline と同じ寿命で保持する。
+    #[allow(
+        dead_code,
+        reason = "RAII で root visual の寿命を pipeline と同期させるための owner"
+    )]
+    pub(crate) root: IDCompositionVisual2,
+    /// overlay slit (dim + indicator) 用の中間ビジュアル。`CompositionRenderer`
+    /// がこの下にプール layer を AddVisual する。`root` 側で `hud_root` より
+    /// 先に attach されるので、内部で何枚追加しても HUD より背面に固定される。
+    pub overlay_root: IDCompositionVisual2,
+    /// HUD パネル用の中間ビジュアル。`HudRenderer` がこの下に panel visual を
+    /// AddVisual する。`root` 側で `overlay_root` より後に attach されるので、
+    /// 常に overlay の前面に表示される (HUD が暗幕に隠れない保証)。
+    pub hud_root: IDCompositionVisual2,
 }
 
 /// Overlay HWND に dcomp visual tree を attach するパイプライン生成。
@@ -78,6 +94,10 @@ pub struct DcompPipeline {
 /// 7. `CreateTargetForHwnd(hwnd, topmost=true)` でターゲット
 /// 8. `CreateVisual()` でルートビジュアル
 /// 9. `target.SetRoot(root)` で連結
+/// 10. `overlay_root` / `hud_root` の 2 サブビジュアルを root に **固定順**
+///     (overlay → hud) で AddVisual。`AddVisual(child, false, None)` は MSDN 仕様で
+///     「全 children の前面に挿入」なので、後に attach した `hud_root` が常に
+///     前面になり、HUD が overlay 暗幕に隠されない構造的保証になる
 pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
     // 1. D3D11
     let mut d3d11: Option<ID3D11Device> = None;
@@ -171,6 +191,16 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
         hr: e.code().0,
     })?;
 
+    // 10. 2 サブビジュアルを固定順で attach。AddVisual(child, false, None) は
+    //     「全 children の前面に挿入」なので、後に attach した hud_root が
+    //     overlay_root より構造的に前面になる。これ以降、root には直接
+    //     visual を追加しない (CompositionRenderer / HudRenderer は各々の
+    //     サブビジュアルにのみ AddVisual する)。
+    let overlay_root = create_visual(&dcomp)?;
+    root_add_visual(&root, &overlay_root)?;
+    let hud_root = create_visual(&dcomp)?;
+    root_add_visual(&root, &hud_root)?;
+
     Ok(DcompPipeline {
         d3d11,
         dxgi,
@@ -180,6 +210,8 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
         dcomp,
         target,
         root,
+        overlay_root,
+        hud_root,
     })
 }
 

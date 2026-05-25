@@ -68,8 +68,8 @@ pub enum HotkeyFailure {
 /// WndProc に流れ込むメッセージごとに参照される instance state。
 ///
 /// フィールドの宣言順は Drop 順を兼ねる。HUD の visual は overlay の
-/// `DcompPipeline.root` の子として attach されているので、`hud_renderer` を
-/// `renderer` より先に宣言して先に Drop させる。
+/// `DcompPipeline.hud_root` (root 直下のサブビジュアル) に attach されているので、
+/// `hud_renderer` を `renderer` より先に宣言して先に Drop させる。
 pub struct OverlayWndState {
     log_span: Span,
     nchit_count: AtomicU64,

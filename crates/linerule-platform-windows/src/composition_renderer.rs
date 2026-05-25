@@ -73,7 +73,9 @@ impl CompositionRenderer {
     fn grow_pool_to(&mut self, target: usize) -> Result<()> {
         while self.layers.len() < target {
             let visual = graphics::create_visual(&self.pipeline.dcomp)?;
-            graphics::root_add_visual(&self.pipeline.root, &visual)?;
+            // overlay 系 layer は `overlay_root` の下に集約する。root 直下に
+            // 追加すると HUD より前面に挿入され、HUD が暗幕に隠される。
+            graphics::root_add_visual(&self.pipeline.overlay_root, &visual)?;
             self.layers.push(PooledLayer {
                 visual,
                 surface: None,
@@ -87,7 +89,7 @@ impl CompositionRenderer {
     fn shrink_pool_to(&mut self, target: usize) -> Result<()> {
         while self.layers.len() > target {
             let popped = self.layers.pop().expect("len > target");
-            graphics::root_remove_visual(&self.pipeline.root, &popped.visual)?;
+            graphics::root_remove_visual(&self.pipeline.overlay_root, &popped.visual)?;
             // popped が drop されると visual / surface も Drop で Release
         }
         Ok(())
