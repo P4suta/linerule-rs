@@ -2,8 +2,9 @@
 //!
 //! [`crate::composition_renderer::CompositionRenderer`] が overlay slit 用の
 //! visual tree を所有するのに対し、本 renderer は HUD パネル用の 1 visual を
-//! root に attach する。z-order は HUD が前面（後から AddVisual すれば top に
-//! 置かれる）。
+//! `pipeline.hud_root` に attach する。`hud_root` は `create_dcomp_pipeline`
+//! 内で `overlay_root` の後に root へ AddVisual されるため、HUD は常に
+//! overlay 暗幕より前面に表示される (z-order は visual tree 構造で固定)。
 //!
 //! 描画パスは `win32_ffi::dwrite::draw_hud_to_surface` に集約されており、本
 //! ファイル自体は `#![forbid(unsafe_code)]` を維持する (ADR-0006)。
@@ -25,7 +26,7 @@ use crate::win32_ffi::{dwrite, graphics};
 
 /// HUD パネル 1 つの描画器。
 pub struct HudRenderer {
-    /// HUD 用ルートビジュアル（pipeline.root の子）。
+    /// HUD 用ビジュアル (`pipeline.hud_root` の子)。
     visual: IDCompositionVisual2,
     /// 現在の HUD surface。サイズ変化時に再生成。
     surface: Option<IDCompositionSurface>,
@@ -48,8 +49,8 @@ pub struct HudRenderer {
 }
 
 impl HudRenderer {
-    /// 新しい HUD renderer を構築する。`pipeline.root` に visual を attach し、
-    /// 初期 surface は遅延生成。
+    /// 新しい HUD renderer を構築する。`pipeline.hud_root` の下に visual を
+    /// attach し、初期 surface は遅延生成。
     ///
     /// # Errors
     /// COM 呼び出し（visual 作成 / AddVisual / DWrite factory 作成）が失敗したとき。
@@ -58,8 +59,10 @@ impl HudRenderer {
         hud: &HudConfig,
     ) -> Result<Self> {
         let visual = graphics::create_visual(&pipeline.dcomp)?;
-        // HUD は overlay slit より後に root に追加され、z-order 上で前面に来る。
-        graphics::root_add_visual(&pipeline.root, &visual)?;
+        // HUD visual は hud_root の下にのみ追加する。hud_root 自体は
+        // create_dcomp_pipeline で overlay_root の後に root へ attach 済みなので、
+        // HUD は overlay の暗幕より構造的に常に前面に来る。
+        graphics::root_add_visual(&pipeline.hud_root, &visual)?;
         let dwrite_factory = dwrite::create_dwrite_factory()?;
         Ok(Self {
             visual,
