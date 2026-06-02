@@ -5,7 +5,7 @@
   "description": "Tooling-only Node manifest. Hosts commitlint for the lefthook commit-msg hook.",
   "license": "MIT",
   "devDependencies": {
-    "@commitlint/cli": "^21.0.0",
-    "@commitlint/config-conventional": "^21.0.0"
+    "@commitlint/cli": "^21.0.2",
+    "@commitlint/config-conventional": "^21.0.2"
   }
 }
