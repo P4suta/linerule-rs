@@ -1,11 +1,11 @@
-# Auto-merge Dependabot PRs through the merge queue once required CI passes.
+# Auto-merge Dependabot PRs once required CI passes.
 #
 # Policy:
-#   - All bumps (patch / minor / major) get auto-merge enabled.
-#   - The merge queue plus the required status checks gate the actual merge,
-#     so a red CI still blocks it — this only removes the human click.
-#   - The merge method is governed by the merge queue (squash), so we do not
-#     pass a method flag to `gh pr merge`.
+#   - All bumps (patch / minor / major) get auto-merge enabled (squash).
+#   - Branch protection's required status checks gate the actual merge, so a
+#     red CI still blocks it — this only removes the human click.
+#   - main requires branches to be up to date (strict); Dependabot rebases its
+#     own PRs when main moves so they catch up and then merge.
 
 name: dependabot-auto-merge
 
@@ -23,8 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: enable auto-merge (all bumps; merge queue + CI gate the merge)
-        run: gh pr merge --auto "$PR_URL"
+      - name: enable auto-merge (all bumps; required CI gates the merge)
+        run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
