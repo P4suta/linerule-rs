@@ -1,13 +1,11 @@
-# Auto-merge Dependabot PRs once required CI passes.
+# Auto-merge Dependabot PRs through the merge queue once required CI passes.
 #
 # Policy:
-#   - All `patch` and `minor` bumps: auto-approve + auto-merge (squash).
-#   - `major` bumps: skip — leave for manual review since they often need
-#     code adaptation.
-#
-# Auto-merge waits for required status checks (set via the branch
-# protection ruleset) before actually merging, so this workflow doesn't
-# bypass CI; it just removes the human click.
+#   - All bumps (patch / minor / major) get auto-merge enabled.
+#   - The merge queue plus the required status checks gate the actual merge,
+#     so a red CI still blocks it — this only removes the human click.
+#   - The merge method is governed by the merge queue (squash), so we do not
+#     pass a method flag to `gh pr merge`.
 
 name: dependabot-auto-merge
 
@@ -25,14 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: fetch dependabot metadata
-        id: meta
-        uses: dependabot/fetch-metadata@08eff52bf64351f401fb50d4972fa95b9f2c2d1b # v2.4.0
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: enable auto-merge (patch / minor only)
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor'
-        run: gh pr merge --auto --squash "$PR_URL"
+      - name: enable auto-merge (all bumps; merge queue + CI gate the merge)
+        run: gh pr merge --auto "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
