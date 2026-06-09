@@ -105,14 +105,14 @@ pub enum NotificationClass {
 ///
 /// - `tick_p99_ms`: 直近 N フレームの tick 経過時間の 99 パーセンタイル (ms)。
 /// - `frames_dropped`: render budget (`warn_ratio` × frame budget) を超えた tick の累計。
-/// - `commit_timeouts`: `IDCompositionDevice::Commit` 失敗 / timeout の累計。
+/// - `commit_timeouts`: composition commit 失敗 / timeout の累計 (`WinRT` 自動 commit 経路では現状 0)。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct HudTelemetry {
     /// 直近窓の p99 tick latency (ms)。
     pub tick_p99_ms: f32,
     /// budget 超過 frame の累計。
     pub frames_dropped: u64,
-    /// dcomp commit 失敗の累計。
+    /// composition commit 失敗の累計。
     pub commit_timeouts: u64,
 }
 

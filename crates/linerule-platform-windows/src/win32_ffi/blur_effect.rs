@@ -22,7 +22,10 @@ use windows::Graphics::Effects::{
     IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectSource_Impl,
 };
 use windows::UI::Composition::{CompositionBrush, CompositionEffectSourceParameter, Compositor};
-use windows::Win32::Graphics::Direct2D::CLSID_D2D1GaussianBlur;
+use windows::Win32::Graphics::Direct2D::Common::D2D1_BORDER_MODE_HARD;
+use windows::Win32::Graphics::Direct2D::{
+    CLSID_D2D1GaussianBlur, D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED,
+};
 use windows::Win32::System::WinRT::Graphics::Direct2D::{
     GRAPHICS_EFFECT_PROPERTY_MAPPING, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT,
     IGraphicsEffectD2D1Interop, IGraphicsEffectD2D1Interop_Impl,
@@ -36,7 +39,11 @@ use crate::error::{PlatformError, Result};
 const SOURCE_NAME: &str = "source";
 
 /// `CompositionBackdropBrush` を 1 source に取り、Gaussian blur をかける effect 記述。
-/// プロパティは StandardDeviation (index 0) のみ。
+///
+/// `CreateEffectFactory` は D2D1GaussianBlur の登録スキーマ (プロパティ 3 個: index 0
+/// StandardDeviation / 1 Optimization / 2 BorderMode) と数・型が一致することを検証し、
+/// 不一致だと `E_INVALIDARG` を返す。よって 3 プロパティすべてを正しい型で公開する
+/// (1 個しか宣言しないと CreateEffectFactory が E_INVALIDARG で失敗する)。
 #[implement(IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectD2D1Interop)]
 struct GaussianBlurEffect {
     name: RefCell<HSTRING>,
@@ -69,18 +76,26 @@ impl IGraphicsEffectD2D1Interop_Impl for GaussianBlurEffect_Impl {
         _index: *mut u32,
         _mapping: *mut GRAPHICS_EFFECT_PROPERTY_MAPPING,
     ) -> WinResult<()> {
-        // 名前引きは使わない (index ベースのみ)。
-        Err(Error::from(windows::Win32::Foundation::E_INVALIDARG))
+        // 名前引きは未実装。single-arg CreateEffectFactory は animatable property を
+        // 宣言しないので呼ばれない。canonical 実装に合わせ E_NOTIMPL を返す。
+        Err(Error::from(windows::Win32::Foundation::E_NOTIMPL))
     }
 
     fn GetPropertyCount(&self) -> WinResult<u32> {
-        Ok(1)
+        // D2D1GaussianBlur のプロパティ数 (StandardDeviation / Optimization /
+        // BorderMode)。CreateEffectFactory がこの数を D2D 登録スキーマと照合する。
+        Ok(3)
     }
 
     fn GetProperty(&self, index: u32) -> WinResult<IPropertyValue> {
         match index {
-            // 0 = D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION
+            // 0 = D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION (FLOAT)
             0 => PropertyValue::CreateSingle(self.standard_deviation)?.cast(),
+            // 1 = D2D1_GAUSSIANBLUR_PROP_OPTIMIZATION (enum → UINT32)
+            1 => PropertyValue::CreateUInt32(D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED.0 as u32)?
+                .cast(),
+            // 2 = D2D1_GAUSSIANBLUR_PROP_BORDER_MODE (enum → UINT32)
+            2 => PropertyValue::CreateUInt32(D2D1_BORDER_MODE_HARD.0 as u32)?.cast(),
             _ => Err(Error::from(windows::Win32::Foundation::E_INVALIDARG)),
         }
     }

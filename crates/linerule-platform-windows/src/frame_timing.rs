@@ -65,8 +65,8 @@ impl FrameTimingTracker {
         }
     }
 
-    /// dcomp commit の失敗 / timeout を 1 件記録する。`composition_renderer::apply`
-    /// の commit error を caller が拾ってここに通知する。
+    /// composition commit の失敗 / timeout を 1 件記録する。WinRT は DispatcherQueue
+    /// で自動 commit するため、現状この経路の呼び出し元は無い (telemetry は 0 のまま)。
     pub fn record_timeout(&mut self) {
         self.commit_timeouts = self.commit_timeouts.saturating_add(1);
     }

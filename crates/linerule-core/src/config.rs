@@ -246,7 +246,7 @@ impl HudColors {
     /// Default dark palette.
     ///
     /// `background.alpha` is `0xFF` (fully opaque): the HUD panel sits on top of
-    /// the overlay mask in `DComp` z-order, and a translucent background would let
+    /// the overlay mask in composition z-order, and a translucent background would let
     /// that mask bleed through and darken the panel further. Per-frame fade is
     /// still applied via [`HudConfig::base_opacity`] / `compute_opacity`, so the
     /// HUD can still ease out near the cursor without baking translucency into

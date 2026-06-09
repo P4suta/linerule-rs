@@ -21,17 +21,19 @@ HUD パネル（画面右上）に Mode / Thickness / Opacity / Effect / Refresh
 
 ### Blur 効果と composition backend
 
-`Blur`（背後ぼかし）は WinRT Composition の backdrop blur を使うため、環境変数
-`LINERULE_COMPOSITOR=winrt` で WinRT backend を選んだときのみ本物のぼかしになる。既定の
-`dcomp`（Win32 DirectComposition）backend では `Blur` は単色の暗幕に degrade する。WinRT
-backend は移行中のため、既定は `dcomp`。
+composition backend は WinRT `Windows.UI.Composition` 単一（旧 Win32 DirectComposition
+backend と `LINERULE_COMPOSITOR` 環境変数は撤去、ADR 0016）。`Blur`（背後ぼかし）は
+WinRT backdrop blur で常時レンダリングされる。ぼけ方は実機の GPU / compositor に依存する
+ため見え方はハードウェアで確認すること。背後サンプリングが効かず単色に見える場合は
+`LINERULE_BLUR_HOST=1` で backdrop 取得方法（`CreateBackdropBrush` ↔ `CreateHostBackdropBrush`）を
+切り替えて比較できる。
 
 ## 構成
 
 | Crate | 役割 |
 |---|---|
 | `linerule-core` | 純粋ロジック層。ADT / reducer / render / chord parser / hold FSM / tick pipeline。`#![forbid(unsafe_code)]` |
-| `linerule-platform-windows` | Win32 / COM 実装層。DirectComposition + Direct2D + DXGI + D3D11 を直接叩く。`#![cfg(windows)]` |
+| `linerule-platform-windows` | Win32 / COM 実装層。WinRT Composition + Direct2D + DXGI + D3D11 を直接叩く。`#![cfg(windows)]` |
 | `linerule-app` | 単一バイナリ `linerule.exe` のエントリポイント。`windows_subsystem = "windows"` + サブコマンドで GUI / CLI 切替 |
 | `xtask` | ビルド自動化。`lint` / `dep-graph` / `ci` |
 

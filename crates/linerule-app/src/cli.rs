@@ -36,6 +36,11 @@ pub(crate) enum Command {
         /// を exercise するために `horizontal` を渡す用途。
         #[arg(long, value_enum, value_name = "MODE")]
         initial_mode: Option<InitialMode>,
+        /// 起動時の surround effect を上書きする。デフォルト (未指定) は `Dim`
+        /// (`DimBlack`)。CI smoke test が起動直後から `WinRT` backdrop-blur パス
+        /// (`Blur`) を exercise するために `blur` を渡す用途。
+        #[arg(long, value_enum, value_name = "EFFECT")]
+        initial_effect: Option<InitialEffect>,
     },
     /// `%APPDATA%\linerule\` の events.jsonl と crash-*.json を pretty-print する。
     Diagnostics {
@@ -77,6 +82,30 @@ impl From<InitialMode> for linerule_core::Mode {
             InitialMode::Off => Self::Off,
             InitialMode::Horizontal => Self::Horizontal,
             InitialMode::Vertical => Self::Vertical,
+        }
+    }
+}
+
+/// `--initial-effect` flag に渡せる値。`linerule_core::state::SurroundEffect` に
+/// 対応する app 層 boundary 型 (linerule-core を clap 依存にしないため独立に定義)。
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+#[clap(rename_all = "lowercase")]
+pub(crate) enum InitialEffect {
+    /// `SurroundEffect::DimBlack` 相当 (default 挙動と同じ)。
+    Dim,
+    /// `SurroundEffect::WhiteWash` 相当。
+    White,
+    /// `SurroundEffect::Blur` 相当 (`WinRT` backdrop blur)。
+    Blur,
+}
+
+#[cfg(target_os = "windows")]
+impl From<InitialEffect> for linerule_core::SurroundEffect {
+    fn from(e: InitialEffect) -> Self {
+        match e {
+            InitialEffect::Dim => Self::DimBlack,
+            InitialEffect::White => Self::WhiteWash,
+            InitialEffect::Blur => Self::Blur,
         }
     }
 }
@@ -187,7 +216,8 @@ mod tests {
             parse(&["run"]).command,
             Some(Command::Run {
                 duration_ms: None,
-                initial_mode: None
+                initial_mode: None,
+                initial_effect: None
             })
         ));
     }
@@ -216,11 +246,22 @@ mod tests {
             Some(Command::Run {
                 duration_ms,
                 initial_mode,
+                ..
             }) => {
                 assert_eq!(duration_ms, Some(1000));
                 assert_eq!(initial_mode, Some(InitialMode::Vertical));
             },
             other => panic!("expected Run with both flags, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_run_with_initial_effect_blur() {
+        match parse(&["run", "--initial-effect", "blur"]).command {
+            Some(Command::Run { initial_effect, .. }) => {
+                assert_eq!(initial_effect, Some(InitialEffect::Blur));
+            },
+            other => panic!("expected Run with initial_effect blur, got {other:?}"),
         }
     }
 

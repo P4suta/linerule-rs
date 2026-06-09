@@ -1,7 +1,7 @@
 //! `IDWriteFactory` / `IDWriteTextFormat` / `ID2D1DeviceContext::DrawText` の
 //! 薄い safe wrapper。
 //!
-//! `hud_renderer.rs` から呼ばれる。`unsafe` の境界をこの 1 ファイルに集約する。
+//! `winrt_hud_renderer.rs` から呼ばれる。`unsafe` の境界をこの 1 ファイルに集約する。
 
 #![allow(
     unsafe_code,
@@ -13,7 +13,6 @@ use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, ID2D1DeviceContext, ID2D1SolidColorBrush,
 };
-use windows::Win32::Graphics::DirectComposition::IDCompositionSurface;
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
     DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL,
@@ -80,7 +79,7 @@ pub fn create_text_format(
     Ok(format)
 }
 
-/// 1 行分の描画指示（HUD レイアウトを `draw_hud_to_surface` に渡すための値型）。
+/// 1 行分の描画指示（HUD レイアウトを `draw_hud_rows` に渡すための値型）。
 ///
 /// 借用ベース（`&str` / `&IDWriteTextFormat`）にして HUD 1 frame 分の Vec を
 /// caller 側で `let` で組み立ててから一括投入できるようにする。
@@ -96,37 +95,9 @@ pub struct HudDrawRow<'a> {
     pub color: Rgba,
 }
 
-/// `IDCompositionSurface` の中身を「背景クリア + 複数行テキスト描画」で更新する。
-///
-/// `BeginDraw (DComp) → Clear → DrawText× → EndDraw (DComp)` の標準シーケンスを
-/// 1 関数に閉じ込め、呼び出し側を `#![forbid(unsafe_code)]` で書けるようにする。
-/// DComp surface tile を render target に bind する責務と D2D drawing session の
-/// 開始/終了は `begin_dcomp_draw_d2d` / `end_dcomp_draw` 側で完結するため、本関数
-/// では D2D context の `BeginDraw` / `EndDraw` を呼ばない
-/// (`graphics::fill_surface` 参照)。
-///
-/// `opacity` (0.0–1.0) は背景・各行色の alpha に乗算する形で適用される。dcomp の
-/// visual 単位 opacity を使わない理由は `graphics.rs` のコメント参照。
-///
-/// # Errors
-/// 各 COM 呼び出しが失敗したとき。
-pub fn draw_hud_to_surface(
-    surface: &IDCompositionSurface,
-    background: Rgba,
-    opacity: f32,
-    rows: &[HudDrawRow<'_>],
-) -> Result<()> {
-    let (dc, offset) = crate::win32_ffi::graphics::begin_dcomp_draw_d2d(
-        surface,
-        "IDCompositionSurface::BeginDraw (HUD)",
-    )?;
-    draw_hud_rows(&dc, offset, background, opacity, rows)?;
-    crate::win32_ffi::graphics::end_dcomp_draw(surface, "IDCompositionSurface::EndDraw (HUD)")
-}
-
 /// 既に drawing session が開かれた `ID2D1DeviceContext` に「背景クリア + 行描画」を
-/// 発行する。surface tile の `offset` を `SetTransform` に反映する。DComp / WinRT
-/// どちらの surface でも共有する描画本体 (begin/end は呼び出し側の責務)。
+/// 発行する。surface tile の `offset` を `SetTransform` に反映する。WinRT
+/// composition surface に対する描画本体 (begin/end は呼び出し側の責務)。
 ///
 /// # Errors
 /// brush 生成が失敗したとき。
