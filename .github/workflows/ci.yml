@@ -144,19 +144,39 @@ jobs:
       - name: smoke - linerule.exe run --initial-mode horizontal --initial-effect blur --duration-ms 3000 (GUI headless)
         shell: pwsh
         run: |
-          # 過去 run の events.jsonl をクリーンアップ (誤検知防止)。
+          # 過去 run の events.jsonl / crash dump をクリーンアップ (誤検知防止)。
           Remove-Item "target/release/events.jsonl*" -ErrorAction SilentlyContinue
           Remove-Item "target/release/crash-*.json" -ErrorAction SilentlyContinue
+          # 失敗時診断: GUI subsystem (windows_subsystem="windows") は stderr が無いため、
+          # crash の中身は events.jsonl / crash-*.json が唯一の手がかり。target/release と
+          # %APPDATA%\linerule (diagnostics サブコマンド経由) の両方を吐き出す。
+          function Dump-Diagnostics {
+            Write-Host "--- target/release events.jsonl.* (tail 80) ---"
+            $l = Get-ChildItem -Path "target/release" -Filter "events.jsonl.*" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($l) { Get-Content $l.FullName | Select-Object -Last 80 } else { Write-Host "(none)" }
+            Write-Host "--- target/release crash-*.json ---"
+            $c = Get-ChildItem -Path "target/release" -Filter "crash-*.json" -ErrorAction SilentlyContinue
+            if ($c) { $c | ForEach-Object { Write-Host "# $($_.Name)"; Get-Content $_.FullName } } else { Write-Host "(none)" }
+            Write-Host "--- diagnostics --last-crash / --recent-events 80 (%APPDATA%) ---"
+            & "target/release/linerule.exe" diagnostics --last-crash 2>&1 | Out-Host
+            & "target/release/linerule.exe" diagnostics --recent-events 80 2>&1 | Out-Host
+          }
           # `--initial-mode horizontal --initial-effect blur` で HUD + slit に加え
-          # WinRT backdrop-blur の描画パス (CreateEffectFactory / 自作
-          # IGraphicsEffectD2D1Interop / CreateBackdropBrush / tint sprite) まで
-          # 起動直後から exercise する。WinRT は単一 backend で fallback が無いため、
-          # 初期化/描画失敗はここで ERROR として顕在化し auto-merge をブロックする。
+          # WinRT backdrop-blur の COM 経路 (effect factory / IGraphicsEffectD2D1Interop /
+          # CreateBackdropBrush / tint sprite) を起動直後から exercise する。
           $proc = Start-Process -FilePath "target/release/linerule.exe" `
             -ArgumentList "run", "--initial-mode", "horizontal", "--initial-effect", "blur", "--duration-ms", "3000" `
             -Wait -PassThru -NoNewWindow
           if ($proc.ExitCode -ne 0) {
-            Write-Host "::error::linerule.exe run exited with $($proc.ExitCode)"
+            Write-Host "::error::linerule.exe run (blur) exited with $($proc.ExitCode)"
+            Dump-Diagnostics
+            # 切り分けプローブ: blur 無し (WinRT + DimBlack) でも落ちるか。落ちれば WinRT
+            # composition 自体が headless runner で不可 (環境要因)、通れば blur 固有のバグ。
+            Write-Host "--- probe: WinRT + DimBlack (no blur), 1500ms ---"
+            $probe = Start-Process -FilePath "target/release/linerule.exe" `
+              -ArgumentList "run", "--initial-mode", "horizontal", "--duration-ms", "1500" `
+              -Wait -PassThru -NoNewWindow
+            Write-Host "probe (no-blur) exit code: $($probe.ExitCode)"
             exit 1
           }
           $log = Get-ChildItem -Path "target/release" -Filter "events.jsonl.*" `
@@ -189,6 +209,9 @@ jobs:
             exit 1
           }
       - name: Upload binary artifact
+        # smoke が crash しても binary は upload する。実機ビルド環境が無くても
+        # この artifact を download して GUI / blur を目視確認できるようにする。
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linerule-win-x64
