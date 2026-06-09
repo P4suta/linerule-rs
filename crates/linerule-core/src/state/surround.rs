@@ -26,9 +26,8 @@ pub enum SurroundEffect {
     /// environments / white-background documents.
     WhiteWash,
     /// Blur the screen content behind the surround (frosted glass), with a
-    /// dark tint for reading comfort. Rendered as a true backdrop blur only on
-    /// the `WinRT` composition backend; the Win32 `DComp` backend degrades it
-    /// to a dim (tint-only) surround.
+    /// translucent tint for reading comfort. Rendered as a true backdrop blur
+    /// by the `WinRT` composition backend (the sole composition backend).
     Blur,
 }
 

@@ -53,11 +53,13 @@ pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
     match cli.command.unwrap_or(Command::Run {
         duration_ms: None,
         initial_mode: None,
+        initial_effect: None,
     }) {
         Command::Run {
             duration_ms,
             initial_mode,
-        } => run_overlay(duration_ms, initial_mode),
+            initial_effect,
+        } => run_overlay(duration_ms, initial_mode, initial_effect),
         Command::Diagnostics {
             dry_run,
             last_crash,
@@ -91,6 +93,7 @@ struct DiagnosticsArgs {
 fn run_overlay(
     duration_ms: Option<u64>,
     initial_mode: Option<crate::cli::InitialMode>,
+    initial_effect: Option<crate::cli::InitialEffect>,
 ) -> Result<()> {
     use std::time::Duration;
 
@@ -120,16 +123,20 @@ fn run_overlay(
     // overlay HWND がモニタ境界を跨いで slit を引けるようにする。
     let monitor = monitor_info::virtual_screen_bounds()?;
 
-    // initial_mode 指定時は TickWorld の初期 state を上書きする (CI smoke 用)。
-    let initial_world = initial_mode
-        .map(|m| {
-            let state = State {
-                mode: m.into(),
-                ..State::DEFAULT
-            };
-            TickWorld::with_initial_state(state)
-        })
-        .unwrap_or(TickWorld::INITIAL);
+    // initial_mode / initial_effect 指定時は TickWorld の初期 state を上書きする
+    // (CI smoke が起動直後から slit / WinRT backdrop-blur 描画パスを exercise する用途)。
+    let initial_world = if initial_mode.is_some() || initial_effect.is_some() {
+        let mut state = State::DEFAULT;
+        if let Some(m) = initial_mode {
+            state.mode = m.into();
+        }
+        if let Some(e) = initial_effect {
+            state.config.effect = e.into();
+        }
+        TickWorld::with_initial_state(state)
+    } else {
+        TickWorld::INITIAL
+    };
 
     // Drop order が重要: 各 thread (`_clock`, `_auto_quit`) と `_foreground_hook`
     // の callback は overlay HWND に `PostMessageW` を投げる可能性があるので、
@@ -170,6 +177,7 @@ fn run_overlay(
         quit = config.hotkeys.quit,
         duration_ms = duration_ms.unwrap_or(0),
         initial_mode = ?initial_mode,
+        initial_effect = ?initial_effect,
         "overlay running; press Ctrl+Alt+R to cycle modes, Ctrl+Alt+E to cycle effects, Ctrl+Alt+Q to quit"
     );
     run_message_pump()?;
@@ -180,6 +188,7 @@ fn run_overlay(
 fn run_overlay(
     _duration_ms: Option<u64>,
     _initial_mode: Option<crate::cli::InitialMode>,
+    _initial_effect: Option<crate::cli::InitialEffect>,
 ) -> Result<()> {
     anyhow::bail!("`linerule run` is Windows-only");
 }

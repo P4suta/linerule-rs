@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Windows platform layer for linerule-rs: HWND / DComp / D2D / hotkeys / pacer."
+description = "Windows platform layer for linerule-rs: HWND / WinRT Composition / D2D / hotkeys / pacer."
 publish = false
 
 [dependencies]
@@ -33,7 +33,6 @@ features = [
     "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_DirectComposition",
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Dxgi",

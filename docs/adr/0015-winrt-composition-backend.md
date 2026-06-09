@@ -1,8 +1,10 @@
 # 0015 — WinRT Composition backend と backdrop blur
 
-**Status:** Accepted。
+**Status:** Accepted。二重 backend 構成 (DComp fallback + `LINERULE_COMPOSITOR` 切替) は
+[[0016-default-composition-backend-winrt]] で撤去され、WinRT 単一に移行した。
 
-**See also:** [[0003-unsafe-isolation]] (`unsafe` を `win32_ffi/` に集約), [[0006-dwrite-ffi-isolation]] (HUD 描画).
+**See also:** [[0016-default-composition-backend-winrt]] (DComp 撤去・WinRT 一本化),
+[[0003-unsafe-isolation]] (`unsafe` を `win32_ffi/` に集約), [[0006-dwrite-ffi-isolation]] (HUD 描画).
 
 ## 文脈
 

@@ -98,19 +98,42 @@ fn slit_frame(
 }
 
 /// Brush for the before/after surround bands. `Solid` for dim/white-wash, `Blur`
-/// (blurred backdrop + tint) for the blur effect. Alpha is the perceptual
-/// opacity byte either way, so the opacity hotkeys tune both the dim mask and
-/// the blur tint.
+/// (blurred backdrop + tint) for the blur effect.
+///
+/// The dim / white-wash masks fill at the full perceptual opacity byte. The
+/// blur tint instead uses a *fraction* of that byte (see [`blur_tint_alpha`]):
+/// a blur sitting under a near-opaque tint reads as a dark fill, not as blur,
+/// so the tint has to stay well translucent for the blurred backdrop to show
+/// through. Scaling the perceptual byte (rather than pinning a fixed alpha)
+/// keeps the opacity hotkeys tuning the blur tint too — just over a lower range.
 fn surround_brush(config: OverlayConfig) -> Brush {
-    let fill = config
-        .effect
-        .mask_color()
-        .with_alpha(config.opacity.to_perceptual_byte());
+    let mask = config.effect.mask_color();
+    let perceptual = config.opacity.to_perceptual_byte();
     if config.effect.is_blur() {
-        Brush::Blur { tint: fill }
+        Brush::Blur {
+            tint: mask.with_alpha(blur_tint_alpha(perceptual)),
+        }
     } else {
-        Brush::Solid(fill)
+        Brush::Solid(mask.with_alpha(perceptual))
     }
+}
+
+/// Divisor applied to the dim mask's perceptual alpha to derive the blur tint
+/// alpha. Larger ⇒ more translucent tint ⇒ more of the blurred backdrop shows
+/// through. This is a perceptual choice tuned on real hardware (the blur is
+/// only visible on the `WinRT` composition backend); see the blur verification
+/// notes in the README.
+const BLUR_TINT_DIVISOR: u8 = 3;
+
+/// Blur-tint alpha: a fraction of the dim mask's perceptual alpha so the blurred
+/// backdrop reads as blur instead of a dark wash. Monotonic in `perceptual` (so
+/// the opacity hotkeys still tune it, just over a lower range) and clamped to
+/// `>= 1` so the tint never fully vanishes — `Brush::Blur` always keeps a
+/// visible tint layer over the blur.
+fn blur_tint_alpha(perceptual: u8) -> u8 {
+    // u8 / u8: the quotient is at most 255/3 = 85, so it never overflows or
+    // truncates and needs no cast. `.max(1)` keeps the tint a visible layer.
+    (perceptual / BLUR_TINT_DIVISOR).max(1)
 }
 
 pub(crate) const fn axis_value(axis: Axis, cursor: Point<Logical>) -> i32 {
@@ -326,6 +349,68 @@ mod tests {
             panic!("indicator must be solid");
         };
         assert_eq!((c.r, c.g, c.b), (0xFF, 0xFF, 0xFF));
+    }
+
+    #[test]
+    fn blur_tint_is_more_translucent_than_dim_mask() {
+        use crate::{config::OverlayConfig, state::SurroundEffect};
+        // Same opacity for both; only the effect differs. The blur tint must be
+        // markedly more translucent than the dim mask, otherwise the blurred
+        // backdrop is hidden under the tint and Blur looks like DimBlack.
+        let surround_band = |effect| {
+            let s = State {
+                mode: Mode::Horizontal,
+                config: OverlayConfig {
+                    effect,
+                    ..OverlayConfig::DEFAULT
+                },
+                ..State::DEFAULT
+            };
+            frame(s, Point::new(960, 540), monitor()).layers()[0].brush
+        };
+        let Brush::Blur { tint } = surround_band(SurroundEffect::Blur) else {
+            panic!("blur surround must be Brush::Blur");
+        };
+        let Brush::Solid(dim_mask) = surround_band(SurroundEffect::DimBlack) else {
+            panic!("dim surround must be Brush::Solid");
+        };
+        assert!(tint.a > 0, "blur tint must stay visible");
+        assert!(
+            tint.a < dim_mask.a,
+            "blur tint ({}) must be more translucent than the dim mask ({}) so the blur shows through",
+            tint.a,
+            dim_mask.a,
+        );
+    }
+
+    #[test]
+    fn opacity_tunes_blur_tint_alpha() {
+        use crate::{config::OverlayConfig, state::SurroundEffect};
+        // The opacity hotkeys must still tune the blur tint (just over a lower
+        // range than the dim mask) — a fixed tint alpha would break that.
+        let blur_tint_at = |opacity| {
+            let s = State {
+                mode: Mode::Horizontal,
+                config: OverlayConfig {
+                    effect: SurroundEffect::Blur,
+                    opacity,
+                    ..OverlayConfig::DEFAULT
+                },
+                ..State::DEFAULT
+            };
+            let Brush::Blur { tint } = frame(s, Point::new(960, 540), monitor()).layers()[0].brush
+            else {
+                panic!("blur surround must be Brush::Blur");
+            };
+            tint.a
+        };
+        let hi = blur_tint_at(Opacity::MAX);
+        let lo = blur_tint_at(Opacity::MIN);
+        assert!(lo > 0, "blur tint must stay visible even at min opacity");
+        assert!(
+            hi > lo,
+            "raising opacity must darken the blur tint (hi={hi}, lo={lo})"
+        );
     }
 
     // ---- Vertical mode (was previously untested) -------------------------

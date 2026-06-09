@@ -21,7 +21,7 @@
 //! ## RAII
 //!
 //! `Box<OverlayWndState>` が `WM_NCDESTROY` 経由で `take_userdata` により
-//! reclaim されると、`renderer: RefCell<Option<CompositionRenderer>>` の中の
+//! reclaim されると、`renderer: RefCell<Option<WinrtCompositionRenderer>>` の中の
 //! COM オブジェクトも Drop で確実に Release される。
 
 #![forbid(unsafe_code)]
@@ -40,7 +40,8 @@ use linerule_core::{
 use tracing::Span;
 use windows::Win32::Foundation::HWND;
 
-use crate::renderer_backend::{CompositorKind, HudBackend, OverlayBackend};
+use crate::winrt_composition_renderer::WinrtCompositionRenderer;
+use crate::winrt_hud_renderer::WinrtHudRenderer;
 
 /// 1 つの hotkey 登録に失敗した理由。HUD に列挙表示するために保持する。
 #[derive(Debug, Clone)]
@@ -68,7 +69,7 @@ pub enum HotkeyFailure {
 /// WndProc に流れ込むメッセージごとに参照される instance state。
 ///
 /// フィールドの宣言順は Drop 順を兼ねる。HUD の visual は overlay の
-/// `DcompPipeline.hud_root` (root 直下のサブビジュアル) に attach されているので、
+/// WinRT pipeline の `hud_root` (root 直下のサブビジュアル) に attach されているので、
 /// `hud_renderer` を `renderer` より先に宣言して先に Drop させる。
 pub struct OverlayWndState {
     log_span: Span,
@@ -76,12 +77,10 @@ pub struct OverlayWndState {
     click_count: AtomicU64,
     /// `attach_compositor` で `Some` になる HUD 描画器。Drop で COM オブジェクトが
     /// Release される。`renderer` より先に Drop させるため上に置く。
-    hud_renderer: RefCell<Option<HudBackend>>,
+    hud_renderer: RefCell<Option<WinrtHudRenderer>>,
     /// `attach_compositor` で `Some` になる overlay renderer。Drop で COM
     /// オブジェクトが Release される。
-    renderer: RefCell<Option<OverlayBackend>>,
-    /// 採用した composition backend (device-lost rebuild で同種を再構築するため保持)。
-    compositor_kind: Cell<CompositorKind>,
+    renderer: RefCell<Option<WinrtCompositionRenderer>>,
     /// Pure tick pipeline の累積 state。`WM_APP_TICK` ハンドラから per-tick で
     /// `borrow_mut()` される。
     tick_world: RefCell<TickWorld>,
@@ -123,7 +122,7 @@ pub struct OverlayWndState {
     device_lost_count: Cell<u8>,
     /// overlay HWND の遅延設定値。`OverlayWindow::new_with_initial_world` で
     /// `CreateWindowExW` 成功直後に `set_hwnd` で書き込む。device-lost rebuild
-    /// 時に `CompositionRenderer::new(hwnd)` で新しい pipeline を作るために使う。
+    /// 時に `WinrtCompositionRenderer::new(hwnd)` で新しい pipeline を作るために使う。
     /// `OnceCell` で 1 回だけ確定する不変条件を表現。
     hwnd: OnceCell<HWND>,
     /// プロセス起動時刻。`tick::step` に渡す `now_ms` を計算するための原点。
@@ -155,7 +154,6 @@ impl OverlayWndState {
             click_count: AtomicU64::new(0),
             hud_renderer: RefCell::new(None),
             renderer: RefCell::new(None),
-            compositor_kind: Cell::new(CompositorKind::Dcomp),
             tick_world: RefCell::new(initial_world),
             hotkey_sender: sender,
             hotkey_inbox: receiver,
@@ -221,35 +219,24 @@ impl OverlayWndState {
         self.click_count.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// `attach_compositor` で構築された overlay renderer backend を仕込む。
-    pub fn install_renderer(&self, renderer: OverlayBackend) {
+    /// `attach_compositor` で構築された overlay renderer を仕込む。
+    pub fn install_renderer(&self, renderer: WinrtCompositionRenderer) {
         *self.renderer.borrow_mut() = Some(renderer);
     }
 
     /// レンダラへの可変アクセス（WndProc の `WM_APP_TICK` ハンドラから利用）。
-    pub fn renderer(&self) -> &RefCell<Option<OverlayBackend>> {
+    pub fn renderer(&self) -> &RefCell<Option<WinrtCompositionRenderer>> {
         &self.renderer
     }
 
-    /// `attach_compositor` で構築された HUD renderer backend を仕込む。
-    pub fn install_hud_renderer(&self, renderer: HudBackend) {
+    /// `attach_compositor` で構築された HUD renderer を仕込む。
+    pub fn install_hud_renderer(&self, renderer: WinrtHudRenderer) {
         *self.hud_renderer.borrow_mut() = Some(renderer);
     }
 
     /// HUD レンダラへの可変アクセス（`RefreshHud` / `SetHudOpacity` 効果適用用）。
-    pub fn hud_renderer(&self) -> &RefCell<Option<HudBackend>> {
+    pub fn hud_renderer(&self) -> &RefCell<Option<WinrtHudRenderer>> {
         &self.hud_renderer
-    }
-
-    /// 採用した composition backend を記録する (`attach_compositor` で 1 度)。
-    pub fn set_compositor_kind(&self, kind: CompositorKind) {
-        self.compositor_kind.set(kind);
-    }
-
-    /// 採用した composition backend を返す (device-lost rebuild で使う)。
-    #[must_use]
-    pub fn compositor_kind(&self) -> CompositorKind {
-        self.compositor_kind.get()
     }
 
     /// 現在の tick world snapshot を取り出す。
@@ -361,7 +348,7 @@ impl OverlayWndState {
     }
 
     /// 設定済みであれば overlay HWND を返す。device-lost rebuild の経路で
-    /// `CompositionRenderer::new(hwnd)` に渡すために使う。
+    /// `WinrtCompositionRenderer::new(hwnd)` に渡すために使う。
     #[must_use]
     pub fn hwnd(&self) -> Option<HWND> {
         self.hwnd.get().copied()

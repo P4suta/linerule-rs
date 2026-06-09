@@ -1,7 +1,7 @@
 //! Render-output data: an immutable list of geometry × brush layers.
 //!
 //! `OverlayFrame` is produced by [`crate::render::frame`] and consumed by the
-//! platform layer (`linerule-platform-windows::composition_renderer`). It is
+//! platform layer (`linerule-platform-windows::winrt_composition_renderer`). It is
 //! pure data; the platform layer translates it to D2D draw calls.
 
 use crate::{
@@ -14,9 +14,8 @@ use crate::{
 pub enum Brush {
     /// Fill the shape with a single sRGB color.
     Solid(Rgba),
-    /// Blur the screen content behind the shape, then overlay `tint`. Only the
-    /// `WinRT` composition backend renders this as a true backdrop blur; the
-    /// Win32 `DComp` backend degrades it to a solid `tint` fill.
+    /// Blur the screen content behind the shape, then overlay `tint`. Rendered
+    /// as a true backdrop blur by the `WinRT` composition backend.
     Blur {
         /// Translucent color drawn over the blurred backdrop.
         tint: Rgba,

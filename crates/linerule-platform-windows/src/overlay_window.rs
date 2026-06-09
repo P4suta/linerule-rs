@@ -1,6 +1,6 @@
 //! 透明 click-through な topmost オーバーレイ HWND のライフサイクル管理。
 //!
-//! composition renderer (Win32 DComp または WinRT) を attach して `OverlayWndState`
+//! WinRT composition renderer を attach して `OverlayWndState`
 //! 側に install し、同じ HWND を `RegisterHotKey` の target にして `WM_HOTKEY` を
 //! 受信する（message-only HWND を作らない設計）。
 
@@ -103,14 +103,14 @@ impl OverlayWindow {
         match create_result {
             Ok(hwnd) => {
                 ex_style_snapshot::capture(hwnd, "after CreateWindowExW");
-                // `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` でも
+                // `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP` + composition でも
                 // ShowWindow を明示呼びしないと visible にならないことがある。
                 // SW_SHOWNOACTIVATE + WS_EX_NOACTIVATE の二重防壁で focus 奪取は防ぐ。
                 win32_ffi::show_window_noactivate(hwnd);
 
                 // SAFETY-equivalent: NonNull<_> は Box::into_raw の戻り値で常に non-null
                 let state = NonNull::new(state_ptr).expect("Box::into_raw is never null");
-                // device-lost rebuild で `CompositionRenderer::new(hwnd)` を呼び直す
+                // device-lost rebuild で `WinrtCompositionRenderer::new(hwnd)` を呼び直す
                 // 必要があるため、HWND を state に shelve する。`OnceCell` で 1 回だけ
                 // 確定する不変条件を表現。
                 win32_ffi::state_ref(state).set_hwnd(hwnd);
@@ -139,21 +139,19 @@ impl OverlayWindow {
         win32_ffi::state_ref(self.state)
     }
 
-    /// composition visual tree を attach し、overlay slit / HUD レンダラを
-    /// `OverlayWndState` 側に install する。backend は `LINERULE_COMPOSITOR`
-    /// 環境変数で選ぶ (既定 DComp、`winrt` で WinRT Composition)。
+    /// composition visual tree (WinRT `Windows.UI.Composition`) を attach し、
+    /// overlay slit / HUD レンダラを `OverlayWndState` 側に install する。
     ///
     /// # Errors
-    /// D3D11 / DXGI / D2D / DComp / DWrite / WinRT のいずれかの初期化に失敗したとき。
+    /// D3D11 / DXGI / D2D / DWrite / WinRT composition のいずれかの初期化に失敗
+    /// したとき。WinRT 一本化につきフォールバックは無く、失敗は致命となる。
     pub fn attach_compositor(&mut self) -> Result<()> {
-        let kind = crate::renderer_backend::CompositorKind::from_env();
         let hud_config = *self.state().hud_config();
-        let (overlay, hud) = crate::renderer_backend::build_backends(self.hwnd, kind, &hud_config)?;
+        let (overlay, hud) = crate::renderer_backend::build_backends(self.hwnd, &hud_config)?;
         ex_style_snapshot::capture(self.hwnd, "after attach_compositor");
         self.state().install_renderer(overlay);
         self.state().install_hud_renderer(hud);
-        self.state().set_compositor_kind(kind);
-        tracing::info!(backend = kind.label(), "composition backend attached");
+        tracing::info!(backend = "winrt", "composition backend attached");
         Ok(())
     }
 

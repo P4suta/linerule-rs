@@ -5,7 +5,9 @@
 //! Win32/COM を触る。
 //!
 //! - [`core`] — Window / message pump / instance state
-//! - [`graphics`] — D3D11 + DXGI + D2D + DComposition pipeline
+//! - [`graphics`] — D3D11 + DXGI + D2D device stack
+//! - [`composition`] — WinRT `Windows.UI.Composition` host (overlay + HUD)
+//! - [`blur_effect`] — backdrop Gaussian-blur effect for the `Blur` surround
 //! - [`hotkey`] — `RegisterHotKey`
 //! - [`pacer`] — `DwmFlush` + `PostMessageW`
 //! - [`dwrite`] — DirectWrite text formats + DrawText

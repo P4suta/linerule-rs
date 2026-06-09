@@ -306,9 +306,9 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
             },
             TickEffect::SetHudOpacity { state: s, cursor } => {
                 // cursor 距離から fade opacity を pure 関数で計算し、HUD visual
-                // の `IDCompositionVisual3::SetOpacity2` で multiplicative に
-                // 適用する。`frame.opacity` の bake (色 alpha) は RefreshHud 側で
-                // 別軸として保持されるので、cursor 移動だけで surface 再描画は走らない。
+                // の `SpriteVisual::SetOpacity` で multiplicative に適用する。
+                // `frame.opacity` の bake (色 alpha) は RefreshHud 側で別軸として
+                // 保持されるので、cursor 移動だけで surface 再描画は走らない。
                 let opacity = hud_fade::compute_opacity(
                     s,
                     cursor,
@@ -349,7 +349,7 @@ fn apply_hud_frame(state: &OverlayWndState, frame: &HudFrame) -> Result<()> {
     Ok(())
 }
 
-/// `HudRenderer::set_opacity` の wndproc-side wrapper。`RefCell` の `borrow_mut`
+/// `WinrtHudRenderer::set_opacity` の wndproc-side wrapper。`RefCell` の `borrow_mut`
 /// を 1 箇所に閉じ込め、renderer 未 attach の起動直後でも no-op で済むようにする。
 fn apply_hud_opacity(state: &OverlayWndState, opacity: f32) -> Result<()> {
     if let Some(renderer) = state.hud_renderer().borrow_mut().as_mut() {
@@ -425,21 +425,20 @@ fn device_lost_hr(e: &PlatformError) -> Option<i32> {
     }
 }
 
-/// 採用中の backend で overlay + HUD renderer を新規構築して state に install し
+/// WinRT composition で overlay + HUD renderer を新規構築して state に install し
 /// 直す。古い renderer は `install_*` で差し替えられた時点で Drop され、古い COM
 /// オブジェクト (pipeline / visual / surface) は RAII で Release される。
 fn rebuild_renderers(state: &OverlayWndState) -> Result<()> {
     let hwnd = state.hwnd().ok_or(PlatformError::NullHandle {
         operation: "rebuild_renderers: HWND unset",
     })?;
-    let (overlay, hud) =
-        crate::renderer_backend::build_backends(hwnd, state.compositor_kind(), state.hud_config())?;
+    let (overlay, hud) = crate::renderer_backend::build_backends(hwnd, state.hud_config())?;
     state.install_renderer(overlay);
     state.install_hud_renderer(hud);
     tracing::info!(
         target: "renderer.device_lost",
         parent: state.span(),
-        backend = state.compositor_kind().label(),
+        backend = "winrt",
         "renderers rebuilt successfully"
     );
     Ok(())
