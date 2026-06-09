@@ -74,7 +74,7 @@ proptest! {
         prop_assert_eq!(next.mode, state.mode);
         prop_assert_eq!(next.visible, state.visible);
         prop_assert_eq!(next.config.opacity, state.config.opacity);
-        prop_assert_eq!(next.config.mask_color, state.config.mask_color);
+        prop_assert_eq!(next.config.effect, state.config.effect);
     }
 
     /// Opacity saturating arithmetic is monotonic and stays in range.
@@ -195,6 +195,7 @@ fn any_key_code() -> impl Strategy<Value = KeyCode> {
 fn any_action() -> impl Strategy<Value = OverlayAction> {
     prop_oneof![
         Just(OverlayAction::CycleMode),
+        Just(OverlayAction::CycleEffect),
         Just(OverlayAction::ToggleVisible),
         (-1024_i32..1024).prop_map(OverlayAction::BumpThickness),
         (-1024_i32..1024).prop_map(OverlayAction::BumpOpacity),

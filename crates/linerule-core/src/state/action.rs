@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 pub enum OverlayAction {
     /// Advance `Mode` through `Off → Horizontal → Vertical → Off`.
     CycleMode,
+    /// Advance `SurroundEffect` through `DimBlack → WhiteWash → Blur → DimBlack`.
+    CycleEffect,
     /// Flip the `visible` flag.
     ToggleVisible,
     /// Add `delta` (signed) to `OverlayConfig::thickness`.

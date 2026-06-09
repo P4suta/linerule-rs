@@ -1,14 +1,8 @@
 # 0007 — Debug Build profile (`dist-dev`) と panic 戦略の非対称性
 
-**Status:** **Superseded by [[0011-phase-j-slim-down]]** (Phase J slim-down, 2026-05-20).
+**Status:** **Superseded by [[0011-phase-j-slim-down]]** (2026-05-20)。`[profile.dist-dev]` / PDB artifact / `panic = "unwind"` 非対称は撤廃済みで、現行コードベースに `dist-dev` profile は存在しない。
 
-> 旧 Status: Accepted (Phase H groundwork, 2026-05-20).
->
-> Phase J で「薄い読書ツール」志向への回帰のため `[profile.dist-dev]` / PDB
-> artifact / `panic = "unwind"` 非対称を撤廃した。本 ADR の判断は履歴として
-> 保持するが、現行コードベースに `dist-dev` profile は存在しない。
-
-**See also:** [[0003-unsafe-isolation]] (`unsafe` を `win32_ffi/` に集約), [[0004-coverage-policy]] (coverage gate), [[0011-phase-j-slim-down]] (本 ADR を supersede), Phase H plan の H1/H3。
+**See also:** [[0003-unsafe-isolation]] (`unsafe` を `win32_ffi/` に集約), [[0004-coverage-policy]] (coverage gate), [[0011-phase-j-slim-down]] (本 ADR を supersede).
 
 ## 文脈
 
@@ -71,7 +65,6 @@ Release を unwind に切り替える判断は本 ADR の範囲外、Issue で�
 - `Justfile` に `just build-debug` recipe を追加 (~5 LOC, ローカル検証用)
 - CI artifact `linerule-win-x64-debug` (EXE 2MB + PDB 27MB ≒ 30MB) が download 可能
 - `target/dist-dev/linerule.{exe,pdb}` がローカルでも生成可能
-- Phase H の PR-A スコープ
 
 ### Release との非対称性
 

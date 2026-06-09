@@ -104,9 +104,9 @@ fn run_overlay(
     // 最初に DPI awareness を Per-Monitor V2 に設定する。Window 作成前に呼ぶ
     // 必要があるため `OverlayWindow::new` より前に置く。失敗しても fatal には
     // せず log のみ（既に dpi awareness が manifested 等のケース）。AppError
-    // 経由で class() に流して classify_and_log を経由させる (ADR-0013)。
-    // overlay handle がまだ無いのでこの時点では HUD push せず、後段で boot 完了
-    // 後に conflict / dpi failure を一括 push する経路に合流させる。
+    // 経由で class() に流して classify_and_log を経由させる。overlay handle が
+    // まだ無いのでこの時点では HUD push せず、後段で boot 完了後に conflict /
+    // dpi failure を一括 push する経路に合流させる。
     let mut early_recoverable: Vec<String> = Vec::new();
     if let Err(e) = set_dpi_aware() {
         let app_err: crate::error::AppError = e.into();
@@ -136,9 +136,9 @@ fn run_overlay(
     // overlay HWND が破棄される前に解除/join する必要がある。Rust の逆順 Drop
     // を活かすため overlay → _foreground_hook → _clock → _auto_quit の順に宣言する。
     let mut overlay = OverlayWindow::new_with_initial_world(monitor, config.hud, initial_world)?;
-    overlay.attach_dcomp()?;
+    overlay.attach_compositor()?;
     overlay.register_hotkeys(&config.hotkeys, config.input.tap_step)?;
-    // Alt+Tab 等で他アプリが前景化した後も overlay を最前面に保つ (ADR-0012)。
+    // Alt+Tab 等で他アプリが前景化した後も overlay を最前面に保つ。
     // 失敗しても fatal にせず log のみ — overlay 自体は WS_EX_TOPMOST で十分
     // 多くの場合に最前面が保てる。
     let _foreground_hook = match ForegroundHook::install(overlay.hwnd()) {
@@ -150,8 +150,8 @@ fn run_overlay(
     };
 
     // boot 中に積み上がった recoverable errors を HUD notification として push
-    // する (ADR-0013、Phase H PR-E)。AppError::class() = Recoverable と判定された
-    // 項目をユーザーに HUD で 10 秒間 toast する。
+    // する。AppError::class() = Recoverable と判定された項目をユーザーに HUD で
+    // 10 秒間 toast する。
     for message in early_recoverable.drain(..) {
         overlay
             .state()
@@ -165,11 +165,12 @@ fn run_overlay(
 
     tracing::info!(
         cycle_mode = config.hotkeys.cycle_mode,
+        cycle_effect = config.hotkeys.cycle_effect,
         toggle_visible = config.hotkeys.toggle_visible,
         quit = config.hotkeys.quit,
         duration_ms = duration_ms.unwrap_or(0),
         initial_mode = ?initial_mode,
-        "overlay running; press Ctrl+Alt+R to cycle modes, Ctrl+Alt+Q to quit"
+        "overlay running; press Ctrl+Alt+R to cycle modes, Ctrl+Alt+E to cycle effects, Ctrl+Alt+Q to quit"
     );
     run_message_pump()?;
     Ok(())
@@ -312,8 +313,8 @@ mod tests {
         );
     }
 
-    /// PR-B: `boot()` の `info_span!("linerule_run", run_id = ...)` 経由で
-    /// log line に `run_id` が乗ることを確認する。`boot()` 全体を叩くと global
+    /// `boot()` の `info_span!("linerule_run", run_id = ...)` 経由で log line に
+    /// `run_id` が乗ることを確認する。`boot()` 全体を叩くと global
     /// subscriber + panic hook を install してしまうので、span だけ手で構築
     /// して `dispatch_command` を呼び、`traced_test` subscriber が span field
     /// を含めて log line を render することを assert する。

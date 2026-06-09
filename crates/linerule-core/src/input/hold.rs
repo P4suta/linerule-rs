@@ -257,7 +257,7 @@ pub(crate) const fn classify(action: OverlayAction) -> Classification {
     use OverlayAction as A;
     match action {
         A::BumpThickness(_) | A::BumpOpacity(_) => Classification::AccelRepeat,
-        A::CycleMode => Classification::SlowRepeat,
+        A::CycleMode | A::CycleEffect => Classification::SlowRepeat,
         A::ToggleVisible => Classification::AwaitRelease {
             undo_on_long_press: A::ToggleVisible,
         },
@@ -270,7 +270,7 @@ pub(crate) const fn with_magnitude(action: OverlayAction, magnitude: i32) -> Ove
     match action {
         A::BumpThickness(d) => A::BumpThickness(d.saturating_mul(magnitude)),
         A::BumpOpacity(d) => A::BumpOpacity(d.saturating_mul(magnitude)),
-        A::CycleMode | A::ToggleVisible | A::Quit => action,
+        A::CycleMode | A::CycleEffect | A::ToggleVisible | A::Quit => action,
     }
 }
 

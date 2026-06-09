@@ -1,5 +1,5 @@
 //! Panic hook がトリガーされたとき、`<linerule.exe と同じ dir>/crash-<runid>-<ts>.json`
-//! にクラッシュレポートを同期書き出す (ADR-0011)。
+//! にクラッシュレポートを同期書き出す。
 
 #![forbid(unsafe_code)]
 

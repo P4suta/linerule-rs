@@ -188,9 +188,7 @@ mod tests {
         assert_eq!(Thickness::DEFAULT.saturating_add(-99_999), Thickness::MIN);
     }
 
-    /// `Opacity::get` が constructor で渡した byte をそのまま返すことを pin
-    /// する。`saturating_add` 経由でしか間接的に踏まれていなかったので
-    /// `get -> u8 with 0/1` mutation が逃げていた (Phase ε mutation baseline)。
+    /// `Opacity::get` が constructor で渡した byte をそのまま返すことを pin する。
     #[test]
     fn opacity_get_returns_constructor_byte() {
         assert_eq!(Opacity::DEFAULT.get(), 0xAA);

@@ -4,13 +4,13 @@
 //! それらを薄く safe にラップし、他のモジュール
 //! (`overlay_window.rs`, `wndproc.rs`, `monitor_info.rs`, `windows_app.rs`, ...)
 //! はここから safe 関数だけを呼ぶ。各 `unsafe { ... }` ブロックの直前に
-//! `// SAFETY: ...` コメントを必須化する。詳細方針は ADR-0003 参照。
+//! `// SAFETY: ...` コメントを必須化する。
 
 #![allow(
     unsafe_code,
     reason = "FFI 境界。windows crate の Win32 / COM API は全部 unsafe fn。\
               他の全モジュールは #![forbid(unsafe_code)] で、本ファイルが\
-              唯一の集約点。ADR-0003 参照。"
+              唯一の集約点。"
 )]
 
 use core::ptr::NonNull;
@@ -128,8 +128,8 @@ pub fn destroy_window(hwnd: HWND) -> Result<()> {
 
 /// `SetWindowPos(hwnd, NULL, x, y, width, height, SWP_NOACTIVATE | SWP_NOZORDER)`
 /// の薄い safe wrapper。`WM_DPICHANGED` ハンドラから OS 推奨 rect で overlay
-/// HWND を再配置するために使う (issue #44)。`SWP_NOACTIVATE` で focus 奪取を
-/// 防ぎ、`SWP_NOZORDER` で WS_EX_TOPMOST の z-order を維持する。
+/// HWND を再配置するために使う。`SWP_NOACTIVATE` で focus 奪取を防ぎ、
+/// `SWP_NOZORDER` で WS_EX_TOPMOST の z-order を維持する。
 ///
 /// # Errors
 /// `SetWindowPos` が失敗したとき。
@@ -169,11 +169,9 @@ pub fn rect_from_wm_dpichanged_lparam(lparam: LPARAM) -> windows::Win32::Foundat
 
 /// `ShowWindow(hwnd, SW_SHOWNOACTIVATE)` の safe wrapper。
 ///
-/// `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` の overlay HWND は理論上
-/// 「dcomp content が commit された瞬間に compositor によって表示される」が、
-/// 実環境では `ShowWindow` を明示的に呼ばないと visible にならないケースが
-/// 確認されている (Phase I 実機検証)。`SW_SHOWNOACTIVATE` を使うことで
-/// `WS_EX_NOACTIVATE` と合わせ focus 奪取を二重に防ぐ。
+/// `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` の overlay HWND は、
+/// `ShowWindow` を明示的に呼ばないと visible にならないことがある。
+/// `SW_SHOWNOACTIVATE` を使い、`WS_EX_NOACTIVATE` と合わせ focus 奪取を二重に防ぐ。
 ///
 /// `ShowWindow` の戻り値 BOOL は「前回 visible だったか」を返すだけで失敗を
 /// 示さないため、戻り値は捨てる。

@@ -254,13 +254,10 @@ mod tests {
         assert_eq!(entry.target, "test_subsystem");
     }
 
-    /// Phase δ integration: ring buffer は `crash_dump` の `recent_events` field の
-    /// 供給源として動作する。tracing event → ring → [`snapshot_tail`] → JSON
-    /// serialize → JSON deserialize の round-trip で内容を維持することを確認。
-    ///
-    /// これは end-to-end signal で、crash dump の "recent events tail" が
-    /// 実際の event の内容を欠落させずに保存することを保証する (Phase H/I の
-    /// crash analytics で頼られている経路の test 化)。
+    /// ring buffer は `crash_dump` の `recent_events` field の供給源として動作する。
+    /// tracing event → ring → [`snapshot_tail`] → JSON serialize → deserialize の
+    /// round-trip で内容を維持することを確認し、crash dump の "recent events tail"
+    /// が event 内容を欠落させずに保存することを保証する。
     #[test]
     fn ring_snapshot_round_trips_through_serde_json() {
         #[derive(serde::Deserialize)]

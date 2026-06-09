@@ -1,16 +1,11 @@
 //! HUD frame の純粋 ADT とレイアウト関数。
 //!
 //! プラットフォーム側 (`linerule-platform-windows::hud_renderer`) が `DWrite` +
-//! `D2D` で描画する際に必要な「パネル位置・背景・不透明度・テキスト行配置」
-//! を提供する。テキスト描画自体は platform-windows 側の責務だが、レイアウト
-//! 計算は純粋関数で記述して `linerule-core` の coverage / mutation testing
-//! の対象に含める。
+//! `D2D` で描画する「パネル位置・背景・不透明度・テキスト行配置」を提供する。
+//! 描画自体は platform 側の責務で、ここはレイアウト計算のみ。
 //!
-//! [`crate::render::OverlayFrame`] (`Layer { Brush::Solid, Geometry::Rect }`) と
-//! 分離している理由: HUD はテキスト描画 (`DWrite` 必須) のため `Layer` の閉じた
-//! 表現に Text variant を足すと exhaustive match の意味が崩れ、
-//! `composition_renderer` の `decompose` が単一型に「色塗りと文字描画」を混在
-//! させる事故を起こすため。(ADR-0002 §5)
+//! [`crate::render::OverlayFrame`] と分離してあるのは、HUD はテキスト描画を含み、
+//! `Layer` の閉じた表現に Text variant を足すと exhaustive match が崩れるため。
 
 use serde::Serialize;
 
@@ -106,9 +101,8 @@ pub enum NotificationClass {
 
 /// HUD telemetry の per-tick snapshot。`hud_frame()` の telemetry 行に表示する
 /// 3 指標を運ぶ純粋 ADT。platform 側 (`linerule-platform-windows::frame_timing`)
-/// が計測した値を core に値で渡す (ADR-0012、選択肢 c)。
+/// が計測した値を core に値で渡す。
 ///
-/// cs `HudTelemetry.cs` と同じ意味論:
 /// - `tick_p99_ms`: 直近 N フレームの tick 経過時間の 99 パーセンタイル (ms)。
 /// - `frames_dropped`: render budget (`warn_ratio` × frame budget) を超えた tick の累計。
 /// - `commit_timeouts`: `IDCompositionDevice::Commit` 失敗 / timeout の累計。
@@ -136,8 +130,8 @@ impl HudTelemetry {
 /// 組み立てる。
 ///
 /// 配置はパネル右上にアンカー（モニタ右上から `geometry.margin` だけ離れた位置）。
-/// 行は上から順に: title / status (Mode) / body (Thickness, Opacity) / divider /
-/// telemetry (Refresh Hz) / 続けて notifications を 1 件 1 行で append。
+/// 行は上から順に: title / status (Mode) / body (Thickness, Opacity, Effect) /
+/// telemetry (Refresh Hz) / hotkey help / 続けて notifications を 1 件 1 行で append。
 ///
 /// `notifications` は呼び出し側で expire 済みを除去した snapshot を渡す前提
 /// (`hud_frame` 自体は時刻判定をしない、純粋にレイアウトのみ)。
@@ -160,8 +154,8 @@ impl HudTelemetry {
 /// // 右上アンカー: パネル右端は monitor 右端から margin だけ左
 /// let expected_right = 1920.0 - HudConfig::DEFAULT.geometry.margin;
 /// assert!((frame.panel_left + frame.panel_width - expected_right).abs() < 0.5);
-/// // 5 baseline + 1 header + 7 hotkey rows = 13 行 (Quit 含む)
-/// assert!(frame.rows.len() >= 13);
+/// // 6 baseline + 1 header + 8 hotkey rows = 15 行 (Quit 含む)
+/// assert!(frame.rows.len() >= 15);
 /// ```
 #[must_use]
 #[allow(
@@ -245,12 +239,21 @@ pub fn hud_frame(
         font: HudFontKey::Title,
         color: hud.colors.subtle,
     });
+    y += hud.fonts.body + hud.padding.row;
+
+    // Body: Effect (surround treatment)
+    rows.push(HudRow {
+        origin_x: x,
+        origin_y: y,
+        text: format!("Effect: {}", state.config.effect.label()),
+        font_size: hud.fonts.body,
+        font: HudFontKey::Title,
+        color: hud.colors.subtle,
+    });
     y += hud.fonts.body + hud.padding.section;
 
-    // Telemetry (mono family). cs HudRenderer.cs:408 と byte-for-byte 一致:
-    //   "{Hz}Hz · p99 {ms:F2}ms · drops {} · stalls {}"
-    // `·` は U+00B7 MIDDLE DOT。Mono フォントで等幅整列を保つため "Hz" の前後の
-    // 空白は cs と合わせる ("60Hz" は数値直後、 "p99 1.23ms" は数値前後ともスペース)。
+    // Telemetry (mono family). format: "{Hz}Hz · p99 {ms:F2}ms · drops {} · stalls {}"
+    // `·` は U+00B7 MIDDLE DOT。空白は等幅整列に合わせて固定。
     rows.push(HudRow {
         origin_x: x,
         origin_y: y,
@@ -264,9 +267,8 @@ pub fn hud_frame(
     });
     y += hud.fonts.telemetry + hud.padding.section;
 
-    // Hotkey help section. C# 版相当の操作説明を panel に常時表示する。
-    // section header (body サイズ, title font) → 7 hotkey rows (telemetry サイズ,
-    // mono font) で chord 表記を揃える。Quit は emergency 退避手段なので必ず出す。
+    // Hotkey help section: section header (body/title font) → hotkey rows
+    // (telemetry/mono font)。Quit は緊急退避手段なので必ず出す。
     rows.push(HudRow {
         origin_x: x,
         origin_y: y,
@@ -277,8 +279,9 @@ pub fn hud_frame(
     });
     y += hud.fonts.body + hud.padding.row;
 
-    let hotkey_lines: [(&str, &str); 7] = [
+    let hotkey_lines: [(&str, &str); 8] = [
         ("Mode cycle", hotkeys.cycle_mode),
+        ("Effect cycle", hotkeys.cycle_effect),
         ("Show/Hide", hotkeys.toggle_visible),
         ("Thicker", hotkeys.thicker),
         ("Thinner", hotkeys.thinner),
@@ -356,9 +359,8 @@ mod tests {
         ScreenRect::new(Point::new(0, 0), 1920, 1080)
     }
 
-    /// `hud_frame()` を default 引数で呼ぶ test helper。Phase ζ で hotkeys 引数が
-    /// 必須化、PR 4 で telemetry 引数が必須化されたため、12+ 件の test を一行で
-    /// 書き直せるよう小さな wrapper を置く。telemetry は `ZERO` 既定。
+    /// `hud_frame()` を default 引数 (`HotkeyMap::DEFAULT` / `HudTelemetry::ZERO`) で
+    /// 呼ぶ test helper。
     fn default_frame(state: State, refresh_hz: u32, notifications: &[HudNotification]) -> HudFrame {
         hud_frame(
             state,
@@ -383,8 +385,8 @@ mod tests {
     fn default_state_rows_are_present_and_ordered_top_to_bottom() {
         let f = default_frame(State::DEFAULT, 144, &[]);
         assert!(
-            f.rows.len() >= 13,
-            "expected at least 13 rows (5 baseline + 1 header + 7 hotkeys), got {}",
+            f.rows.len() >= 15,
+            "expected at least 15 rows (6 baseline + 1 header + 8 hotkeys), got {}",
             f.rows.len()
         );
         for w in f.rows.windows(2) {
@@ -438,11 +440,10 @@ mod tests {
         );
     }
 
-    /// cs `HudRenderer.cs:408` の format 文字列と byte-for-byte 一致するか pin する。
-    /// `{Hz}Hz · p99 {ms:F2}ms · drops {} · stalls {}`。`·` は U+00B7 MIDDLE DOT。
-    /// telemetry の値が反映されているかも同時に確認する。
+    /// telemetry 行の format `{Hz}Hz · p99 {ms:F2}ms · drops {} · stalls {}` を pin する
+    /// (`·` は U+00B7 MIDDLE DOT)。値が反映されているかも同時に確認する。
     #[test]
-    fn telemetry_line_format_matches_cs() {
+    fn telemetry_line_format_is_pinned() {
         let t = HudTelemetry {
             tick_p99_ms: 1.23,
             frames_dropped: 7,
@@ -516,8 +517,8 @@ mod tests {
             until_ms: 1_000,
         };
         let f = default_frame(State::DEFAULT, 60, &[warn, info]);
-        // baseline 5 + hotkey help 1+7 = 13 + 2 notifications = 15 rows or more
-        assert!(f.rows.len() >= 15, "rows: {:?}", f.rows);
+        // baseline 6 + hotkey help 1+8 = 15 + 2 notifications = 17 rows or more
+        assert!(f.rows.len() >= 17, "rows: {:?}", f.rows);
         let n1 = &f.rows[f.rows.len() - 2];
         let n2 = &f.rows[f.rows.len() - 1];
         assert_eq!(n1.text, "Ctrl+Alt+R → already in use");
@@ -544,19 +545,15 @@ mod tests {
     #[test]
     fn empty_notifications_preserve_default_row_count() {
         let f = default_frame(State::DEFAULT, 60, &[]);
-        // baseline 5 (title + status + thickness + opacity + telemetry)
-        // + 1 hotkey help header + 7 hotkey rows (cycle / show / thicker /
-        // thinner / more / less / quit) = 13 rows
-        assert_eq!(f.rows.len(), 13);
+        // baseline 6 (title + status + thickness + opacity + effect + telemetry)
+        // + 1 hotkey help header + 8 hotkey rows (mode / effect / show / thicker
+        // / thinner / more / less / quit) = 15 rows
+        assert_eq!(f.rows.len(), 15);
     }
 
     /// 各 row の `origin_y` を `HudConfig::DEFAULT` 由来の算術で pin する。
-    ///
-    /// `hud_frame` 内部の `y += font + padding` 累積が単一の `+=` / `+`
-    /// 演算子変更 (mutation) でズレた場合に確実に検知するための回帰テスト。
-    /// 既存の ordering test (`origin_y[i] <= origin_y[i+1]`) は ordering を
-    /// 守るが値域を pin しないので、`+= title + section` を `*= title + section`
-    /// に変えるような mutation を捕捉できなかった (Phase ε mutation baseline)。
+    /// ordering test は順序しか守らないので、`y += font + padding` 累積の値域を
+    /// ここで固定する (`HudConfig::DEFAULT` が変わったらこの test を更新)。
     ///
     /// 期待値はすべて `HudConfig::DEFAULT` から手計算:
     /// - `panel_top` = `monitor_top + margin` = `0 + 24` = `24`
@@ -564,20 +561,18 @@ mod tests {
     /// - row 1 (Status)           `y1 = 48 + 24 (title font) + 16 (section)` = `88`
     /// - row 2 (Thickness)        `y2 = 88 + 22 (status font) + 8 (row)` = `118`
     /// - row 3 (Opacity)          `y3 = 118 + 20 (body font) + 8 (row)` = `146`
-    /// - row 4 (Telemetry)        `y4 = 146 + 20 (body font) + 16 (section)` = `182`
-    /// - row 5 (Hotkeys header)   `y5 = 182 + 18 (telemetry) + 16 (section)` = `216`
-    /// - row 6 (Mode cycle)       `y6 = 216 + 20 (body font) + 8 (row)` = `244`
-    /// - row 7..12 (Hotkey rows)  `y{n+1} = y{n} + 18 (telemetry) + 8 (row)` = `+26 each`
-    ///
-    /// `HudConfig::DEFAULT` 自体が変わったらこの test を更新する (回帰検知の
-    /// 重みを残すために、寛容な許容差ではなく `EPSILON` 級で pin する)。
+    /// - row 4 (Effect)           `y4 = 146 + 20 (body font) + 8 (row)` = `174`
+    /// - row 5 (Telemetry)        `y5 = 174 + 20 (body font) + 16 (section)` = `210`
+    /// - row 6 (Hotkeys header)   `y6 = 210 + 18 (telemetry) + 16 (section)` = `244`
+    /// - row 7 (Mode cycle)       `y7 = 244 + 20 (body font) + 8 (row)` = `272`
+    /// - row 8..14 (Hotkey rows)  `y{n+1} = y{n} + 18 (telemetry) + 8 (row)` = `+26 each`
     #[test]
     fn row_origin_y_pins_default_layout_arithmetic() {
         let f = default_frame(State::DEFAULT, 60, &[]);
         assert_eq!(
             f.rows.len(),
-            13,
-            "5 baseline + 1 header + 7 hotkeys expected"
+            15,
+            "6 baseline + 1 header + 8 hotkeys expected"
         );
 
         // `panel_top` itself は monitor_top + margin。
@@ -587,10 +582,10 @@ mod tests {
             f.panel_top
         );
 
-        // row 0..5: baseline + Hotkeys header
-        let baseline_y = [48.0_f32, 88.0, 118.0, 146.0, 182.0, 216.0];
-        // row 6..12: 7 hotkey rows, starting at 244 with +26 step
-        let hotkey_y = [244.0_f32, 270.0, 296.0, 322.0, 348.0, 374.0, 400.0];
+        // row 0..6: baseline + Hotkeys header
+        let baseline_y = [48.0_f32, 88.0, 118.0, 146.0, 174.0, 210.0, 244.0];
+        // row 7..14: 8 hotkey rows, starting at 272 with +26 step
+        let hotkey_y = [272.0_f32, 298.0, 324.0, 350.0, 376.0, 402.0, 428.0, 454.0];
         let expected_y: Vec<f32> = baseline_y.iter().chain(hotkey_y.iter()).copied().collect();
         for (i, exp) in expected_y.iter().enumerate() {
             let actual = f.rows[i].origin_y;
@@ -606,10 +601,10 @@ mod tests {
     /// section 余白を挟んで notifications が並ぶ。
     ///
     /// 期待値:
-    /// - 最後の hotkey row (Quit) の y = 400 (上 test 参照)
-    /// - hotkey loop 終了後 `y += telemetry(18) + row(8) + (section - row)(8)` = +34 → 434
-    /// - notification[0] y = 434
-    /// - notification[1] y = `434 + 18 (telemetry) + 8 (row)` = `460`
+    /// - 最後の hotkey row (Quit) の y = 454 (上 test 参照)
+    /// - hotkey loop 終了後 `y += telemetry(18) + row(8) + (section - row)(8)` = +34 → 488
+    /// - notification[0] y = 488
+    /// - notification[1] y = `488 + 18 (telemetry) + 8 (row)` = `514`
     #[test]
     fn notification_origin_y_pins_default_layout_arithmetic() {
         let n1 = HudNotification {
@@ -623,29 +618,28 @@ mod tests {
             until_ms: i64::MAX,
         };
         let f = default_frame(State::DEFAULT, 60, &[n1, n2]);
-        assert_eq!(f.rows.len(), 15, "13 baseline+hotkey + 2 notification rows");
-        let actual_n1 = f.rows[13].origin_y;
-        let actual_n2 = f.rows[14].origin_y;
+        assert_eq!(f.rows.len(), 17, "15 baseline+hotkey + 2 notification rows");
+        let actual_n1 = f.rows[15].origin_y;
+        let actual_n2 = f.rows[16].origin_y;
         assert!(
-            (actual_n1 - 434.0).abs() < 0.001,
-            "notification[0] origin_y expected 434.0, got {actual_n1}"
+            (actual_n1 - 488.0).abs() < 0.001,
+            "notification[0] origin_y expected 488.0, got {actual_n1}"
         );
         assert!(
-            (actual_n2 - 460.0).abs() < 0.001,
-            "notification[1] origin_y expected 460.0, got {actual_n2}"
+            (actual_n2 - 514.0).abs() < 0.001,
+            "notification[1] origin_y expected 514.0, got {actual_n2}"
         );
     }
 
-    /// `hotkeys` 引数で渡した chord 文字列が各 hotkey row に正しく反映されることを
-    /// pin する。custom `HotkeyMap` を渡したら row の text が変わることを確認 (これが
-    /// 効かないと「HUD 操作説明が常に DEFAULT 表示」という degenerate state が
-    /// 発生する。Phase ζ の主要機能の retainer test)。
+    /// `hotkeys` 引数の chord 文字列が各 hotkey row に反映されることを pin する
+    /// (効かないと「HUD 操作説明が常に DEFAULT 表示」になる)。
     #[test]
     fn hotkey_help_rows_reflect_hotkey_map_argument() {
         // DEFAULT と完全に異なる chord にして substring 混同を避ける (`Ctrl+Alt+R`
         // のような短い prefix が `Ctrl+Alt+Right` にマッチする問題を回避)。
         let custom = HotkeyMap {
             cycle_mode: "Ctrl+Shift+M",
+            cycle_effect: "Ctrl+Shift+E",
             toggle_visible: "Ctrl+Shift+V",
             thicker: "Ctrl+Shift+T",
             thinner: "Ctrl+Shift+N",

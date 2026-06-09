@@ -7,7 +7,7 @@
 //! overlay 暗幕より前面に表示される (z-order は visual tree 構造で固定)。
 //!
 //! 描画パスは `win32_ffi::dwrite::draw_hud_to_surface` に集約されており、本
-//! ファイル自体は `#![forbid(unsafe_code)]` を維持する (ADR-0006)。
+//! ファイル自体は `#![forbid(unsafe_code)]` を維持する。
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
@@ -128,16 +128,13 @@ impl HudRenderer {
         //
         // visual 単位の opacity (`IDCompositionVisual3::SetOpacity2`) はここで
         // **触らない** — `frame.opacity` は base opacity として既に色 alpha に
-        // bake 済 (上の `draw_hud_to_surface` 経由)。visual の opacity は
-        // [`Self::set_opacity`] 経由でのみ更新され、SetHudOpacity effect の
-        // cursor 距離 fade を multiplicative にかける役割を持つ (issue #47)。
-        // ここで毎 RefreshHud に opacity を 1.0 にリセットしてしまうと cursor
-        // fade 状態が 200ms ごとに消えるので、意図的に no-op にしている。
+        // bake 済。visual の opacity は [`Self::set_opacity`] 経由でのみ更新され、
+        // cursor 距離 fade を multiplicative にかける。ここで毎 RefreshHud に
+        // 1.0 へリセットすると fade 状態が消えるので、意図的に no-op にしている。
         graphics::visual_set_offset(&self.visual, frame.panel_left, frame.panel_top)?;
         // DComp visual tree の変更を compositor に push する。HudRenderer は
-        // CompositionRenderer とは独立に commit する (起動直後 mode=Off で
-        // DrawOverlay が発行されない期間に HUD が見えない事故を防ぐ、Phase I
-        // 仕上げで発覚)。
+        // CompositionRenderer とは独立に commit する (起動直後 mode=Off で overlay
+        // が描かれない期間でも HUD を出すため)。
         graphics::commit(&self.dcomp)
     }
 
@@ -212,8 +209,7 @@ mod tests {
     fn size_to_centi_rounds_to_2_decimal_places() {
         // 安全に f32 で表現できる整数 × 100 を確認する。0.005 のような半端値は
         // f32 精度で 2 進数表現が exact でない（20.005_f32 は 20.00499...）ため
-        // round 後の結果が処理系依存になり、Windows native と Linux 上の rustc
-        // で結果が食い違う事故があった (#42)。
+        // round 後の結果が処理系依存になる。
         assert_eq!(size_to_centi(24.0), 2400);
         assert_eq!(size_to_centi(18.5), 1850);
         assert_eq!(size_to_centi(22.0), 2200);

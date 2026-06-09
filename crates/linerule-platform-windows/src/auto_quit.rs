@@ -3,7 +3,7 @@
 //! 別 thread で `thread::sleep(duration)` 後に `PostMessageW(hwnd,
 //! WM_APP_QUIT_TIMER, 0, 0)` を発行し、UI thread の wndproc が
 //! `PostQuitMessage(0)` に変換することで、`Ctrl+Alt+Q` 経由 quit と同じ
-//! graceful な終了 flow を自動化する (Phase α GUI smoke test)。
+//! graceful な終了 flow を自動化する。
 //!
 //! 設計は `RenderClock` と同じ「別 thread + `JoinHandle` を `Drop` で join」
 //! パターン。pacer thread とは独立してライフサイクル管理する。

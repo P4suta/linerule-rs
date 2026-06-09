@@ -28,10 +28,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_RBUTTONDOWN,
 };
 
-use crate::composition_renderer::CompositionRenderer;
 use crate::cursor_tracker;
 use crate::error::{PlatformError, Result};
-use crate::hud_renderer::HudRenderer;
 use crate::messages::{HTTRANSPARENT, WM_APP_QUIT_TIMER, WM_APP_REASSERT_TOPMOST, WM_APP_TICK};
 use crate::monitor_info;
 use crate::overlay_state::OverlayWndState;
@@ -113,7 +111,7 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             // overlay は virtual-screen 全体に張られていて、DComp が compositor
             // 側で per-monitor DPI を適用するため font/HUD layout の再計算は
             // 不要 (DWrite text format は DIPs 入力, HudConfig は logical px)。
-            // ここでは OS 推奨 rect で SetWindowPos するだけ (issue #44)。
+            // ここでは OS 推奨 rect で SetWindowPos するだけ。
             let new_rect = win32_ffi::rect_from_wm_dpichanged_lparam(lparam);
             let width = new_rect.right.saturating_sub(new_rect.left);
             let height = new_rect.bottom.saturating_sub(new_rect.top);
@@ -142,8 +140,8 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
         },
         WM_DISPLAYCHANGE => {
             // 解像度や monitor 構成が変化した。active monitor cache は
-            // `apply_tick::follow_active_monitor` (issue #46) で per-tick に
-            // 再解決されるため invalidate 不要。event の可観測性のため log
+            // `apply_tick::follow_active_monitor` で per-tick に再解決される
+            // ため invalidate 不要。event の可観測性のため log
             // だけ残し DefWindowProcW にフォールバックする。
             let bpp = u32::try_from(wparam.0 & 0xFFFF).unwrap_or(0);
             tracing::info!(
@@ -157,7 +155,7 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
         WM_APP_REASSERT_TOPMOST => {
             // ForegroundHook の callback (OS hook thread) から PostMessage で
             // 届く。実 SetWindowPos(HWND_TOPMOST) は UI thread 必須なのでここで
-            // 実行する (ADR-0012)。
+            // 実行する。
             if let Err(e) = win32_ffi::accessibility::reassert_topmost(hwnd) {
                 tracing::warn!(parent: state.span(), error = %e,
                     "reassert_topmost failed (foreground hook)");
@@ -222,7 +220,7 @@ fn apply_tick(state: &OverlayWndState) -> Result<()> {
 }
 
 /// cursor 位置から active monitor を解決し、現 cache と異なれば
-/// `state.set_monitor` で更新する (issue #46)。`bounds_for_point` は
+/// `state.set_monitor` で更新する。`bounds_for_point` は
 /// `MonitorFromPoint(MONITOR_DEFAULTTONEAREST)` 経由で remote desktop 等の
 /// 画面外 cursor にも fallback する。失敗時は warn だけ出して現状維持。
 fn follow_active_monitor(state: &OverlayWndState, polled_cursor: Option<Point<Logical>>) {
@@ -309,9 +307,8 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
             TickEffect::SetHudOpacity { state: s, cursor } => {
                 // cursor 距離から fade opacity を pure 関数で計算し、HUD visual
                 // の `IDCompositionVisual3::SetOpacity2` で multiplicative に
-                // 適用する (issue #47)。`frame.opacity` の bake (色 alpha) は
-                // RefreshHud 側で別軸として保持されるので、cursor 移動だけで
-                // surface 再描画は走らない。
+                // 適用する。`frame.opacity` の bake (色 alpha) は RefreshHud 側で
+                // 別軸として保持されるので、cursor 移動だけで surface 再描画は走らない。
                 let opacity = hud_fade::compute_opacity(
                     s,
                     cursor,
@@ -353,8 +350,7 @@ fn apply_hud_frame(state: &OverlayWndState, frame: &HudFrame) -> Result<()> {
 }
 
 /// `HudRenderer::set_opacity` の wndproc-side wrapper。`RefCell` の `borrow_mut`
-/// を 1 箇所に閉じ込め、renderer 未 attach の起動直後 (Phase D 前) でも no-op
-/// で済むようにする。
+/// を 1 箇所に閉じ込め、renderer 未 attach の起動直後でも no-op で済むようにする。
 fn apply_hud_opacity(state: &OverlayWndState, opacity: f32) -> Result<()> {
     if let Some(renderer) = state.hud_renderer().borrow_mut().as_mut() {
         renderer.set_opacity(opacity)?;
@@ -362,9 +358,9 @@ fn apply_hud_opacity(state: &OverlayWndState, opacity: f32) -> Result<()> {
     Ok(())
 }
 
-/// `apply_overlay_frame` / `apply_hud_frame` を device-lost rebuild で wrap する
-/// (issue #45)。失敗 HRESULT が DXGI/D2D の device-lost 系なら一度 renderer を
-/// 作り直して 1 度だけ retry する。連続 3 回で `OverlayAction::Quit` を要求。
+/// `apply_overlay_frame` / `apply_hud_frame` を device-lost rebuild で wrap する。
+/// 失敗 HRESULT が DXGI/D2D の device-lost 系なら一度 renderer を作り直して
+/// 1 度だけ retry する。連続 3 回で `OverlayAction::Quit` を要求。
 ///
 /// `op` は `Fn(&OverlayWndState) -> Result<()>` で、`apply_*_frame` ヘルパーを
 /// 渡す。closure 内で `borrow_mut` を `if let` scope に閉じ込めているので、
@@ -429,28 +425,28 @@ fn device_lost_hr(e: &PlatformError) -> Option<i32> {
     }
 }
 
-/// CompositionRenderer + HudRenderer を新規構築して state に install し直す
-/// (issue #45)。古い renderer は `install_*` で差し替えられた時点で Drop され、
-/// 古い COM オブジェクト (pipeline / visual / surface) は RAII で Release される。
+/// 採用中の backend で overlay + HUD renderer を新規構築して state に install し
+/// 直す。古い renderer は `install_*` で差し替えられた時点で Drop され、古い COM
+/// オブジェクト (pipeline / visual / surface) は RAII で Release される。
 fn rebuild_renderers(state: &OverlayWndState) -> Result<()> {
     let hwnd = state.hwnd().ok_or(PlatformError::NullHandle {
         operation: "rebuild_renderers: HWND unset",
     })?;
-    let new_renderer = CompositionRenderer::new(hwnd)?;
-    let new_hud = HudRenderer::new(new_renderer.pipeline(), state.hud_config())?;
-    state.install_renderer(new_renderer);
-    state.install_hud_renderer(new_hud);
+    let (overlay, hud) =
+        crate::renderer_backend::build_backends(hwnd, state.compositor_kind(), state.hud_config())?;
+    state.install_renderer(overlay);
+    state.install_hud_renderer(hud);
     tracing::info!(
         target: "renderer.device_lost",
         parent: state.span(),
+        backend = state.compositor_kind().label(),
         "renderers rebuilt successfully"
     );
     Ok(())
 }
 
 /// `OverlayWndState` の hotkey 競合一覧 + 即時 toast を `HudNotification` の
-/// 列に変換する。`hud_frame()` 側でレイアウト計算する純粋関数フローに統合
-/// する (旧 `append_conflict_rows` の責務移譲、ADR-0009)。
+/// 列に変換する。`hud_frame()` 側でレイアウト計算する純粋関数フローに統合する。
 fn build_notifications(state: &OverlayWndState) -> Vec<linerule_core::HudNotification> {
     let conflicts = state.hotkey_conflicts();
     let mut out = Vec::with_capacity(conflicts.len() + 1);

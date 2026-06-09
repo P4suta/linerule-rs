@@ -2,9 +2,9 @@
 
 **Status:** Accepted (2026-05-24)。supersedes [[0010-release-assets-workflow]] の trigger 設計部分。命名規則・SBOM 添付・build 戦略は ADR-0010 から継承する。
 
-**Errata (2026-05-24, same day):** 初版で `release-please-config.json` の `"skip-github-release": true` を「tag は push される、Release object だけ skip」と解釈していたが、`googleapis/release-please-action@v5` の `action.yml` を直接読むと description は `"if set to true, then do not try to tag releases"` で **tag 自体も push しない**。v0.4.1 リリース時 (2026-05-24, PR #89 merge 後) に tag が push されず release-please workflow が `untagged, merged release PRs outstanding - aborting` で抜けて stuck した。本セッションでは手動で `git tag -s v0.4.1 24545ed` + `git push origin v0.4.1` を打って解消し release-assets workflow の draft → upload → publish flow が initial fire することは検証した。次回以降の release で同じ stuck を避けるため、`release-please.yml` 側で「release-please-action 実行後、`tag_name` output と現 tag 一覧を照合し、未 push なら自前で `git tag` + `git push origin $tag` を打つ補助 step」を追加することを後続 PR で実装する (= 本 ADR を完全に supersede する ADR-0015 が立つまでの暫定運用)。
+**注意:** `release-please-config.json` の `"skip-github-release": true` は Release object だけでなく **tag 自体も push しない** (`release-please-action@v5` の `action.yml` 仕様)。tag が無いと release-please workflow が `untagged, merged release PRs outstanding - aborting` で stuck するため、`release-please.yml` 側で「実行後に `tag_name` と現 tag 一覧を照合し、未 push なら自前で `git tag` + `git push` する補助 step」が必要。
 
-**See also:** [[0010-release-assets-workflow]] (supersede 元)、[[0011-phase-j-slim-down]] (薄い読書ツール志向)、[[release-please-token-workaround]] (memory: token 問題)、[[immutable-release-asset-block]] (memory: 422 経緯)。
+**See also:** [[0010-release-assets-workflow]] (supersede 元)、[[0011-phase-j-slim-down]] (薄い読書ツール志向).
 
 ## 文脈
 
@@ -15,9 +15,9 @@ GitHub が 2025-10-28 GA とした **immutable releases** 機能が本リポジ�
 1. `release-please-action` が `chore(main): release X.Y.Z` PR を merge した瞬間に tag + GitHub Release を **publish** で作る
 2. release-assets.yml が `on: release: types: [published]` で trigger され、`gh release upload` で asset を **後付け**
 
-これは immutable release 前提では破綻する: step 2 で発火する upload が常に 422 で失敗する。2026-05-24 リリース cycle (v0.3.0 + v0.4.0) で実際に両 release とも asset 0 個で終わった。
+これは immutable release 前提では破綻する: step 2 で発火する upload が常に 422 で失敗する。
 
-更に二次的に、`release-please-action` が `secrets.GITHUB_TOKEN` で release を作るため、GitHub の policy で他 workflow を trigger しない仕様 ([[release-please-token-workaround]]) も重なって、自動 attach は事実上 dead path だった (workflow_dispatch で手動 trigger しても同じ 422)。
+更に二次的に、`release-please-action` が `secrets.GITHUB_TOKEN` で release を作るため、GitHub の policy で他 workflow を trigger しない仕様も重なって、自動 attach は事実上 dead path だった (workflow_dispatch で手動 trigger しても同じ 422)。
 
 ## 判断
 
@@ -56,7 +56,7 @@ release-please-action              gh release create $tag --draft --generate-not
 
 ### release-please の `release-please-action` token 問題との関係
 
-`secrets.GITHUB_TOKEN` で release-please が tag を push しても、本 ADR の workflow は `push: tags` (= 必ず trigger 発火する event) を使うため、token PAT 化を待たずに自動 attach が動く。token PAT 化 ([[release-please-token-workaround]]) は **PR check (release-please の release PR で `ci.yml` を発火させる)** の問題が残っているが、本 ADR の scope 外。
+`secrets.GITHUB_TOKEN` で release-please が tag を push しても、本 ADR の workflow は `push: tags` (= 必ず trigger 発火する event) を使うため、token PAT 化を待たずに自動 attach が動く。token PAT 化 (release PR で `ci.yml` を発火させる問題) は本 ADR の scope 外。
 
 ### 既存 release (v0.2.0–v0.4.0) への遡及 attach
 
@@ -86,18 +86,18 @@ linerule-vX.Y.Z-sbom.cdx.json        (CycloneDX 1.6 JSON)
 
 ## 検証
 
-次のリリース cycle (PR #89 = release 0.4.1 が現在 open) の merge をもって live 検証する:
+リリース cycle の merge で live 検証する:
 
-1. release-please PR (#89) を merge
-2. release-please workflow が tag `v0.4.1` を push (release は作らない)
+1. release-please PR を merge
+2. release-please workflow が tag を push (release は作らない)
 3. push: tags trigger で release-assets.yml が起動
-4. draft `v0.4.1` 作成 → EXE + SBOM upload → publish
-5. `gh release view v0.4.1` で asset 2 個が確認できれば成功
+4. draft 作成 → EXE + SBOM upload → publish
+5. `gh release view <tag>` で asset 2 個が確認できれば成功
 
-失敗時の rollback は `gh release delete v0.4.1 --cleanup-tag` で全消し、原因修正後に release-please の次バージョンを待つか、`workflow_dispatch (tag=v0.4.1)` で手動再実行。
+失敗時の rollback は `gh release delete <tag> --cleanup-tag` で全消し、原因修正後に再実行。
 
 ## Open questions / Followup
 
-- release-please の `secrets.GITHUB_TOKEN` 起因の **PR check 問題** ([[release-please-token-workaround]]) は本 ADR で解消されない。release PR の `ci.yml` 14 check を毎回 close+reopen で発火させる暫定運用を継続する。
-- `gh release ... --generate-notes` の出力が user expectation を満たさないと判明したら CHANGELOG.md からの section 抽出に切り替える (awk script を追加)。
+- release-please の `secrets.GITHUB_TOKEN` 起因の PR check 問題は本 ADR で解消されない。release PR の `ci.yml` check を毎回 close+reopen で発火させる暫定運用を継続する。
+- `gh release ... --generate-notes` の出力が要件を満たさないと判明したら CHANGELOG.md からの section 抽出に切り替える。
 - `--latest` flag は `gh release edit --draft=false` 時に最新タグ判定を強制する。複数 main 系列 (`v0.4.x` と `v0.5.x` 並列) を運用する場合は再検討。現状は単系列なので OK。

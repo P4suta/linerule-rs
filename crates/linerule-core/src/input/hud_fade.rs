@@ -194,15 +194,8 @@ mod tests {
         assert!((hi - 14.0).abs() < 1e-6);
     }
 
-    /// `point_to_rect_distance` の `x + 1.0` (L65) を spot で pin する。
-    /// 点を「1 px 幅の rect」扱いするための +1.0 が `-` / `*` に mutate される
-    /// ケース (Phase ε mutation baseline) を catch するため、結果が +1.0 に
-    /// 1px だけ依存する geometry を作る。
-    ///
-    /// rect (2, 0)-(100, 100), point (0, 50):
-    /// - 元 (`x + 1.0`):   dx = `axis_gap(0, 1, 2, 100)` = 1.0
-    /// - mutant `+ → -`:   dx = `axis_gap(0, -1, 2, 100)` = 3.0
-    /// - mutant `+ → *`:   dx = `axis_gap(0, 0, 2, 100)` = 2.0
+    /// 点を「1 px 幅の rect」扱いする `x + 1.0` を pin する。rect (2,0)-(100,100),
+    /// point (0,50) で dx ≈ 1.0 (1px gap)。
     #[test]
     fn point_to_rect_distance_pins_x_plus_one_unit_offset() {
         let d = point_to_rect_distance(0.0, 50.0, 2.0, 0.0, 100.0, 100.0);

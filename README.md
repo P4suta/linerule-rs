@@ -5,6 +5,7 @@ Rust 製の Windows 用 reading ruler（読書補助オーバーレイ）。透�
 実機での操作:
 
 - `Ctrl+Alt+R`: モード切替（Off → Horizontal → Vertical → Off）
+- `Ctrl+Alt+E`: 周囲効果切替（Dim（暗幕）→ White（白マスク）→ Blur（背後ぼかし）→ Dim）
 - `Ctrl+Alt+H`: 表示／非表示トグル
 - `Ctrl+Alt+Up` / `Ctrl+Alt+Down`: スリット厚さ ±（長押しで連続調整）
 - `Ctrl+Alt+Right` / `Ctrl+Alt+Left`: 不透明度 ±（長押しで連続調整）
@@ -15,8 +16,15 @@ Bump 系（厚さ・不透明度）は長押しで連続発火する。Mode 切�
 キーなのは、Windows の IME / keyboard layout で OEM キーの VK が化けて `RegisterHotKey`
 がキャプチャを取り逃すケースがあったため（JIS keyboard × ENG IME で再現）。
 
-HUD パネル（画面右上）に Mode / Thickness / Opacity / Refresh Hz と上記の操作一覧が常時
-表示される。multi-monitor 環境では virtual screen 全体に overlay が広がる。
+HUD パネル（画面右上）に Mode / Thickness / Opacity / Effect / Refresh Hz と上記の操作一覧が
+常時表示される。multi-monitor 環境では virtual screen 全体に overlay が広がる。
+
+### Blur 効果と composition backend
+
+`Blur`（背後ぼかし）は WinRT Composition の backdrop blur を使うため、環境変数
+`LINERULE_COMPOSITOR=winrt` で WinRT backend を選んだときのみ本物のぼかしになる。既定の
+`dcomp`（Win32 DirectComposition）backend では `Blur` は単色の暗幕に degrade する。WinRT
+backend は移行中のため、既定は `dcomp`。
 
 ## 構成
 
@@ -114,9 +122,9 @@ just crash-latest                   # 最新クラッシュダンプ
 
 ## 設計・運用ドキュメント
 
-- [`docs/adr/0001-port-from-csharp.md`](docs/adr/0001-port-from-csharp.md): 旧 C# 版 (`linerule-cs`) からの Rust 全面リライト判断、旧 ADR 処遇マッピング
-- [`docs/adr/0002-architecture-principles.md`](docs/adr/0002-architecture-principles.md): 18 個の merge ブロッカー原則（一方向依存 / RAII / exhaustive match / unsafe 局所化 / `#[non_exhaustive]` を使わない / 等）
-- [`docs/roadmap/phase-eta.md`](docs/roadmap/phase-eta.md): Phase η の draft ロードマップ（code signing / Winget / i18n / accessibility 候補と Out of Scope の整理）
+設計判断は [`docs/adr/`](docs/adr/) に ADR として記録する。一方向依存 / RAII /
+exhaustive match / unsafe 局所化などの merge ブロッカー原則は
+[`docs/adr/0002-architecture-principles.md`](docs/adr/0002-architecture-principles.md) を参照。
 
 ## ライセンス
 

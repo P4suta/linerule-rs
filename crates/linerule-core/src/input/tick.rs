@@ -255,10 +255,8 @@ mod tests {
         assert!(!fx2.iter().any(|e| matches!(e, TickEffect::RefreshHud(_))));
     }
 
-    /// `cursor_moved = polled_cursor != last_cursor` (L148) を pin する。
-    /// cursor が同位置に留まる tick では `SetHudOpacity` が emit されないこと、
-    /// cursor が動いた tick では emit されることを両方確かめる。
-    /// `!=` を `==` に mutate すると両 assert を同時に満たせない (Phase ε)。
+    /// `cursor_moved = polled_cursor != last_cursor` を pin する。cursor が留まる
+    /// tick では `SetHudOpacity` が emit されず、動いた tick では emit されること。
     #[test]
     fn set_hud_opacity_is_emitted_iff_cursor_changed_position() {
         // Tick 1: 初期 (last_cursor = None) → polled = Some(P1) なので cursor_moved=true

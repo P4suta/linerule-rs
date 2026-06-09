@@ -1,16 +1,16 @@
 # 0011 — Phase J slim-down: AppData ログ / dist-dev / PDB を撤廃して「薄い読書ツール」志向へ回帰
 
-**Status:** Accepted (Phase J, 2026-05-20).
+**Status:** Accepted (2026-05-20).
 
 **Supersedes:** [[0007-debug-build-and-panic-strategy]] (`[profile.dist-dev]` + `panic = "unwind"` + PDB 配布)。
 
-**Amends:** [[0010-release-assets-workflow.md]] (Release asset 添付戦略を release profile 1 binary に縮退)。
+**Amends:** [[0010-release-assets-workflow]] (Release asset 添付戦略を release profile 1 binary に縮退)。
 
-**See also:** [[0009-diagnostics-cli-and-debug-assertions]] (`linerule diagnostics` サブコマンド、本 ADR で path は変わるが機能は維持)、[[feedback-enforce-in-code-not-docs]] (本プロジェクトの enforcement 方針)。
+**See also:** [[0009-diagnostics-cli-and-debug-assertions]] (`linerule diagnostics` サブコマンド、本 ADR で path は変わるが機能は維持).
 
 ## 文脈
 
-Phase H〜I で「実機 crash を解析しやすい」観点から以下を積み上げた:
+「実機 crash を解析しやすい」観点から以下を積み上げていた:
 
 - ログを `%APPDATA%\linerule\events.jsonl.YYYY-MM-DD` に出す (`directories::ProjectDirs` 経由、`logging.rs:67-70`)
 - `[profile.dist-dev]` = `release` + `panic = "unwind"` + `strip = "none"` + `lto = "thin"` で PDB 付き Debug Build artifact を CI から配布 (ADR-0007)
