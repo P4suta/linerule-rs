@@ -4,10 +4,10 @@
 //! を持つ overlay でも一時的に背後に回るケースが Windows の z-order 競合で
 //! 起きうる。本 hook は `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` で前景変更
 //! を監視し、UI thread に `WM_APP_REASSERT_TOPMOST` を投げる。実 `SetWindowPos
-//! (HWND_TOPMOST)` は wndproc 側で実行する (詳細 ADR-0012)。
+//! (HWND_TOPMOST)` は wndproc 側で実行する。
 //!
 //! `WINEVENT_SKIPOWNPROCESS` で自プロセス前景化は OS が抑制してくれるので、
-//! callback 内での HWND 比較は不要 (cs `ForegroundHook.cs` と同等)。
+//! callback 内での HWND 比較は不要。
 
 #![forbid(unsafe_code)]
 

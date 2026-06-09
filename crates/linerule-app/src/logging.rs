@@ -6,8 +6,8 @@
 //! - `<linerule.exe と同じ dir>/events.jsonl.YYYY-MM-DD`: machine-readable JSON Lines
 //!
 //! 「薄い読書ツール」志向のため、`%APPDATA%` / `ProjectDirs` を使わず exe と
-//! 同階層に直接吐く portable 運用 (ADR-0011)。書き込み権限が無い場合 (Program
-//! Files 配下に置かれた場合等) は `init()` が `Err` を返す。
+//! 同階層に直接吐く portable 運用。書き込み権限が無い場合 (Program Files 配下に
+//! 置かれた場合等) は `init()` が `Err` を返す。
 
 #![forbid(unsafe_code)]
 
@@ -64,7 +64,7 @@ pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
 }
 
 /// 現在実行中の `linerule.exe` と同じディレクトリを返す。`events.jsonl.*` と
-/// `crash-*.json` の両方がここに置かれる (ADR-0011)。
+/// `crash-*.json` の両方がここに置かれる。
 ///
 /// # Errors
 /// `std::env::current_exe()` が失敗した場合、または exe path に parent が無い
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn data_dir_matches_current_exe_parent() {
-        // ADR-0011: ログは exe と同じ階層に置く portable 運用。
+        // ログは exe と同じ階層に置く portable 運用。
         let p = data_dir().expect("current_exe resolves under cargo nextest");
         let expected = std::env::current_exe()
             .expect("current_exe resolves under cargo nextest")

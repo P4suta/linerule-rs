@@ -1,11 +1,11 @@
 //! `DwmFlush` + `PostMessageW` の薄い safe wrapper。
 //!
-//! Phase F の `render_clock.rs` から別 thread で `DwmFlush` を呼んで vsync を
-//! 待ち、`PostMessageW(target_hwnd, WM_APP_TICK, 0, 0)` で UI thread を起こす。
+//! `render_clock.rs` から別 thread で `DwmFlush` を呼んで vsync を待ち、
+//! `PostMessageW(target_hwnd, WM_APP_TICK, 0, 0)` で UI thread を起こす。
 
 #![allow(
     unsafe_code,
-    reason = "FFI 境界。DwmFlush / PostMessageW は windows crate でも unsafe。ADR-0003。"
+    reason = "FFI 境界。DwmFlush / PostMessageW は windows crate でも unsafe。"
 )]
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};

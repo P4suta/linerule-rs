@@ -8,7 +8,7 @@
 
 `linerule-platform-windows` は Win32 / COM / DirectComposition / Direct2D / DirectWrite / D3D11 を直接叩く。`windows` crate (Microsoft 謹製) の Win32 API は実質すべて `unsafe fn` であり、これを呼ぶ以上 `unsafe` ブロックは避けられない。
 
-ユーザ要件: 「unsafe は禁止」 ([[linerule-rs-architecture-priority]] / [[no-suppress-warnings]] / 本セッション)。だが click-through + per-pixel α + Alt+Tab 非表示の overlay は `DirectComposition` + `WS_EX_LAYERED` + `WS_EX_NOREDIRECTIONBITMAP` + `WS_EX_TOOLWINDOW` を要し、winit / winsafe / wgpu / tiny-skia いずれの抽象でも完全 `unsafe` ゼロは技術的に不可能であることを Phase C 計画段階の調査で確認。
+原則として「unsafe は禁止」だが、click-through + per-pixel α + Alt+Tab 非表示の overlay は `DirectComposition` + `WS_EX_LAYERED` + `WS_EX_NOREDIRECTIONBITMAP` + `WS_EX_TOOLWINDOW` を要し、winit / winsafe / wgpu / tiny-skia いずれの抽象でも完全 `unsafe` ゼロは技術的に不可能。
 
 ## 決定
 
@@ -59,8 +59,7 @@ done
 ## 結果
 
 - user-facing コード（dispatch, OverlayWindow, MonitorInfo, run_message_pump 等）は `forbid(unsafe_code)`。`grep unsafe` の review attention surface は `win32_ffi.rs` 内に閉じる
-- C# 版 (linerule-cs) が `[UnmanagedCallersOnly]` + WndProc static dispatch を `Linerule.Platform.Windows.OverlayWindow` 1 ファイルにある程度集約していたのと方針一致
-- Phase D の DirectComposition / Direct2D / DWrite / D3D11 wrapper も同じファイル (`win32_ffi.rs`) に追加するか、関連サブモジュール (`win32_ffi/dcomp.rs`, `win32_ffi/d2d.rs` 等) を作って `win32_ffi.rs` 親に対する `mod` 宣言で吸収する。**`#![allow(unsafe_code)]` のファイル数を増やすときは ADR を要する**
+- DirectComposition / Direct2D / DWrite / D3D11 wrapper も同じファイル (`win32_ffi.rs`) か、サブモジュール (`win32_ffi/graphics.rs`, `win32_ffi/dwrite.rs` 等) を作って `win32_ffi.rs` 親への `mod` 宣言で吸収する。**`#![allow(unsafe_code)]` のファイル数を増やすときは ADR を要する**
 - ユーザの「unsafe 禁止」要件への対応:
   - user code（dispatch ロジック、状態管理、メッセージポンプ）からは unsafe 完全に消える
   - FFI 境界の薄い wrapper だけが unsafe を持つ

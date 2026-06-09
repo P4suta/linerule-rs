@@ -5,9 +5,9 @@
 //! `PlatformError → AppError` は thiserror の `#[from]` で自動派生、I/O と serde
 //! 由来の失敗も同じ enum に統合する。
 //!
-//! 設計判断: なぜ `linerule-core::LineruleError` に `Platform` variant を生やさ
-//! ないか — orphan rule + 依存方向の純度。`linerule-core` は `linerule-platform-
-//! windows` を知らないままにし、合流点を app 層に持たせる (ADR-0008)。
+//! `linerule-core::LineruleError` に `Platform` variant を生やさないのは orphan
+//! rule + 依存方向の純度のため。`linerule-core` は `linerule-platform-windows`
+//! を知らないままにし、合流点を app 層に持たせる。
 //!
 //! `main()` は `anyhow::Result` を維持。`AppError` は `Into<anyhow::Error>` を
 //! thiserror が自動派生するので boundary で `?` 1 つで anyhow に上がる。
@@ -26,7 +26,6 @@ use thiserror::Error;
 /// linerule-app の集約エラー型。core / platform / I/O / serde を同じ surface に
 /// まとめる。
 ///
-/// PR-C で型を導入し、PR-E (HUD notification toast push, ADR-0013) で
 /// `boot::run_overlay` のエラーパスから `class()` で分類して使う。
 /// `boot::run_overlay` は `cfg(target_os = "windows")` 限定なので Linux build
 /// では本型の caller が存在しない (test を除く)。`dead_code` allow は Linux
@@ -84,7 +83,7 @@ impl AppError {
 /// `AppError` を [`ErrorClass`] に応じて log + 必要なら HUD notification として
 /// 通知する helper。`Recoverable` は呼び出し側に「続行可能」を `Continue` で
 /// 伝え、`Fatal` / `ProgrammerError` は `Stop` を返す。HUD push 経路自体は
-/// 呼び出し側の closure で渡す (overlay handle が文脈依存のため)。ADR-0013 参照。
+/// 呼び出し側の closure で渡す (overlay handle が文脈依存のため)。
 #[cfg(target_os = "windows")]
 pub(crate) fn classify_and_log(err: &AppError) -> RunDecision {
     let class = err.class();

@@ -42,14 +42,11 @@ pub(crate) fn run() -> Result<()> {
         // `linerule-platform-windows` は `#![cfg(windows)]` で Linux 上の native
         // clippy では gate out されるため、`disallowed_methods` 等の deny list が
         // 機能しない。`cargo xwin clippy` で Windows target を走らせ、本ステップで
-        // `IDCompositionSurface::BeginDraw` 等の直叩きが PR レベルで reject される
-        // (Phase I E_NOINTERFACE 事故再発防止、ADR-0009 系)。
+        // `IDCompositionSurface::BeginDraw` 等の直叩きを reject する。
         //
         // 本ステップでは Windows 専用コードの他 lint (pedantic, style, unwrap_used
         // 等) を `-A` で抑え、`disallowed_methods` / `disallowed_types` /
-        // `disallowed_macros` のみを `-D` で発火させる。pre-existing な warning を
-        // この PR で一掃しないと CI が回らない、という連鎖修正を避けるための
-        // 設計判断 (deny list 系の事故防止が主目的、他 lint clean up は別 PR)。
+        // `disallowed_macros` のみを `-D` で発火させる。deny list 系の誤用防止が主目的。
         (
             "clippy-windows-deny-list",
             vec![

@@ -153,8 +153,7 @@ impl From<Severity> for Level {
 /// - `D2DERR_RECREATE_TARGET` (0x8899000C): D2D render target lost
 ///
 /// 呼び出し側 (Windows プラットフォーム) が `PlatformError::BadHr { hr, .. }`
-/// から `hr` を取り出して本関数で判定する想定。`linerule-core` に置くことで
-/// Linux 上 `cargo nextest` でも mutation baseline をカバーできる。
+/// から `hr` を取り出して本関数で判定する想定。
 #[must_use]
 pub const fn is_device_lost_hresult(hr: i32) -> bool {
     // HRESULT は Win32 / D2D で慣例的に「最上位 bit 立ち = 失敗」の符号付き 32-bit。
@@ -185,9 +184,8 @@ pub enum DeviceLostOutcome {
 
 /// device-lost 失敗を 1 回記録し、次のアクションを決定する pure 関数。
 ///
-/// 連続 `prev = 2` 回まで Retry、`prev + 1 >= 3` で `Quit`。`linerule-core` 側
-/// で副作用なく決定できるため、`overlay_state.rs` の `Cell<u8>` から取得した
-/// 値を渡して結果を反映する形で使う (issue #45)。
+/// 連続 `prev = 2` 回まで Retry、`prev + 1 >= 3` で `Quit`。`overlay_state.rs` の
+/// `Cell<u8>` から取得した値を渡して結果を反映する形で使う。
 #[must_use]
 pub const fn record_device_lost_failure(prev: u8) -> DeviceLostOutcome {
     if prev >= 2 {

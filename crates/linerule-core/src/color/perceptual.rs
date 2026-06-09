@@ -81,10 +81,7 @@ mod tests {
         }
     }
 
-    /// `smooth(0.5)` の具体値を pin する。`1.0 / 2.2` を `1.0 % 2.2` (= `1.0`)
-    /// や `1.0 * 2.2` (= `2.2`) に mutate された場合と区別するため、 公式値
-    /// `0.5^(1/2.2) ≈ 0.7297` を tolerance 0.005 で挟む (Phase ε mutation
-    /// baseline)。
+    /// `smooth(0.5)` の具体値 `0.5^(1/2.2) ≈ 0.7297` を tolerance 0.005 で pin する。
     #[test]
     fn smooth_midpoint_value_is_pinned() {
         // 0.5^(1/2.2) ≈ 0.7297400
@@ -101,8 +98,7 @@ mod tests {
         );
     }
 
-    /// `l_star` の toe 以下 (linear 部分, L38) と toe 以上 (cube-root 部分, L40)
-    /// の両方を pin する。L38 `*` / `/` の mutation を spot で catch する。
+    /// `l_star` の toe 以下 (linear 部分) と toe 以上 (cube-root 部分) の両方を pin する。
     #[test]
     fn l_star_segment_values_are_pinned() {
         // toe 以下: linear * 9.032962 / 1.16

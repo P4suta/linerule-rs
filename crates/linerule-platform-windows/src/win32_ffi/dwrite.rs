@@ -1,18 +1,18 @@
 //! `IDWriteFactory` / `IDWriteTextFormat` / `ID2D1DeviceContext::DrawText` の
 //! 薄い safe wrapper。
 //!
-//! Phase G で `linerule-platform-windows/hud_renderer.rs` から呼ばれる。
-//! `unsafe` の境界を `win32_ffi/dwrite.rs` 1 ファイルに集約する（ADR-0006）。
+//! `hud_renderer.rs` から呼ばれる。`unsafe` の境界をこの 1 ファイルに集約する。
 
 #![allow(
     unsafe_code,
-    reason = "FFI 境界。DWrite / D2D の各 COM API は windows crate でも全部 unsafe。\
-              ADR-0003 + ADR-0006 で集約。"
+    reason = "FFI 境界。DWrite / D2D の各 COM API は windows crate でも全部 unsafe。"
 )]
 
 use linerule_core::Rgba;
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
-use windows::Win32::Graphics::Direct2D::{D2D1_DRAW_TEXT_OPTIONS_NONE, ID2D1SolidColorBrush};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1_DRAW_TEXT_OPTIONS_NONE, ID2D1DeviceContext, ID2D1SolidColorBrush,
+};
 use windows::Win32::Graphics::DirectComposition::IDCompositionSurface;
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -102,8 +102,8 @@ pub struct HudDrawRow<'a> {
 /// 1 関数に閉じ込め、呼び出し側を `#![forbid(unsafe_code)]` で書けるようにする。
 /// DComp surface tile を render target に bind する責務と D2D drawing session の
 /// 開始/終了は `begin_dcomp_draw_d2d` / `end_dcomp_draw` 側で完結するため、本関数
-/// では D2D context の `BeginDraw` / `EndDraw` を呼ばない (ADR-0006 + MS Docs
-/// `IDCompositionSurface::BeginDraw`、graphics::fill_surface 参照)。
+/// では D2D context の `BeginDraw` / `EndDraw` を呼ばない
+/// (`graphics::fill_surface` 参照)。
 ///
 /// `opacity` (0.0–1.0) は背景・各行色の alpha に乗算する形で適用される。dcomp の
 /// visual 単位 opacity を使わない理由は `graphics.rs` のコメント参照。
@@ -116,20 +116,34 @@ pub fn draw_hud_to_surface(
     opacity: f32,
     rows: &[HudDrawRow<'_>],
 ) -> Result<()> {
-    let opacity = opacity.clamp(0.0, 1.0);
     let (dc, offset) = crate::win32_ffi::graphics::begin_dcomp_draw_d2d(
         surface,
         "IDCompositionSurface::BeginDraw (HUD)",
     )?;
+    draw_hud_rows(&dc, offset, background, opacity, rows)?;
+    crate::win32_ffi::graphics::end_dcomp_draw(surface, "IDCompositionSurface::EndDraw (HUD)")
+}
 
+/// 既に drawing session が開かれた `ID2D1DeviceContext` に「背景クリア + 行描画」を
+/// 発行する。surface tile の `offset` を `SetTransform` に反映する。DComp / WinRT
+/// どちらの surface でも共有する描画本体 (begin/end は呼び出し側の責務)。
+///
+/// # Errors
+/// brush 生成が失敗したとき。
+pub fn draw_hud_rows(
+    dc: &ID2D1DeviceContext,
+    offset: windows::Win32::Foundation::POINT,
+    background: Rgba,
+    opacity: f32,
+    rows: &[HudDrawRow<'_>],
+) -> Result<()> {
+    let opacity = opacity.clamp(0.0, 1.0);
     let bg = color_to_premultiplied_f(scale_alpha(background, opacity));
-    // SAFETY: dc / surface valid。DComp::BeginDraw が D2D drawing session を既に
-    // 開いているので、context に描画コマンドだけを発行する。surface.EndDraw で
-    // D2D session も内部的にクローズされる。
+    // SAFETY: 呼び出し側が drawing session を開いた状態で dc を渡す前提。
     unsafe {
         #[allow(
             clippy::cast_precision_loss,
-            reason = "DComp offset は通常 < 4096; f32 精度に余裕"
+            reason = "surface tile offset は通常 < 4096; f32 精度に余裕"
         )]
         dc.SetTransform(&Matrix3x2 {
             M11: 1.0,
@@ -160,7 +174,7 @@ pub fn draw_hud_to_surface(
             );
         }
     }
-    crate::win32_ffi::graphics::end_dcomp_draw(surface, "IDCompositionSurface::EndDraw (HUD)")
+    Ok(())
 }
 
 /// `[0, 255]` straight alpha の `Rgba` を D2D premultiplied float に変換する。

@@ -15,8 +15,9 @@ use linerule_core::input::win32_vk::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, c
 #[test]
 fn every_default_chord_parses_and_produces_nonzero_vk() {
     let map = HotkeyMap::DEFAULT;
-    let cases: [(&str, &str); 7] = [
+    let cases: [(&str, &str); 8] = [
         ("cycle_mode", map.cycle_mode),
+        ("cycle_effect", map.cycle_effect),
         ("toggle_visible", map.toggle_visible),
         ("thicker", map.thicker),
         ("thinner", map.thinner),
@@ -59,6 +60,7 @@ fn every_default_chord_display_round_trips() {
     let map = HotkeyMap::DEFAULT;
     for spec in [
         map.cycle_mode,
+        map.cycle_effect,
         map.toggle_visible,
         map.thicker,
         map.thinner,
@@ -116,6 +118,7 @@ fn default_chords_are_pairwise_distinct() {
     let map = HotkeyMap::DEFAULT;
     let labeled = [
         ("cycle_mode", map.cycle_mode),
+        ("cycle_effect", map.cycle_effect),
         ("toggle_visible", map.toggle_visible),
         ("thicker", map.thicker),
         ("thinner", map.thinner),

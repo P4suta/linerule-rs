@@ -58,4 +58,4 @@ pub use render::{
     Brush, Geometry, HudFontKey, HudFrame, HudNotification, HudRow, HudTelemetry, Layer,
     NotificationClass, OverlayFrame, frame, hud_frame,
 };
-pub use state::{Mode, OverlayAction, State, StateDelta};
+pub use state::{Mode, OverlayAction, State, StateDelta, SurroundEffect};

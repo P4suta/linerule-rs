@@ -1,8 +1,8 @@
 # 0008 — `ErrorClass` 分類と `AppError` aggregator
 
-**Status:** Accepted (Phase H, 2026-05-20).
+**Status:** Accepted (2026-05-20).
 
-**See also:** [[0002-architecture-principles]] (closed sum / 一方向依存), [[0003-unsafe-isolation]], [[0007-debug-build-and-panic-strategy]]、Phase H plan の H1/H2。
+**See also:** [[0002-architecture-principles]] (closed sum / 一方向依存), [[0003-unsafe-isolation]], [[0007-debug-build-and-panic-strategy]].
 
 ## 文脈
 
@@ -73,7 +73,7 @@ impl AppError {
 
 `Platform` variant は `[target.'cfg(windows)'.dependencies]` の cfg gate 下にあるので、`#[cfg(target_os = "windows")]` で variant 自体を Windows 限定にする。Linux テストでは `AppError::{Core, Io, Serde}` の 3 variant のみが見える。
 
-`main()` は引き続き `anyhow::Result<()>`。`AppError` は thiserror の `#[from]` 経由で `Into<anyhow::Error>` を自動派生するので `?` chain 1 つで anyhow に上がる。`dispatch_command` 等の中層を本 PR では segregate しない (PR-E の HUD notification toast push で `AppError::class()` を消費する箇所から caller を増やしていく)。
+`main()` は引き続き `anyhow::Result<()>`。`AppError` は thiserror の `#[from]` 経由で `Into<anyhow::Error>` を自動派生するので `?` chain 1 つで anyhow に上がる。
 
 ## 結果
 
@@ -82,7 +82,6 @@ impl AppError {
 - 新規 `linerule-app/src/error.rs` (`AppError` aggregator + tests, ~125 LOC)
 - `linerule-app/Cargo.toml` に `thiserror` 依存を追加
 - `linerule-core::ErrorClass` を lib.rs から re-export
-- Phase H の PR-C スコープ
 
 `linerule-core` は依然として `linerule-platform-windows` を知らない (`cargo xtask dep-graph` で確認)。`app → platform-windows → core` の純度は維持。
 
@@ -107,5 +106,4 @@ impl AppError {
 ## 関連
 
 - ADR-0007 — Debug Build profile (`dist-dev`) を `panic = "unwind"` にすることで `catch_unwind` 経路が live になり、`ProgrammerError` を debug build でも runtime に観測可能に
-- Phase H PR-E — `AppError::class()` を消費し、`Recoverable` を HUD notification toast に push する経路を実装
-- `linerule-rs-version-bump-cautious` — 本変更は `fix(core):` で patch bump
+- ADR-0013 — `AppError::class()` を消費し、`Recoverable` を HUD notification に push する経路を実装

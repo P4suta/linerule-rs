@@ -14,6 +14,13 @@ use crate::{
 pub enum Brush {
     /// Fill the shape with a single sRGB color.
     Solid(Rgba),
+    /// Blur the screen content behind the shape, then overlay `tint`. Only the
+    /// `WinRT` composition backend renders this as a true backdrop blur; the
+    /// Win32 `DComp` backend degrades it to a solid `tint` fill.
+    Blur {
+        /// Translucent color drawn over the blurred backdrop.
+        tint: Rgba,
+    },
 }
 
 /// Shape of a layer. Currently axis-aligned rectangles in logical space; new

@@ -40,6 +40,10 @@ pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
             let mode = state.mode.cycle();
             (State { mode, ..state }, StateDelta::mode(mode))
         },
+        A::CycleEffect => bump_config(state, |c| OverlayConfig {
+            effect: c.effect.cycle(),
+            ..c
+        }),
         A::ToggleVisible => {
             let visible = !state.visible;
             (State { visible, ..state }, StateDelta::visible(visible))
@@ -80,7 +84,7 @@ fn bump_config(
 }
 
 fn config_unchanged(a: OverlayConfig, b: OverlayConfig) -> bool {
-    a.thickness == b.thickness && a.opacity == b.opacity && a.mask_color == b.mask_color
+    a.thickness == b.thickness && a.opacity == b.opacity && a.effect == b.effect
 }
 
 // ----- private helpers on StateDelta to keep the reducer terse ----------------
@@ -178,12 +182,8 @@ mod tests {
         assert!(!d.is_any());
     }
 
-    /// `BumpOpacity` が `opacity` field を実際に更新することを pin する。
-    /// `OverlayConfig` リテラル内で `opacity: ...` を `..c` のみ
-    /// (= field 省略) に変えた mutation が、saturating_add(-8) で MIN から MIN
-    /// のままになる test では検出できなかった (Phase ε mutation baseline)。
-    /// `Horizontal` mode + DEFAULT (= 0xAA) から +8 すると 0xB2 になる、これは
-    /// `..c` だと 0xAA のままで失敗する。
+    /// `BumpOpacity` が `opacity` field を実際に更新することを pin する
+    /// (`Horizontal` + DEFAULT 0xAA から +8 で 0xB2)。
     #[test]
     fn bump_opacity_actually_mutates_opacity_field() {
         let s0 = State {
@@ -198,8 +198,35 @@ mod tests {
             "opacity must change from DEFAULT after BumpOpacity(+8)"
         );
         assert!(d.config_changed);
-        // 同時に thickness と mask_color は変化しない (他 field を巻き込まない)
+        // 同時に thickness と effect は変化しない (他 field を巻き込まない)
         assert_eq!(s1.config.thickness, s0.config.thickness);
-        assert_eq!(s1.config.mask_color, s0.config.mask_color);
+        assert_eq!(s1.config.effect, s0.config.effect);
+    }
+
+    #[test]
+    fn cycle_effect_walks_the_three_state_loop_when_mode_is_on() {
+        use crate::state::SurroundEffect;
+        let s0 = State {
+            mode: Mode::Horizontal,
+            ..State::DEFAULT
+        };
+        assert_eq!(s0.config.effect, SurroundEffect::DimBlack);
+        let (s1, d1) = apply(s0, OverlayAction::CycleEffect);
+        assert_eq!(s1.config.effect, SurroundEffect::WhiteWash);
+        assert!(d1.config_changed);
+        let (s2, d2) = apply(s1, OverlayAction::CycleEffect);
+        assert_eq!(s2.config.effect, SurroundEffect::Blur);
+        assert!(d2.config_changed);
+        let (s3, d3) = apply(s2, OverlayAction::CycleEffect);
+        assert_eq!(s3.config.effect, SurroundEffect::DimBlack);
+        assert!(d3.config_changed);
+    }
+
+    #[test]
+    fn cycle_effect_is_a_no_op_when_mode_is_off() {
+        let s0 = State::DEFAULT; // mode Off
+        let (s1, d) = apply(s0, OverlayAction::CycleEffect);
+        assert_eq!(s1, s0);
+        assert!(!d.is_any());
     }
 }

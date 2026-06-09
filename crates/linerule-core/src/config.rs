@@ -7,12 +7,13 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::color::{Opacity, Rgba, Thickness};
+use crate::state::SurroundEffect;
 
-/// Mask color + thickness + opacity. Composed into a [`crate::state::State`].
+/// Surround effect + thickness + opacity. Composed into a [`crate::state::State`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OverlayConfig {
-    /// Color of the dim layers above and below (or beside) the slit.
-    pub mask_color: Rgba,
+    /// Treatment of the region around the slit (mask color is derived from it).
+    pub effect: SurroundEffect,
     /// Slit width in logical pixels.
     pub thickness: Thickness,
     /// Mask opacity (perceptual-mapped on output).
@@ -20,9 +21,9 @@ pub struct OverlayConfig {
 }
 
 impl OverlayConfig {
-    /// Default mask: `DEFAULT_MASK` × `Thickness::DEFAULT` × `Opacity::DEFAULT`.
+    /// Default surround: `DimBlack` × `Thickness::DEFAULT` × `Opacity::DEFAULT`.
     pub const DEFAULT: Self = Self {
-        mask_color: Rgba::DEFAULT_MASK,
+        effect: SurroundEffect::DimBlack,
         thickness: Thickness::DEFAULT,
         opacity: Opacity::DEFAULT,
     };
@@ -306,10 +307,8 @@ impl Default for HudConfig {
     }
 }
 
-/// Root configuration aggregate. Per ADR-0015 this is a compile-time
-/// constant; there is no runtime config-file load path.
-//
-// `Deserialize` is omitted; see [`HudFonts`].
+/// Root configuration aggregate. Compile-time constant; no runtime config-file
+/// load path. `Deserialize` is omitted; see [`HudFonts`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct UserConfig {
     /// Overlay (mask + slit) configuration.
@@ -345,12 +344,9 @@ impl Default for UserConfig {
 mod tests {
     use super::*;
 
-    // cs parity: HUD's base opacity is 0.875. Pinning this default closes a
-    // mutation-gate hole — `HudConfig::DEFAULT.base_opacity` is otherwise only
-    // sampled by the platform layer's render path, which mutation testing can
-    // perturb without any in-process test catching the regression.
+    // base_opacity is otherwise only read by the platform render path; pin it here.
     #[test]
-    fn hud_default_base_opacity_is_pinned_at_cs_value() {
+    fn hud_default_base_opacity_is_pinned() {
         assert!((HudConfig::DEFAULT.base_opacity - 0.875).abs() < f32::EPSILON);
     }
 

@@ -1,6 +1,5 @@
 //! `GetCursorPos` ポーリング。tick pipeline へ `Point<Logical>` を渡す。
-//!
-//! Per-monitor DPI 対応は Phase E では行わず、論理座標として扱う。
+//! Per-monitor DPI 対応は行わず、論理座標として扱う。
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]

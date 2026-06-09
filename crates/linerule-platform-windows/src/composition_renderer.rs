@@ -3,9 +3,6 @@
 //! データ構造: `Vec<PooledLayer>` で visual + surface のプールを保持し、frame の
 //! layer 数が変わったら resize するだけ。各 layer は last_size / last_color を
 //! 持って前回値と一致する場合は surface 再生成を省略する。
-//!
-//! Phase D 完了条件: `apply(&overlay_frame)` で transparent click-through
-//! overlay に dim layer + indicator が描けること。HUD は Phase F。
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
@@ -144,11 +141,14 @@ impl CompositionRenderer {
     }
 }
 
-/// `Layer` を (rect, color) に分解する純粋関数。`Brush::Solid` / `Geometry::Rect`
-/// 以外は将来拡張点。
+/// `Layer` を (rect, color) に分解する純粋関数。DComp backend は backdrop blur が
+/// 描けないので、`Brush::Blur` は tint 色の単色塗りに degrade する。
 pub(crate) fn decompose(layer: Layer) -> (ScreenRect<Logical>, Rgba) {
     let Geometry::Rect(rect) = layer.geometry;
-    let Brush::Solid(color) = layer.brush;
+    let color = match layer.brush {
+        Brush::Solid(color) => color,
+        Brush::Blur { tint } => tint,
+    };
     (rect, color)
 }
 

@@ -1,9 +1,8 @@
 //! 透明 click-through な topmost オーバーレイ HWND のライフサイクル管理。
 //!
-//! Phase D で `IDCompositionDesktopDevice` / `IDCompositionTarget` を attach し
-//! た renderer を `OverlayWndState` 側に install する。Phase E で同じ HWND を
-//! `RegisterHotKey` の target にして `WM_HOTKEY` を受信する（message-only HWND
-//! を作らない設計 — D1 in `docs/plans/...`）。
+//! composition renderer (Win32 DComp または WinRT) を attach して `OverlayWndState`
+//! 側に install し、同じ HWND を `RegisterHotKey` の target にして `WM_HOTKEY` を
+//! 受信する（message-only HWND を作らない設計）。
 
 #![forbid(unsafe_code)]
 
@@ -104,18 +103,16 @@ impl OverlayWindow {
         match create_result {
             Ok(hwnd) => {
                 ex_style_snapshot::capture(hwnd, "after CreateWindowExW");
-                // `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` は仕様上
-                // 「dcomp content の commit で表示される」が、実環境では
-                // ShowWindow を明示呼びしないと visible にならないケースが
-                // 確認されている (Phase I 実機検証)。SW_SHOWNOACTIVATE +
-                // WS_EX_NOACTIVATE の二重防壁で focus 奪取は防ぐ。
+                // `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` でも
+                // ShowWindow を明示呼びしないと visible にならないことがある。
+                // SW_SHOWNOACTIVATE + WS_EX_NOACTIVATE の二重防壁で focus 奪取は防ぐ。
                 win32_ffi::show_window_noactivate(hwnd);
 
                 // SAFETY-equivalent: NonNull<_> は Box::into_raw の戻り値で常に non-null
                 let state = NonNull::new(state_ptr).expect("Box::into_raw is never null");
-                // device-lost rebuild (issue #45) で `CompositionRenderer::new(hwnd)`
-                // を呼び直す必要があるため、HWND を state に shelve する。
-                // `OnceCell` で 1 回だけ確定する不変条件を表現。
+                // device-lost rebuild で `CompositionRenderer::new(hwnd)` を呼び直す
+                // 必要があるため、HWND を state に shelve する。`OnceCell` で 1 回だけ
+                // 確定する不変条件を表現。
                 win32_ffi::state_ref(state).set_hwnd(hwnd);
                 Ok(Self { hwnd, state })
             },
@@ -130,8 +127,7 @@ impl OverlayWindow {
         }
     }
 
-    /// 内部 HWND を借りる。Phase F の `RenderClock::spawn` 等から target を取得
-    /// するときに使う。
+    /// 内部 HWND を借りる。`RenderClock::spawn` 等から target を取得するときに使う。
     #[must_use]
     pub fn hwnd(&self) -> HWND {
         self.hwnd
@@ -143,24 +139,26 @@ impl OverlayWindow {
         win32_ffi::state_ref(self.state)
     }
 
-    /// Phase D + G: DirectComposition + Direct2D の visual tree を attach し、
-    /// overlay slit 用 `CompositionRenderer` と HUD 用 `HudRenderer` を
-    /// `OverlayWndState` 側に install する。
+    /// composition visual tree を attach し、overlay slit / HUD レンダラを
+    /// `OverlayWndState` 側に install する。backend は `LINERULE_COMPOSITOR`
+    /// 環境変数で選ぶ (既定 DComp、`winrt` で WinRT Composition)。
     ///
     /// # Errors
-    /// D3D11 / DXGI / D2D / DComp / DWrite のいずれかの初期化に失敗したとき。
-    pub fn attach_dcomp(&mut self) -> Result<()> {
-        let renderer = crate::composition_renderer::CompositionRenderer::new(self.hwnd)?;
+    /// D3D11 / DXGI / D2D / DComp / DWrite / WinRT のいずれかの初期化に失敗したとき。
+    pub fn attach_compositor(&mut self) -> Result<()> {
+        let kind = crate::renderer_backend::CompositorKind::from_env();
         let hud_config = *self.state().hud_config();
-        let hud_renderer = crate::hud_renderer::HudRenderer::new(renderer.pipeline(), &hud_config)?;
-        ex_style_snapshot::capture(self.hwnd, "after attach_dcomp");
-        self.state().install_renderer(renderer);
-        self.state().install_hud_renderer(hud_renderer);
+        let (overlay, hud) = crate::renderer_backend::build_backends(self.hwnd, kind, &hud_config)?;
+        ex_style_snapshot::capture(self.hwnd, "after attach_compositor");
+        self.state().install_renderer(overlay);
+        self.state().install_hud_renderer(hud);
+        self.state().set_compositor_kind(kind);
+        tracing::info!(backend = kind.label(), "composition backend attached");
         Ok(())
     }
 
-    /// Phase E: `HotkeyMap` の chord を順に解析・`RegisterHotKey` し、成功した
-    /// 組を `OverlayWndState::record_hotkey` に積む。失敗した chord は warn +
+    /// `HotkeyMap` の chord を順に解析・`RegisterHotKey` し、成功した組を
+    /// `OverlayWndState::record_hotkey` に積む。失敗した chord は warn +
     /// `record_hotkey_conflict` で残し、続きを継続する。
     ///
     /// # Errors
@@ -173,7 +171,7 @@ impl OverlayWindow {
         let bumps = (tap_step.thickness, tap_step.opacity);
         // 4 番目の field は `repeatable`: Bump 系のみ `true` (`MOD_NOREPEAT` 抜き) で
         // 長押し連続調整を許可、Toggle 系 (Cycle / Visible / Quit) は `false` で誤連打を防ぐ。
-        let pairs: [(i32, &'static str, OverlayAction, bool); 7] = [
+        let pairs: [(i32, &'static str, OverlayAction, bool); 8] = [
             (1, hotkeys.cycle_mode, OverlayAction::CycleMode, false),
             (
                 2,
@@ -206,6 +204,7 @@ impl OverlayWindow {
                 true,
             ),
             (7, hotkeys.quit, OverlayAction::Quit, false),
+            (8, hotkeys.cycle_effect, OverlayAction::CycleEffect, false),
         ];
         for (id, spec, action, repeatable) in pairs {
             self.register_one(id, spec, action, repeatable);
@@ -274,9 +273,8 @@ impl Drop for OverlayWindow {
 #[cfg(test)]
 mod tests {
     //! `OverlayWindow::new` 自体は HWND 作成を伴い Windows 環境必須なので、
-    //! ここでは pure const `OVERLAY_EX_STYLE` の bit pattern を検証する。
-    //! ex-style の組み合わせは PR で簡単に変わるため、各 flag が確実に立って
-    //! いることを test で固定する (ADR-0003 系: Win32 設計判断の test 化)。
+    //! ここでは pure const `OVERLAY_EX_STYLE` の bit pattern を検証し、各 flag が
+    //! 確実に立っていることを test で固定する。
 
     use super::*;
 

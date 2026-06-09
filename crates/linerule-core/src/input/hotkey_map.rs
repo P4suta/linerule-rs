@@ -11,6 +11,8 @@ use serde::Serialize;
 pub struct HotkeyMap {
     /// Chord that triggers `OverlayAction::CycleMode`.
     pub cycle_mode: &'static str,
+    /// Chord that triggers `OverlayAction::CycleEffect`.
+    pub cycle_effect: &'static str,
     /// Chord that triggers `OverlayAction::ToggleVisible`.
     pub toggle_visible: &'static str,
     /// Chord that bumps thickness up.
@@ -36,6 +38,7 @@ impl HotkeyMap {
     /// Arrow keys (`VK_UP/DOWN/LEFT/RIGHT`) are layout-independent.
     pub const DEFAULT: Self = Self {
         cycle_mode: "Ctrl+Alt+R",
+        cycle_effect: "Ctrl+Alt+E",
         toggle_visible: "Ctrl+Alt+H",
         thicker: "Ctrl+Alt+Up",
         thinner: "Ctrl+Alt+Down",

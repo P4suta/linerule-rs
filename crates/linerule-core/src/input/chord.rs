@@ -321,7 +321,6 @@ mod tests {
     fn arrow_keys() {
         assert_eq!(parse("Up").unwrap().key, KeyCode::Arrow(Direction::Up));
         assert_eq!(parse("down").unwrap().key, KeyCode::Arrow(Direction::Down));
-        // 「left」「right」も pin する (mutation baseline で match arm 削除を検出)
         assert_eq!(parse("Left").unwrap().key, KeyCode::Arrow(Direction::Left));
         assert_eq!(
             parse("right").unwrap().key,

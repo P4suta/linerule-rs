@@ -4,7 +4,9 @@
 //! handles that). They are "are the values sensible?" tests — DPI-scaled
 //! sizes positive, repeat timings monotonically growing, fade decay > 0.
 
-use linerule_core::{HudConfig, InputConfig, OverlayConfig, RenderConfig, UserConfig};
+use linerule_core::{
+    HudConfig, InputConfig, OverlayConfig, RenderConfig, SurroundEffect, UserConfig,
+};
 
 #[test]
 fn default_overlay_config_has_legal_thickness_and_opacity() {
@@ -12,6 +14,19 @@ fn default_overlay_config_has_legal_thickness_and_opacity() {
     assert!(cfg.thickness.get() >= 1, "thickness must be ≥ 1");
     assert!(cfg.thickness.get() <= 2048, "thickness must be ≤ 2048");
     assert!(cfg.opacity.get() >= 1, "opacity must be ≥ 1");
+}
+
+#[test]
+fn default_surround_effect_preserves_historical_dim_black() {
+    // The default must stay the dim-black mask so existing users see no
+    // behavior change; white-wash is opt-in via the effect cycle.
+    assert_eq!(OverlayConfig::DEFAULT.effect, SurroundEffect::DimBlack);
+    let mask = SurroundEffect::DimBlack.mask_color();
+    assert_eq!(
+        (mask.r, mask.g, mask.b),
+        (0, 0, 0),
+        "dim mask must be black"
+    );
 }
 
 #[test]

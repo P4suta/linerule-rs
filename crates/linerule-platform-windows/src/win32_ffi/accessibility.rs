@@ -4,7 +4,7 @@
 //! `linerule-platform-windows` 内で `unsafe` を含む副集約。前景アプリ変更を
 //! 監視して overlay の z-order を最前面に再 assert するために使う。callback
 //! 本体 (`extern "system" fn`) もここに局在化し、`catch_unwind` で OS thread
-//! への panic 漏洩を防ぐ。詳細方針は ADR-0003 / ADR-0012。
+//! への panic 漏洩を防ぐ。
 //!
 //! 設計のキー:
 //! - `WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS` で OS が自プロセスの
@@ -128,4 +128,4 @@ extern "system" fn on_foreground_event(
 // テストはコンパイル時保証 (WINEVENTPROC シグネチャ整合) と messages.rs 側の
 // `WM_APP_REASSERT_TOPMOST` 帯テストでカバー。SetWinEventHook / SetWindowPos
 // の実呼び出しは Windows native 環境必須で、global static `TARGET_HWND` に
-// 副作用を持つため unit test には適さない。実機検証は ADR-0012 参照。
+// 副作用を持つため unit test には適さない。

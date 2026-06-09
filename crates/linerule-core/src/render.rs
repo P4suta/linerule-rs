@@ -21,9 +21,8 @@ use crate::{
 };
 
 // Mode-aware indicator: a slim bar oriented along the active axis (horizontal
-// mode → 18×4 horizontal bar, vertical mode → 4×18 vertical bar). Matches the
-// C# implementation's `IndicatorLong` / `IndicatorShort` convention so the
-// user can tell the axis at a glance from the indicator alone.
+// mode → 18×4 horizontal bar, vertical mode → 4×18 vertical bar) so the user
+// can tell the axis at a glance from the indicator alone.
 const INDICATOR_LONG: u32 = 18;
 const INDICATOR_SHORT: u32 = 4;
 const INDICATOR_MARGIN: i32 = 12;
@@ -79,25 +78,39 @@ fn slit_frame(
     monitor: ScreenRect<Logical>,
     config: OverlayConfig,
 ) -> OverlayFrame {
-    let mask = mask_color(config);
+    let brush = surround_brush(config);
     let thickness = i32::from(config.thickness.get());
     let (before, after) = split_around(axis_value(axis, cursor), thickness);
 
     let mut layers = Vec::with_capacity(3);
-    if let Some(layer) = dim_half(axis, monitor, DimSide::Before, before, mask) {
+    if let Some(layer) = dim_half(axis, monitor, DimSide::Before, before, brush) {
         layers.push(layer);
     }
-    if let Some(layer) = dim_half(axis, monitor, DimSide::After, after, mask) {
+    if let Some(layer) = dim_half(axis, monitor, DimSide::After, after, brush) {
         layers.push(layer);
     }
-    layers.push(indicator_layer(axis, monitor));
+    layers.push(indicator_layer(
+        axis,
+        monitor,
+        config.effect.indicator_color(),
+    ));
     OverlayFrame::from_layers(layers)
 }
 
-fn mask_color(config: OverlayConfig) -> Rgba {
-    config
-        .mask_color
-        .with_alpha(config.opacity.to_perceptual_byte())
+/// Brush for the before/after surround bands. `Solid` for dim/white-wash, `Blur`
+/// (blurred backdrop + tint) for the blur effect. Alpha is the perceptual
+/// opacity byte either way, so the opacity hotkeys tune both the dim mask and
+/// the blur tint.
+fn surround_brush(config: OverlayConfig) -> Brush {
+    let fill = config
+        .effect
+        .mask_color()
+        .with_alpha(config.opacity.to_perceptual_byte());
+    if config.effect.is_blur() {
+        Brush::Blur { tint: fill }
+    } else {
+        Brush::Solid(fill)
+    }
 }
 
 pub(crate) const fn axis_value(axis: Axis, cursor: Point<Logical>) -> i32 {
@@ -127,7 +140,7 @@ fn dim_half(
     monitor: ScreenRect<Logical>,
     side: DimSide,
     slit_edge: i32,
-    fill: Rgba,
+    brush: Brush,
 ) -> Option<Layer> {
     let rect = match (axis, side) {
         (Axis::Horizontal, DimSide::Before) => {
@@ -143,7 +156,10 @@ fn dim_half(
             band(slit_edge, monitor.top(), monitor.right(), monitor.bottom())
         },
     }?;
-    Some(Layer::solid_rect(rect, fill))
+    Some(Layer {
+        geometry: Geometry::Rect(rect),
+        brush,
+    })
 }
 
 /// Construct a clipped rectangle from `(left, top, right, bottom)`, returning
@@ -158,7 +174,7 @@ pub(crate) fn band(left: i32, top: i32, right: i32, bottom: i32) -> Option<Scree
     Some(ScreenRect::new(Point::new(left, top), width, height))
 }
 
-fn indicator_layer(axis: Axis, monitor: ScreenRect<Logical>) -> Layer {
+fn indicator_layer(axis: Axis, monitor: ScreenRect<Logical>, color: Rgba) -> Layer {
     let (width, height) = match axis {
         Axis::Horizontal => (INDICATOR_LONG, INDICATOR_SHORT),
         Axis::Vertical => (INDICATOR_SHORT, INDICATOR_LONG),
@@ -169,7 +185,7 @@ fn indicator_layer(axis: Axis, monitor: ScreenRect<Logical>) -> Layer {
     let alpha = Opacity::INDICATOR_DEFAULT.to_perceptual_byte();
     Layer::solid_rect(
         ScreenRect::new(Point::new(x, y), width, height),
-        Rgba::WHITE.with_alpha(alpha),
+        color.with_alpha(alpha),
     )
 }
 
@@ -247,14 +263,69 @@ mod tests {
         };
         let f = frame(s, Point::new(960, 540), monitor());
         let indicator = f.layers().last().expect("non-empty");
-        match indicator.brush {
-            Brush::Solid(c) => {
-                assert_eq!(c.r, 0xFF);
-                assert_eq!(c.g, 0xFF);
-                assert_eq!(c.b, 0xFF);
-                assert!(c.a > 0);
+        let Brush::Solid(c) = indicator.brush else {
+            panic!("indicator must be a solid brush, got {:?}", indicator.brush);
+        };
+        assert_eq!(c.r, 0xFF);
+        assert_eq!(c.g, 0xFF);
+        assert_eq!(c.b, 0xFF);
+        assert!(c.a > 0);
+    }
+
+    #[test]
+    fn white_wash_effect_uses_white_mask_and_dark_indicator() {
+        use crate::{config::OverlayConfig, state::SurroundEffect};
+        let s = State {
+            mode: Mode::Horizontal,
+            config: OverlayConfig {
+                effect: SurroundEffect::WhiteWash,
+                ..OverlayConfig::DEFAULT
             },
+            ..State::DEFAULT
+        };
+        let f = frame(s, Point::new(960, 540), monitor());
+        let layers = f.layers();
+        // Dim halves (all but the last layer) carry white RGB.
+        for layer in &layers[..layers.len() - 1] {
+            let Brush::Solid(c) = layer.brush else {
+                panic!("white-wash mask must be solid, got {:?}", layer.brush);
+            };
+            assert_eq!((c.r, c.g, c.b), (0xFF, 0xFF, 0xFF), "mask must be white");
+            assert!(c.a > 0);
         }
+        // Indicator flips to black for contrast against the white wash.
+        let Brush::Solid(c) = layers.last().expect("indicator").brush else {
+            panic!("indicator must be solid");
+        };
+        assert_eq!((c.r, c.g, c.b), (0, 0, 0), "indicator must be dark");
+        assert!(c.a > 0);
+    }
+
+    #[test]
+    fn blur_effect_uses_blur_brush_for_surround_and_solid_indicator() {
+        use crate::{config::OverlayConfig, state::SurroundEffect};
+        let s = State {
+            mode: Mode::Horizontal,
+            config: OverlayConfig {
+                effect: SurroundEffect::Blur,
+                ..OverlayConfig::DEFAULT
+            },
+            ..State::DEFAULT
+        };
+        let f = frame(s, Point::new(960, 540), monitor());
+        let layers = f.layers();
+        // Surround bands (all but the indicator) carry a Blur brush.
+        for layer in &layers[..layers.len() - 1] {
+            let Brush::Blur { tint } = layer.brush else {
+                panic!("blur surround must use Brush::Blur, got {:?}", layer.brush);
+            };
+            assert!(tint.a > 0, "tint should be visible");
+        }
+        // Indicator stays solid (white, for contrast over an unknown backdrop).
+        let Brush::Solid(c) = layers.last().expect("indicator").brush else {
+            panic!("indicator must be solid");
+        };
+        assert_eq!((c.r, c.g, c.b), (0xFF, 0xFF, 0xFF));
     }
 
     // ---- Vertical mode (was previously untested) -------------------------
@@ -354,7 +425,7 @@ mod tests {
         assert_eq!(r.height, 50);
     }
 
-    // ---- mode-aware indicator shape (cs parity) --------------------------
+    // ---- mode-aware indicator shape --------------------------------------
 
     fn indicator_rect_for(mode: Mode) -> ScreenRect<Logical> {
         let s = State {

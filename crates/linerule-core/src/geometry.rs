@@ -184,9 +184,7 @@ mod tests {
         assert!(r.contains_rect(r));
     }
 
-    /// `top()` / `left()` が `origin` の値をそのまま返すことを non-zero origin
-    /// で pin する。`top -> i32 with 0` mutation を catch するため `Point::new(0,0)`
-    /// 以外で確かめる必要がある (Phase ε mutation baseline)。
+    /// `top()` / `left()` が `origin` の値をそのまま返すことを non-zero origin で pin する。
     #[test]
     fn top_and_left_reflect_origin_for_nonzero_points() {
         let r: ScreenRect<Logical> = ScreenRect::new(Point::new(7, 11), 100, 50);
@@ -197,9 +195,8 @@ mod tests {
         assert_eq!(r.bottom(), 61);
     }
 
-    /// `contains_rect` の 4 つの境界条件をそれぞれ独立に破る test。`&& with ||`
-    /// mutation を 4 か所すべて検出するには「3 条件は満たすが 1 条件だけ破る」
-    /// rect を作って false を確認する必要がある (Phase ε mutation baseline)。
+    /// `contains_rect` の 4 つの境界条件をそれぞれ独立に破る test
+    /// (「3 条件は満たすが 1 条件だけ破る」rect で false を確認)。
     #[test]
     fn contains_rect_rejects_each_boundary_independently() {
         let outer: ScreenRect<Logical> = ScreenRect::new(Point::new(0, 0), 100, 100);
