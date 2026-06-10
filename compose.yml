@@ -32,6 +32,9 @@ services:
       # is baked into the dev image (see Dockerfile), so the first
       # `just cross-check` is instant. Volume-mounting here would shadow the
       # image content with an empty volume and re-trigger the download.
+      # node_modules in a named volume (keeps it off the host bind mount).
+      # Docker creates the volume owned by root, but we run as the dev user, so
+      # `just _fix-npm-volume` chowns it before `bun install`.
       - npm-cache:/workspace/node_modules
     init: true
     stdin_open: true
