@@ -17,8 +17,8 @@ use windows::UI::Color;
 use windows::UI::Composition::{CompositionColorBrush, SpriteVisual, VisualCollection};
 use windows_numerics::{Vector2, Vector3};
 
-use crate::error::{PlatformError, Result};
-use crate::win32_ffi::blur_effect::create_backdrop_blur_brush;
+use crate::error::{Result, map_hr};
+use crate::win32_ffi::blur_effect::{BlurConfig, create_backdrop_blur_brush};
 use crate::win32_ffi::composition::{WinrtPipeline, create_winrt_pipeline};
 
 /// pooled sprite の中身。`Solid` は単色 brush、`Blur` は backdrop blur brush のみ
@@ -52,6 +52,8 @@ impl PooledSprite {
 pub struct WinrtCompositionRenderer {
     pipeline: WinrtPipeline,
     layers: Vec<PooledSprite>,
+    /// Blur post-process tuning, read from env once here (not per rebuild).
+    blur: BlurConfig,
 }
 
 impl WinrtCompositionRenderer {
@@ -64,6 +66,7 @@ impl WinrtCompositionRenderer {
         Ok(Self {
             pipeline,
             layers: Vec::new(),
+            blur: BlurConfig::from_env(),
         })
     }
 
@@ -159,9 +162,10 @@ impl WinrtCompositionRenderer {
         let kind = if let Some(amount) = want {
             // σ は logical px。perceptual level → σ への変換は float 境界 (ここ) でのみ行う。
             // backdrop blur brush をそのまま visual に載せる (色ベール無しの純粋なぼかし)。
-            let blur = create_backdrop_blur_brush(compositor, amount.to_std_dev())?;
+            let blur_brush =
+                create_backdrop_blur_brush(compositor, amount.to_std_dev(), &self.blur)?;
             visual
-                .SetBrush(&blur)
+                .SetBrush(&blur_brush)
                 .map_err(map_hr("SpriteVisual::SetBrush (blur)"))?;
             SpriteKind::Blur { amount }
         } else {
@@ -225,12 +229,5 @@ fn rect_size(rect: ScreenRect<Logical>) -> Vector2 {
     Vector2 {
         X: rect.width as f32,
         Y: rect.height as f32,
-    }
-}
-
-fn map_hr(operation: &'static str) -> impl Fn(windows::core::Error) -> PlatformError {
-    move |e: windows::core::Error| PlatformError::BadHr {
-        operation,
-        hr: e.code().0,
     }
 }

@@ -1,7 +1,7 @@
 //! WinRT Composition 用の自作 D2D エフェクトグラフ記述。
 //!
 //! WinRT には `IGraphicsEffect` を実装した D2D エフェクトクラスが Win2D (UWP 専用)
-//! にしか無いため、`IGraphicsEffectD2D1Interop` を汎用ノード [`D2dEffectNode`] として
+//! にしか無いため、`IGraphicsEffectD2D1Interop` を汎用ノード `D2dEffectNode` として
 //! 自前実装する。各ノードは CLSID・プロパティ列・1 source を記述し、source に別ノードを
 //! 差すことでエフェクトグラフを組める。
 //!
@@ -38,7 +38,7 @@ use windows::Win32::System::WinRT::Graphics::Direct2D::{
 };
 use windows::core::{Error, GUID, HSTRING, Interface, PCWSTR, Result as WinResult, implement};
 
-use crate::error::{PlatformError, Result};
+use crate::error::{Result, map_hr};
 
 /// CompositionEffectFactory に渡す source パラメータ名。`SetSourceParameter` でも
 /// 同名で backdrop を差し込む。グラフの leaf (GaussianBlur) のみが参照する。
@@ -179,23 +179,42 @@ fn env_f32(name: &str, default: f32) -> f32 {
         .unwrap_or(default)
 }
 
+/// Blur post-process tuning, parsed once from env (so the knobs are read at
+/// renderer construction, not on every brush rebuild).
+#[derive(Clone, Copy)]
+pub struct BlurConfig {
+    /// Saturation effect value, `[0, 1]` (0.5 = identity).
+    saturation: f32,
+    /// Contrast effect value, `[-1, 1]` (0 = identity).
+    contrast: f32,
+    /// Use `CreateHostBackdropBrush` instead of `CreateBackdropBrush`.
+    host_backdrop: bool,
+}
+
+impl BlurConfig {
+    /// Parse the `LINERULE_BLUR_*` env knobs, clamped to valid ranges.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            saturation: env_f32("LINERULE_BLUR_SATURATION", BLUR_SATURATION).clamp(0.0, 1.0),
+            contrast: env_f32("LINERULE_BLUR_CONTRAST", BLUR_CONTRAST).clamp(-1.0, 1.0),
+            host_backdrop: std::env::var("LINERULE_BLUR_HOST").is_ok(),
+        }
+    }
+}
+
 /// 背後 (backdrop) を Gaussian blur し、後段で彩度/コントラストを持ち上げる
 /// `CompositionBrush` を作る。`standard_deviation` は logical px 基準
-/// (DPI スケールは呼び出し側で補正)。
-///
-/// 彩度/コントラストの強さは既定 [`BLUR_SATURATION`] / [`BLUR_CONTRAST`]。実機での
-/// 調整用に env `LINERULE_BLUR_SATURATION` (`[0,1]`) / `LINERULE_BLUR_CONTRAST`
-/// (`[-1,1]`) で上書きできる (再ビルド不要)。
+/// (DPI スケールは呼び出し側で補正)。彩度/コントラスト/backdrop 種別は `blur`
+/// ([`BlurConfig`]、起動時に env から1回パース) から取る。
 ///
 /// # Errors
 /// effect factory / brush 生成が失敗したとき。
 pub fn create_backdrop_blur_brush(
     compositor: &Compositor,
     standard_deviation: f32,
+    blur: &BlurConfig,
 ) -> Result<CompositionBrush> {
-    let saturation = env_f32("LINERULE_BLUR_SATURATION", BLUR_SATURATION).clamp(0.0, 1.0);
-    let contrast = env_f32("LINERULE_BLUR_CONTRAST", BLUR_CONTRAST).clamp(-1.0, 1.0);
-
     let source_param = CompositionEffectSourceParameter::Create(&HSTRING::from(SOURCE_NAME))
         .map_err(map_hr("CompositionEffectSourceParameter::Create"))?;
     let source_param = source_param.cast().map_err(map_hr(
@@ -205,7 +224,7 @@ pub fn create_backdrop_blur_brush(
     // backdrop → GaussianBlur → Saturation → Contrast。
     // GaussianBlur のプロパティ: 0 StandardDeviation(FLOAT) / 1 Optimization(enum) /
     // 2 BorderMode(enum) の 3 個 (数・型が登録スキーマと一致しないと E_INVALIDARG)。
-    let blur = node(
+    let blur_node = node(
         "LineruleBlur",
         CLSID_D2D1GaussianBlur,
         vec![
@@ -220,15 +239,15 @@ pub fn create_backdrop_blur_brush(
     let saturation_node = node(
         "LineruleSaturation",
         CLSID_D2D1Saturation,
-        vec![single(saturation)?],
-        as_source(&blur)?,
+        vec![single(blur.saturation)?],
+        as_source(&blur_node)?,
     );
 
     // Contrast のプロパティ: 0 Contrast(FLOAT) / 1 ClampInput(BOOL) の 2 個。
     let root = node(
         "LineruleContrast",
         CLSID_D2D1Contrast,
-        vec![single(contrast)?, boolean(false)?],
+        vec![single(blur.contrast)?, boolean(false)?],
         as_source(&saturation_node)?,
     );
 
@@ -247,7 +266,7 @@ pub fn create_backdrop_blur_brush(
     // 説明しており、その読みでは `CreateHostBackdropBrush` が必要に見えるが、Win32 透明窓では
     // `CreateHostBackdropBrush` は黒を返す既知の問題がある。実機で「ぼけず tint だけ」に
     // 見えたら `LINERULE_BLUR_HOST=1` で host backdrop に切り替えて比較できる。
-    let backdrop = if std::env::var("LINERULE_BLUR_HOST").is_ok() {
+    let backdrop = if blur.host_backdrop {
         compositor
             .CreateHostBackdropBrush()
             .map_err(map_hr("Compositor::CreateHostBackdropBrush"))?
@@ -263,10 +282,3 @@ pub fn create_backdrop_blur_brush(
 }
 
 const _: GRAPHICS_EFFECT_PROPERTY_MAPPING = GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT;
-
-fn map_hr(operation: &'static str) -> impl Fn(Error) -> PlatformError {
-    move |e: Error| PlatformError::BadHr {
-        operation,
-        hr: e.code().0,
-    }
-}

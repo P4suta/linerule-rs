@@ -16,7 +16,7 @@ use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::DirectWrite::{IDWriteFactory, IDWriteTextFormat};
 use windows_numerics::{Vector2, Vector3};
 
-use crate::error::{PlatformError, Result};
+use crate::error::{Result, map_hr};
 use crate::win32_ffi::composition::{
     WinrtPipeline, begin_surface_draw, create_drawing_surface, end_surface_draw,
 };
@@ -185,11 +185,4 @@ fn ceil_to_u32(v: f32) -> u32 {
     )]
     let out = v.ceil() as u32;
     out
-}
-
-fn map_hr(operation: &'static str) -> impl Fn(windows::core::Error) -> PlatformError {
-    move |e: windows::core::Error| PlatformError::BadHr {
-        operation,
-        hr: e.code().0,
-    }
 }
