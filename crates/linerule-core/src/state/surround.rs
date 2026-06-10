@@ -25,9 +25,9 @@ pub enum SurroundEffect {
     /// Wash the surround with a translucent white mask — suited to bright
     /// environments / white-background documents.
     WhiteWash,
-    /// Blur the screen content behind the surround (frosted glass), with a
-    /// translucent tint for reading comfort. Rendered as a true backdrop blur
-    /// by the `WinRT` composition backend (the sole composition backend).
+    /// Blur the screen content behind the surround — a pure backdrop blur with
+    /// no color veil over it. Rendered as a true backdrop blur by the `WinRT`
+    /// composition backend (the sole composition backend).
     Blur,
 }
 
@@ -42,9 +42,10 @@ impl SurroundEffect {
         }
     }
 
-    /// Base mask / tint color (RGB). The caller overrides alpha with the current
-    /// [`crate::color::Opacity`], so only the RGB channels carry meaning here.
-    /// `Blur` reuses the dim-black tint over the blurred backdrop.
+    /// Base mask color (RGB) for the flat effects. The caller overrides alpha
+    /// with the current [`crate::color::Opacity`], so only the RGB channels carry
+    /// meaning here. `Blur` has no fill color (it is a pure backdrop blur); its
+    /// value here is unused and kept only to make the match total.
     #[must_use]
     pub const fn mask_color(self) -> Rgba {
         match self {

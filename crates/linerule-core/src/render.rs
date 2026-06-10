@@ -98,34 +98,23 @@ fn slit_frame(
 }
 
 /// Brush for the before/after surround bands. `Solid` for dim/white-wash, `Blur`
-/// (blurred backdrop + tint) for the blur effect.
+/// (a pure backdrop blur, no color veil) for the blur effect.
 ///
 /// The dim / white-wash masks fill at the full perceptual opacity byte. The blur
-/// tint instead uses a *fixed* low alpha (see [`FIXED_BLUR_TINT_ALPHA`]): a blur
-/// sitting under a near-opaque tint reads as a dark fill, not as blur, so the
-/// tint stays well translucent for the blurred backdrop to show through. The
-/// tint brightness is deliberately *not* user-tunable — under the `Blur` effect
-/// the opacity hotkeys retarget onto [`OverlayConfig::blur`] (the σ amount)
-/// instead, which is the knob worth adjusting.
+/// effect carries no tint at all — just the σ amount; a color veil over the blur
+/// only darkened (or lightened) the surround, which read as a dim wash rather
+/// than "just blur", so it was dropped. Under the `Blur` effect the opacity
+/// hotkeys retarget onto [`OverlayConfig::blur`] (the σ amount) instead.
 fn surround_brush(config: OverlayConfig) -> Brush {
-    let mask = config.effect.mask_color();
     if config.effect.is_blur() {
         Brush::Blur {
-            tint: mask.with_alpha(FIXED_BLUR_TINT_ALPHA),
             amount: config.blur,
         }
     } else {
+        let mask = config.effect.mask_color();
         Brush::Solid(mask.with_alpha(config.opacity.to_perceptual_byte()))
     }
 }
-
-/// Fixed alpha of the blur tint over the blurred backdrop. Constant (no longer
-/// derived from opacity): the brightness variation was not a useful knob, so the
-/// tint is pinned to keep a subtle reading aid while the blurred backdrop shows
-/// through. The value `72` reproduces the previous default look — it equals the
-/// old `Opacity::DEFAULT.to_perceptual_byte() (218) / 3`, the tint alpha the
-/// effect produced at the default opacity before the brightness knob was dropped.
-const FIXED_BLUR_TINT_ALPHA: u8 = 72;
 
 pub(crate) const fn axis_value(axis: Axis, cursor: Point<Logical>) -> i32 {
     match axis {
@@ -328,12 +317,13 @@ mod tests {
         };
         let f = frame(s, Point::new(960, 540), monitor());
         let layers = f.layers();
-        // Surround bands (all but the indicator) carry a Blur brush.
+        // Surround bands (all but the indicator) carry a pure Blur brush.
         for layer in &layers[..layers.len() - 1] {
-            let Brush::Blur { tint, .. } = layer.brush else {
-                panic!("blur surround must use Brush::Blur, got {:?}", layer.brush);
-            };
-            assert!(tint.a > 0, "tint should be visible");
+            assert!(
+                matches!(layer.brush, Brush::Blur { .. }),
+                "blur surround must use Brush::Blur, got {:?}",
+                layer.brush
+            );
         }
         // Indicator stays solid (white, for contrast over an unknown backdrop).
         let Brush::Solid(c) = layers.last().expect("indicator").brush else {
@@ -343,44 +333,12 @@ mod tests {
     }
 
     #[test]
-    fn blur_tint_is_more_translucent_than_dim_mask() {
+    fn opacity_does_not_affect_the_blur_brush() {
         use crate::{config::OverlayConfig, state::SurroundEffect};
-        // Same opacity for both; only the effect differs. The blur tint must be
-        // markedly more translucent than the dim mask, otherwise the blurred
-        // backdrop is hidden under the tint and Blur looks like DimBlack.
-        let surround_band = |effect| {
-            let s = State {
-                mode: Mode::Horizontal,
-                config: OverlayConfig {
-                    effect,
-                    ..OverlayConfig::DEFAULT
-                },
-                ..State::DEFAULT
-            };
-            frame(s, Point::new(960, 540), monitor()).layers()[0].brush
-        };
-        let Brush::Blur { tint, .. } = surround_band(SurroundEffect::Blur) else {
-            panic!("blur surround must be Brush::Blur");
-        };
-        let Brush::Solid(dim_mask) = surround_band(SurroundEffect::DimBlack) else {
-            panic!("dim surround must be Brush::Solid");
-        };
-        assert!(tint.a > 0, "blur tint must stay visible");
-        assert!(
-            tint.a < dim_mask.a,
-            "blur tint ({}) must be more translucent than the dim mask ({}) so the blur shows through",
-            tint.a,
-            dim_mask.a,
-        );
-    }
-
-    #[test]
-    fn opacity_does_not_tune_blur_tint_alpha() {
-        use crate::{config::OverlayConfig, state::SurroundEffect};
-        // The brightness knob was dropped: the blur tint is now a fixed alpha,
-        // independent of opacity. (Under Blur, the opacity hotkeys retarget onto
-        // the σ amount instead — exercised in the reducer tests.)
-        let blur_tint_at = |opacity| {
+        // Blur carries no tint, so opacity has no effect on it at all — the
+        // surround brush is byte-identical at MIN and MAX opacity. (Under Blur,
+        // the opacity hotkeys retarget onto the σ amount — see the reducer tests.)
+        let blur_brush_at = |opacity| {
             let s = State {
                 mode: Mode::Horizontal,
                 config: OverlayConfig {
@@ -390,24 +348,9 @@ mod tests {
                 },
                 ..State::DEFAULT
             };
-            let Brush::Blur { tint, .. } =
-                frame(s, Point::new(960, 540), monitor()).layers()[0].brush
-            else {
-                panic!("blur surround must be Brush::Blur");
-            };
-            tint.a
+            frame(s, Point::new(960, 540), monitor()).layers()[0].brush
         };
-        let hi = blur_tint_at(Opacity::MAX);
-        let lo = blur_tint_at(Opacity::MIN);
-        assert!(hi > 0, "blur tint must stay visible");
-        assert_eq!(
-            hi, lo,
-            "opacity must not change the blur tint alpha (hi={hi}, lo={lo})"
-        );
-        assert_eq!(
-            hi, FIXED_BLUR_TINT_ALPHA,
-            "tint alpha must be the fixed constant"
-        );
+        assert_eq!(blur_brush_at(Opacity::MAX), blur_brush_at(Opacity::MIN));
     }
 
     #[test]
@@ -423,7 +366,7 @@ mod tests {
             },
             ..State::DEFAULT
         };
-        let Brush::Blur { amount: got, .. } =
+        let Brush::Blur { amount: got } =
             frame(s, Point::new(960, 540), monitor()).layers()[0].brush
         else {
             panic!("blur surround must be Brush::Blur");

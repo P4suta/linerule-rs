@@ -25,11 +25,11 @@ HUD パネル（画面右上）に Mode / Thickness / Opacity / Effect / Refresh
 
 composition backend は WinRT `Windows.UI.Composition` 単一（旧 Win32 DirectComposition
 backend と `LINERULE_COMPOSITOR` 環境変数は撤去、ADR 0016）。`Blur`（背後ぼかし）は
-WinRT backdrop blur で常時レンダリングされる。ぼかし量（Gaussian σ）は `Ctrl+Alt+Right/Left`
-で調整でき（既定 ≈9px、範囲 ≈2–64px）、tint の明暗は固定。ステップは Weber–Fechner 則に
-沿って σ を幾何級数的に変化させる（内部の知覚レベルを等間隔に動かす）ため、どの強さでも
-1 タップの体感変化がほぼ一定になる。ぼけ方は実機の GPU / compositor に依存するため見え方は
-ハードウェアで確認すること。背後サンプリングが効かず単色に見える場合は
+WinRT backdrop blur で常時レンダリングされる。色ベール（tint）は重ねず、背後を「ただぼかす
+だけ」の純粋なぼかし。ぼかし量（Gaussian σ）は `Ctrl+Alt+Right/Left` で調整でき（既定 ≈9px、
+範囲 ≈2–64px）、ステップは Weber–Fechner 則に沿って σ を幾何級数的に変化させる（内部の知覚
+レベルを等間隔に動かす）ため、どの強さでも 1 タップの体感変化がほぼ一定になる。ぼけ方は実機の
+GPU / compositor に依存するため見え方はハードウェアで確認すること。背後サンプリングが効かず単色に見える場合は
 `LINERULE_BLUR_HOST=1` で backdrop 取得方法（`CreateBackdropBrush` ↔ `CreateHostBackdropBrush`）を
 切り替えて比較できる。
 
