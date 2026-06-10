@@ -8,23 +8,28 @@ Rust 製の Windows 用 reading ruler（読書補助オーバーレイ）。透�
 - `Ctrl+Alt+E`: 周囲効果切替（Dim（暗幕）→ White（白マスク）→ Blur（背後ぼかし）→ Dim）
 - `Ctrl+Alt+H`: 表示／非表示トグル
 - `Ctrl+Alt+Up` / `Ctrl+Alt+Down`: スリット厚さ ±（長押しで連続調整）
-- `Ctrl+Alt+Right` / `Ctrl+Alt+Left`: 不透明度 ±（長押しで連続調整）
+- `Ctrl+Alt+Right` / `Ctrl+Alt+Left`: 不透明度 ±（長押しで連続調整）。`Blur` 効果中は
+  代わりに **ぼかし量（Gaussian σ, px）** を増減する（Blur では不透明度の tint 明暗は
+  固定で、調整対象はぼかし量に切り替わる）
 - `Ctrl+Alt+Q`: 終了
 
-Bump 系（厚さ・不透明度）は長押しで連続発火する。Mode 切替・表示トグル・終了は誤連打を
+Bump 系（厚さ・不透明度／ぼかし量）は長押しで連続発火する。Mode 切替・表示トグル・終了は誤連打を
 避けるため 1 押下 1 発火に固定。割り当てが OEM 系キー（`[`/`]`/`=`/`-`）ではなく Arrow
 キーなのは、Windows の IME / keyboard layout で OEM キーの VK が化けて `RegisterHotKey`
 がキャプチャを取り逃すケースがあったため（JIS keyboard × ENG IME で再現）。
 
 HUD パネル（画面右上）に Mode / Thickness / Opacity / Effect / Refresh Hz と上記の操作一覧が
-常時表示される。multi-monitor 環境では virtual screen 全体に overlay が広がる。
+常時表示される（`Blur` 効果中は Opacity 行が `Blur: N px`（ぼかし量）に切り替わる）。multi-monitor 環境では virtual screen 全体に overlay が広がる。
 
 ### Blur 効果と composition backend
 
 composition backend は WinRT `Windows.UI.Composition` 単一（旧 Win32 DirectComposition
 backend と `LINERULE_COMPOSITOR` 環境変数は撤去、ADR 0016）。`Blur`（背後ぼかし）は
-WinRT backdrop blur で常時レンダリングされる。ぼけ方は実機の GPU / compositor に依存する
-ため見え方はハードウェアで確認すること。背後サンプリングが効かず単色に見える場合は
+WinRT backdrop blur で常時レンダリングされる。ぼかし量（Gaussian σ）は `Ctrl+Alt+Right/Left`
+で調整でき（既定 ≈9px、範囲 ≈2–64px）、tint の明暗は固定。ステップは Weber–Fechner 則に
+沿って σ を幾何級数的に変化させる（内部の知覚レベルを等間隔に動かす）ため、どの強さでも
+1 タップの体感変化がほぼ一定になる。ぼけ方は実機の GPU / compositor に依存するため見え方は
+ハードウェアで確認すること。背後サンプリングが効かず単色に見える場合は
 `LINERULE_BLUR_HOST=1` で backdrop 取得方法（`CreateBackdropBrush` ↔ `CreateHostBackdropBrush`）を
 切り替えて比較できる。
 

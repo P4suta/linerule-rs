@@ -12,7 +12,7 @@
 #![forbid(unsafe_code)]
 #![cfg(windows)]
 
-use linerule_core::{Brush, Geometry, Logical, Rgba, ScreenRect};
+use linerule_core::{BlurAmount, Brush, Geometry, Logical, Rgba, ScreenRect};
 use windows::UI::Color;
 use windows::UI::Composition::{CompositionColorBrush, SpriteVisual, VisualCollection};
 use windows_numerics::{Vector2, Vector3};
@@ -21,14 +21,15 @@ use crate::error::{PlatformError, Result};
 use crate::win32_ffi::blur_effect::create_backdrop_blur_brush;
 use crate::win32_ffi::composition::{WinrtPipeline, create_winrt_pipeline};
 
-/// Gaussian blur の標準偏差 (logical px 基準)。半径 ≈ 3σ。
-const BLUR_STD_DEV: f32 = 9.0;
-
 /// pooled sprite の中身。`Solid` は単色 brush、`Blur` は backdrop blur sprite +
-/// tint の子 sprite を持つ。
+/// tint の子 sprite を持つ。`Blur` の `amount` は brush に焼き込んだ σ を覚えておき、
+/// 値が変わったら pool を作り直す (`apply` の kind 署名照合) ために保持する。
 enum SpriteKind {
     Solid(CompositionColorBrush),
-    Blur { tint_brush: CompositionColorBrush },
+    Blur {
+        tint_brush: CompositionColorBrush,
+        amount: BlurAmount,
+    },
 }
 
 /// 1 layer ぶんの主 `SpriteVisual` と brush 状態。前回の rect / brush を覚え、
@@ -41,8 +42,12 @@ struct PooledSprite {
 }
 
 impl PooledSprite {
-    const fn is_blur(&self) -> bool {
-        matches!(self.kind, SpriteKind::Blur { .. })
+    /// この sprite の blur σ (`Solid` なら `None`)。pool 再構築要否の判定に使う。
+    const fn blur_amount(&self) -> Option<BlurAmount> {
+        match self.kind {
+            SpriteKind::Blur { amount, .. } => Some(amount),
+            SpriteKind::Solid(_) => None,
+        }
     }
 }
 
@@ -77,16 +82,22 @@ impl WinrtCompositionRenderer {
     /// # Errors
     /// visual / brush 生成・更新が失敗したとき。
     pub fn apply(&mut self, frame: &linerule_core::OverlayFrame) -> Result<()> {
-        // brush-kind の並び (Solid/Blur) が変わったら pool を idx 順に作り直す。
+        // brush-kind の並び (Solid / Blur(σ)) が変わったら pool を idx 順に作り直す。
         // 個別 slot の差し替え + InsertAtTop だと z-order が崩れるため、kind 列が
         // 一致しないときは全 teardown → 順次再構築する (effect 切替/端での layer
-        // 数変化は稀なのでコストは無視できる)。
-        let want_kinds: Vec<bool> = frame
+        // 数変化は稀なのでコストは無視できる)。σ は brush に焼き込まれており
+        // `SetColor` では変えられないので、σ 変化も再構築トリガに含める
+        // (kind 署名を `Option<BlurAmount>` にして比較する)。
+        let want_kinds: Vec<Option<BlurAmount>> = frame
             .layers()
             .iter()
-            .map(|l| matches!(l.brush, Brush::Blur { .. }))
+            .map(|l| match l.brush {
+                Brush::Blur { amount, .. } => Some(amount),
+                Brush::Solid(_) => None,
+            })
             .collect();
-        let cur_kinds: Vec<bool> = self.layers.iter().map(PooledSprite::is_blur).collect();
+        let cur_kinds: Vec<Option<BlurAmount>> =
+            self.layers.iter().map(PooledSprite::blur_amount).collect();
         if want_kinds != cur_kinds {
             self.rebuild_pool(&want_kinds)?;
         }
@@ -120,17 +131,18 @@ impl WinrtCompositionRenderer {
             .map_err(map_hr("ContainerVisual::Children"))
     }
 
-    /// pool を `want_kinds` (true=blur) に合わせて全 teardown → idx 順に再構築する。
-    /// 各 sprite を `InsertAtTop` で順に積むので z-order は idx 順 (末尾が最前面)。
-    fn rebuild_pool(&mut self, want_kinds: &[bool]) -> Result<()> {
+    /// pool を `want_kinds` (`Some(σ)`=blur / `None`=solid) に合わせて全 teardown →
+    /// idx 順に再構築する。各 sprite を `InsertAtTop` で順に積むので z-order は idx
+    /// 順 (末尾が最前面)。
+    fn rebuild_pool(&mut self, want_kinds: &[Option<BlurAmount>]) -> Result<()> {
         let children = self.overlay_children()?;
         for popped in self.layers.drain(..) {
             children
                 .Remove(&popped.visual)
                 .map_err(map_hr("VisualCollection::Remove"))?;
         }
-        for &want_blur in want_kinds {
-            let slot = self.create_sprite(want_blur)?;
+        for &want in want_kinds {
+            let slot = self.create_sprite(want)?;
             children
                 .InsertAtTop(&slot.visual)
                 .map_err(map_hr("VisualCollection::InsertAtTop"))?;
@@ -139,16 +151,17 @@ impl WinrtCompositionRenderer {
         Ok(())
     }
 
-    /// 単一 sprite (`want_blur` に応じて solid / blur+tint) を構築して返す。
-    /// children への挿入は呼び出し側 (`rebuild_pool`) が行う。
-    fn create_sprite(&self, want_blur: bool) -> Result<PooledSprite> {
+    /// 単一 sprite (`want` が `Some(σ)` なら blur+tint、`None` なら solid) を構築して
+    /// 返す。children への挿入は呼び出し側 (`rebuild_pool`) が行う。
+    fn create_sprite(&self, want: Option<BlurAmount>) -> Result<PooledSprite> {
         let compositor = &self.pipeline.compositor;
         let visual = compositor
             .CreateSpriteVisual()
             .map_err(map_hr("Compositor::CreateSpriteVisual"))?;
 
-        let kind = if want_blur {
-            let blur = create_backdrop_blur_brush(compositor, BLUR_STD_DEV)?;
+        let kind = if let Some(amount) = want {
+            // σ は logical px。perceptual level → σ への変換は float 境界 (ここ) でのみ行う。
+            let blur = create_backdrop_blur_brush(compositor, amount.to_std_dev())?;
             visual
                 .SetBrush(&blur)
                 .map_err(map_hr("SpriteVisual::SetBrush (blur)"))?;
@@ -168,7 +181,7 @@ impl WinrtCompositionRenderer {
                 .map_err(map_hr("SpriteVisual::Children"))?
                 .InsertAtTop(&tint)
                 .map_err(map_hr("VisualCollection::InsertAtTop (tint)"))?;
-            SpriteKind::Blur { tint_brush }
+            SpriteKind::Blur { tint_brush, amount }
         } else {
             let brush = compositor
                 .CreateColorBrush()
@@ -193,7 +206,7 @@ fn apply_brush_color(kind: &SpriteKind, brush: Brush) -> Result<()> {
         (SpriteKind::Solid(color_brush), Brush::Solid(c)) => color_brush
             .SetColor(rgba_to_color(c))
             .map_err(map_hr("CompositionColorBrush::SetColor")),
-        (SpriteKind::Blur { tint_brush }, Brush::Blur { tint }) => tint_brush
+        (SpriteKind::Blur { tint_brush, .. }, Brush::Blur { tint, .. }) => tint_brush
             .SetColor(rgba_to_color(tint))
             .map_err(map_hr("CompositionColorBrush::SetColor (tint)")),
         // kind は apply_layer で brush に揃えてあるので到達しない。

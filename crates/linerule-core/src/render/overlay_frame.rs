@@ -5,7 +5,7 @@
 //! pure data; the platform layer translates it to D2D draw calls.
 
 use crate::{
-    color::Rgba,
+    color::{BlurAmount, Rgba},
     geometry::{Logical, ScreenRect},
 };
 
@@ -16,9 +16,15 @@ pub enum Brush {
     Solid(Rgba),
     /// Blur the screen content behind the shape, then overlay `tint`. Rendered
     /// as a true backdrop blur by the `WinRT` composition backend.
+    ///
+    /// `amount` is carried as an integer newtype (not `f32`) so `Brush` keeps
+    /// its `Eq`/`Hash` derives; the platform layer converts it to a float σ
+    /// only at the blur-brush boundary.
     Blur {
         /// Translucent color drawn over the blurred backdrop.
         tint: Rgba,
+        /// Gaussian blur σ (logical px) for the backdrop.
+        amount: BlurAmount,
     },
 }
 
