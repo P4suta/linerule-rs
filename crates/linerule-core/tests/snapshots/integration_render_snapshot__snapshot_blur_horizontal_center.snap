@@ -17,12 +17,6 @@ OverlayFrame {
                 },
             ),
             brush: Blur {
-                tint: Rgba {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 72,
-                },
                 amount: BlurAmount(
                     111,
                 ),
@@ -41,12 +35,6 @@ OverlayFrame {
                 },
             ),
             brush: Blur {
-                tint: Rgba {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 72,
-                },
                 amount: BlurAmount(
                     111,
                 ),

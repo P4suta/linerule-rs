@@ -2,8 +2,8 @@
 //!
 //! `composition_renderer` (Win32 DComp) の WinRT 版。layer の brush に応じて:
 //! - `Brush::Solid` → `SpriteVisual` + `CompositionColorBrush`
-//! - `Brush::Blur`  → `SpriteVisual` + backdrop blur effect brush、その子に tint の
-//!   `CompositionColorBrush` sprite を重ねる (frosted glass)
+//! - `Brush::Blur`  → `SpriteVisual` + backdrop blur effect brush (純粋なぼかし、
+//!   色ベール無し)
 //!
 //! 色は WinRT が premultiply するので straight alpha の `Rgba` をそのまま渡す。
 //! WinRT は DispatcherQueue tick で自動 commit する。座標は Win32 DComp 経路と同じ
@@ -21,15 +21,12 @@ use crate::error::{PlatformError, Result};
 use crate::win32_ffi::blur_effect::create_backdrop_blur_brush;
 use crate::win32_ffi::composition::{WinrtPipeline, create_winrt_pipeline};
 
-/// pooled sprite の中身。`Solid` は単色 brush、`Blur` は backdrop blur sprite +
-/// tint の子 sprite を持つ。`Blur` の `amount` は brush に焼き込んだ σ を覚えておき、
-/// 値が変わったら pool を作り直す (`apply` の kind 署名照合) ために保持する。
+/// pooled sprite の中身。`Solid` は単色 brush、`Blur` は backdrop blur brush のみ
+/// (色ベール無し)。`Blur` の `amount` は brush に焼き込んだ σ を覚えておき、値が
+/// 変わったら pool を作り直す (`apply` の kind 署名照合) ために保持する。
 enum SpriteKind {
     Solid(CompositionColorBrush),
-    Blur {
-        tint_brush: CompositionColorBrush,
-        amount: BlurAmount,
-    },
+    Blur { amount: BlurAmount },
 }
 
 /// 1 layer ぶんの主 `SpriteVisual` と brush 状態。前回の rect / brush を覚え、
@@ -161,27 +158,12 @@ impl WinrtCompositionRenderer {
 
         let kind = if let Some(amount) = want {
             // σ は logical px。perceptual level → σ への変換は float 境界 (ここ) でのみ行う。
+            // backdrop blur brush をそのまま visual に載せる (色ベール無しの純粋なぼかし)。
             let blur = create_backdrop_blur_brush(compositor, amount.to_std_dev())?;
             visual
                 .SetBrush(&blur)
                 .map_err(map_hr("SpriteVisual::SetBrush (blur)"))?;
-            // tint child: 親を埋める色 sprite を blur の上に重ねる。
-            let tint = compositor
-                .CreateSpriteVisual()
-                .map_err(map_hr("Compositor::CreateSpriteVisual (tint)"))?;
-            let tint_brush = compositor
-                .CreateColorBrush()
-                .map_err(map_hr("Compositor::CreateColorBrush (tint)"))?;
-            tint.SetBrush(&tint_brush)
-                .map_err(map_hr("SpriteVisual::SetBrush (tint)"))?;
-            tint.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })
-                .map_err(map_hr("Visual::SetRelativeSizeAdjustment (tint)"))?;
-            visual
-                .Children()
-                .map_err(map_hr("SpriteVisual::Children"))?
-                .InsertAtTop(&tint)
-                .map_err(map_hr("VisualCollection::InsertAtTop (tint)"))?;
-            SpriteKind::Blur { tint_brush, amount }
+            SpriteKind::Blur { amount }
         } else {
             let brush = compositor
                 .CreateColorBrush()
@@ -206,10 +188,9 @@ fn apply_brush_color(kind: &SpriteKind, brush: Brush) -> Result<()> {
         (SpriteKind::Solid(color_brush), Brush::Solid(c)) => color_brush
             .SetColor(rgba_to_color(c))
             .map_err(map_hr("CompositionColorBrush::SetColor")),
-        (SpriteKind::Blur { tint_brush, .. }, Brush::Blur { tint, .. }) => tint_brush
-            .SetColor(rgba_to_color(tint))
-            .map_err(map_hr("CompositionColorBrush::SetColor (tint)")),
-        // kind は apply_layer で brush に揃えてあるので到達しない。
+        // Blur sprite は色を持たない (純粋なぼかし)。σ 変化は rebuild_pool で反映する
+        // ので、ここでは何もしない。kind は apply_layer で brush に揃えてあるので
+        // 到達しない組み合わせも含め no-op で良い。
         _ => Ok(()),
     }
 }

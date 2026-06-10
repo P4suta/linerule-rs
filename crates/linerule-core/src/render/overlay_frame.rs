@@ -14,15 +14,14 @@ use crate::{
 pub enum Brush {
     /// Fill the shape with a single sRGB color.
     Solid(Rgba),
-    /// Blur the screen content behind the shape, then overlay `tint`. Rendered
-    /// as a true backdrop blur by the `WinRT` composition backend.
+    /// Blur the screen content behind the shape — a pure backdrop blur with no
+    /// color veil over it. Rendered as a true backdrop blur by the `WinRT`
+    /// composition backend.
     ///
     /// `amount` is carried as an integer newtype (not `f32`) so `Brush` keeps
     /// its `Eq`/`Hash` derives; the platform layer converts it to a float σ
     /// only at the blur-brush boundary.
     Blur {
-        /// Translucent color drawn over the blurred backdrop.
-        tint: Rgba,
         /// Gaussian blur σ (logical px) for the backdrop.
         amount: BlurAmount,
     },
