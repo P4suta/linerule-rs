@@ -1,10 +1,6 @@
-//! Pipeline that turns a tick's worth of inputs (drained hotkeys, polled
-//! cursor, timestamp) into the next [`TickWorld`] and a list of [`TickEffect`]
-//! the platform layer should carry out.
-//!
-//! This is the single coordination point for "what changed this tick?" — the
-//! reducer is invoked here, log lines are scheduled here, draw / clear /
-//! HUD-refresh decisions are made here. All of it pure.
+//! Pure tick pipeline: turns a tick's inputs (drained hotkeys, polled cursor,
+//! timestamp) into the next [`TickWorld`] and a list of [`TickEffect`] for the
+//! platform layer to apply.
 
 use std::time::Duration;
 
@@ -29,8 +25,8 @@ pub struct TickInput {
 
 /// Tick pipeline's persistent state.
 //
-// `Deserialize` is omitted — `Point<S>` carries `PhantomData<fn() -> S>` which
-// blocks the standard `Deserialize` derive. Pure runtime state.
+// `Deserialize` omitted: `Point<S>` carries `PhantomData<fn() -> S>`, which
+// blocks the derive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct TickWorld {
     /// Last applied overlay state.
@@ -44,9 +40,8 @@ pub struct TickWorld {
 }
 
 impl TickWorld {
-    /// Initial state. `last_hud_refresh_at_ms = i64::MIN` so that the very
-    /// first tick is treated as "interval has elapsed" and refreshes the HUD
-    /// regardless of the clock origin.
+    /// Initial state. `last_hud_refresh_at_ms = i64::MIN` forces the first tick
+    /// to refresh the HUD regardless of clock origin.
     pub const INITIAL: Self = Self {
         state: State::DEFAULT,
         last_cursor: None,
@@ -54,10 +49,8 @@ impl TickWorld {
         last_hud_refresh_at_ms: i64::MIN,
     };
 
-    /// Initial state with a caller-supplied [`State`]. Useful for booting
-    /// the overlay directly into a non-default mode (e.g. `--initial-mode
-    /// horizontal` for CI smoke tests that need to exercise the slit
-    /// render path without sending a synthetic `Ctrl+Alt+R`).
+    /// Initial state with a caller-supplied [`State`], for booting directly
+    /// into a non-default mode.
     #[must_use]
     pub const fn with_initial_state(state: State) -> Self {
         Self {
@@ -180,9 +173,8 @@ pub fn step(
         last_hud_refresh_at_ms: next_last_hud_refresh,
     };
 
-    // Debug build 限定の invariant check。`frame_seq` は `wrapping_add(1)` で常に
-    // +1 されるため u64::MAX 越えの wrap (294 兆 tick = 60Hz で 1500 万年) を
-    // 除いて単調増加する。誤って 0 や減少値を入れた場合 debug_assert! が即捕捉。
+    // Invariants: frame_seq advances by exactly 1, and last_hud_refresh_at_ms
+    // is monotonic (except the i64::MIN sentinel).
     debug_assert!(
         next_world.frame_seq == world.frame_seq.wrapping_add(1),
         "frame_seq must be wrapping_add(1) of previous: prev={}, next={}",
@@ -255,11 +247,11 @@ mod tests {
         assert!(!fx2.iter().any(|e| matches!(e, TickEffect::RefreshHud(_))));
     }
 
-    /// `cursor_moved = polled_cursor != last_cursor` を pin する。cursor が留まる
-    /// tick では `SetHudOpacity` が emit されず、動いた tick では emit されること。
+    /// `SetHudOpacity` is emitted only on ticks where the cursor position
+    /// changed (`polled_cursor != last_cursor`).
     #[test]
     fn set_hud_opacity_is_emitted_iff_cursor_changed_position() {
-        // Tick 1: 初期 (last_cursor = None) → polled = Some(P1) なので cursor_moved=true
+        // Tick 1: None -> Some(P1), so cursor_moved = true.
         let mut i1 = input(0);
         let p1 = Point::new(100, 100);
         i1.polled_cursor = Some(p1);
@@ -270,7 +262,7 @@ mod tests {
             "first tick (None → Some(P1)): SetHudOpacity must be emitted"
         );
 
-        // Tick 2: 同位置 P1 → cursor_moved = false なので SetHudOpacity 出ない
+        // Tick 2: same P1, so cursor_moved = false; no SetHudOpacity.
         let mut i2 = input(50);
         i2.polled_cursor = Some(p1);
         let (w2, fx2) = step(w1, &i2, TELEMETRY);
@@ -280,7 +272,7 @@ mod tests {
             "second tick (Some(P1) → Some(P1) ): SetHudOpacity must NOT be emitted"
         );
 
-        // Tick 3: 別位置 P2 → cursor_moved = true なので SetHudOpacity 出る
+        // Tick 3: different P2, so cursor_moved = true; SetHudOpacity again.
         let mut i3 = input(100);
         let p2 = Point::new(200, 100);
         i3.polled_cursor = Some(p2);

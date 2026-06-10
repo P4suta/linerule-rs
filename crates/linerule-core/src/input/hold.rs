@@ -1,11 +1,7 @@
 //! Hold-to-repeat FSM.
 //!
-//! The platform layer fires this on every hotkey press and every ~16 ms tick
-//! while a chord is held. The FSM is a pure function from
-//! `(HoldState, HoldInput, RepeatConfig, oracle) → (HoldState, Vec<HoldEffect>)`:
-//! it never touches the OS, never queries state, never wakes a timer. The
-//! platform layer is responsible for delivering the effects (Enqueue,
-//! Schedule, Halt) to the right subsystem.
+//! Pure transition over `(HoldState, HoldInput, RepeatConfig, oracle)`. It never
+//! touches the OS; the platform layer applies the emitted effects.
 
 use std::time::Duration;
 

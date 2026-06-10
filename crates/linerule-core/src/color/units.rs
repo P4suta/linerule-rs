@@ -159,14 +159,9 @@ impl Thickness {
 /// Backdrop-blur amount, stored as a perceptual *level* in `[1, 255]` and mapped
 /// to a Gaussian σ (logical px) on output via [`BlurAmount::to_std_dev`].
 ///
-/// The stored byte is a level, not σ itself — exactly like [`Opacity`] stores a
-/// linear byte and maps it through a perceptual curve. Perceived blur follows
-/// Weber–Fechner (≈ `log σ`), so a *uniform* level step must map to a
-/// *geometric* σ step to feel uniform; [`BlurAmount::to_std_dev`] interpolates σ
-/// geometrically across the range. Storing the level (and deriving σ as a float)
-/// also dodges the integer-rounding stalls a multiplicative step on a small σ
-/// byte would hit at the low end. The opacity hotkeys' tap delta therefore lands
-/// here unchanged (no special-casing) and still reads as a smooth knob.
+/// The stored byte is a level, not σ. Perceived blur follows Weber–Fechner
+/// (≈ `log σ`), so [`BlurAmount::to_std_dev`] spaces σ geometrically across the
+/// range, making uniform level steps feel uniform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BlurAmount(u8);
 
@@ -178,18 +173,15 @@ impl BlurAmount {
     /// frosted glass).
     pub const MAX: Self = Self(255);
 
-    /// Default level — chosen so [`to_std_dev`](Self::to_std_dev) ≈ 9 px, the
-    /// historical hard-coded σ, so switching to the adjustable knob preserves the
-    /// prior look.
+    /// Default level — `to_std_dev` ≈ 9 px.
     pub const DEFAULT: Self = Self(111);
 
     /// σ (logical px) at [`MIN`](Self::MIN) — a barely-there frosting.
     const SIGMA_MIN_PX: f32 = 2.0;
     /// σ (logical px) at [`MAX`](Self::MAX) — heavy frosted glass.
     const SIGMA_MAX_PX: f32 = 64.0;
-    // NOTE: keep public doc comments from linking to the two `SIGMA_*_PX`
-    // consts above — they are private, and `cargo doc -D warnings` (the `docs`
-    // CI job) rejects public→private intra-doc links. Spell the px values out.
+    // Spell px values out in public docs: `SIGMA_*_PX` are private and rustdoc
+    // `-D warnings` rejects public→private intra-doc links.
 
     /// Inner level byte in `[1, 255]` (a perceptual index, *not* σ — use
     /// [`to_std_dev`](Self::to_std_dev) for the pixel radius).
@@ -252,7 +244,6 @@ mod tests {
         assert_eq!(Thickness::DEFAULT.saturating_add(-99_999), Thickness::MIN);
     }
 
-    /// `Opacity::get` が constructor で渡した byte をそのまま返すことを pin する。
     #[test]
     fn opacity_get_returns_constructor_byte() {
         assert_eq!(Opacity::DEFAULT.get(), 0xAA);
@@ -262,7 +253,6 @@ mod tests {
         assert_eq!(Opacity::try_new(42).unwrap().get(), 42);
     }
 
-    /// 同上で `DimLevel::get`。`DEFAULT = 0xCC` を pin する。
     #[test]
     fn dim_level_get_returns_constructor_byte() {
         assert_eq!(DimLevel::DEFAULT.get(), 0xCC);
@@ -271,7 +261,6 @@ mod tests {
         assert_eq!(DimLevel::new(42).get(), 42);
     }
 
-    /// 同上で `Thickness::get`。
     #[test]
     fn thickness_get_returns_constructor_value() {
         assert_eq!(Thickness::DEFAULT.get(), 28);
@@ -280,7 +269,6 @@ mod tests {
         assert_eq!(Thickness::try_new(100).unwrap().get(), 100);
     }
 
-    /// `BlurAmount` のレベル定数を pin する。
     #[test]
     fn blur_amount_constants_are_pinned() {
         assert_eq!(BlurAmount::MIN.get(), 1);
@@ -296,7 +284,7 @@ mod tests {
         assert_eq!(BlurAmount::DEFAULT.saturating_add(-99_999), BlurAmount::MIN);
     }
 
-    /// `DEFAULT` の σ は旧ハードコード値 9px を (丸めて) 再現する。
+    /// `DEFAULT` σ is ≈ 9 px.
     #[test]
     fn blur_amount_default_std_dev_reproduces_legacy_9px() {
         let sigma = BlurAmount::DEFAULT.to_std_dev();
@@ -306,14 +294,14 @@ mod tests {
         );
     }
 
-    /// 端点の σ を pin する (MIN→2px, MAX→64px)。
+    /// Endpoint σ: MIN → 2 px, MAX → 64 px.
     #[test]
     fn blur_amount_endpoints_map_to_sigma_bounds() {
         assert!((BlurAmount::MIN.to_std_dev() - 2.0).abs() < 1e-4);
         assert!((BlurAmount::MAX.to_std_dev() - 64.0).abs() < 1e-3);
     }
 
-    /// σ は level に対し単調増加。
+    /// σ increases monotonically with level.
     #[test]
     fn blur_amount_std_dev_is_monotonic() {
         let mut prev = BlurAmount::MIN.to_std_dev();
@@ -324,8 +312,8 @@ mod tests {
         }
     }
 
-    /// 知覚的になめらか = 等しい level 差は等しい σ 比を生む (Weber–Fechner)。
-    /// 異なる起点で同じ +20 level の σ 比がほぼ一致することを pin する。
+    /// Equal level steps yield equal σ ratios (Weber–Fechner): a +20 step has
+    /// the same σ ratio from any starting level.
     #[test]
     fn blur_amount_equal_steps_have_equal_sigma_ratio() {
         let ratio =

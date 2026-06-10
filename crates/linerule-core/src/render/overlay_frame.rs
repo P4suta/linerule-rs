@@ -14,21 +14,17 @@ use crate::{
 pub enum Brush {
     /// Fill the shape with a single sRGB color.
     Solid(Rgba),
-    /// Blur the screen content behind the shape — a pure backdrop blur with no
-    /// color veil over it. Rendered as a true backdrop blur by the `WinRT`
-    /// composition backend.
+    /// Pure backdrop blur behind the shape, no color veil.
     ///
-    /// `amount` is carried as an integer newtype (not `f32`) so `Brush` keeps
-    /// its `Eq`/`Hash` derives; the platform layer converts it to a float σ
-    /// only at the blur-brush boundary.
+    /// `amount` is an integer newtype (not `f32`) so `Brush` keeps its `Eq`/`Hash`
+    /// derives; the platform layer converts it to a float σ at the brush boundary.
     Blur {
         /// Gaussian blur σ (logical px) for the backdrop.
         amount: BlurAmount,
     },
 }
 
-/// Shape of a layer. Currently axis-aligned rectangles in logical space; new
-/// variants would be added here (e.g. rounded rect for indicator pills).
+/// Shape of a layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Geometry {
     /// Axis-aligned rectangle in logical pixels.
@@ -46,8 +42,7 @@ pub struct Layer {
 }
 
 impl Layer {
-    /// Convenience constructor for the most common case (axis-aligned
-    /// filled rect).
+    /// Construct a solid-filled axis-aligned rect layer.
     #[must_use]
     pub const fn solid_rect(bounds: ScreenRect<Logical>, fill: Rgba) -> Self {
         Self {
@@ -59,8 +54,7 @@ impl Layer {
 
 /// Immutable composition frame.
 ///
-/// Stored as a `Vec<Layer>` — the per-frame allocation cost (3 layers × 60 Hz
-/// ≈ 9 KiB/s) is negligible and lets the crate stay strictly
+/// A plain `Vec<Layer>`: per-frame allocation is negligible and keeps the crate
 /// `#![forbid(unsafe_code)]` without pulling in `smallvec`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct OverlayFrame {

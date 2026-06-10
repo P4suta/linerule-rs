@@ -1,11 +1,9 @@
-//! HUD frame の純粋 ADT とレイアウト関数。
+//! Pure ADT and layout function for the HUD frame.
 //!
-//! プラットフォーム側 (`linerule-platform-windows::hud_renderer`) が `DWrite` +
-//! `D2D` で描画する「パネル位置・背景・不透明度・テキスト行配置」を提供する。
-//! 描画自体は platform 側の責務で、ここはレイアウト計算のみ。
-//!
-//! [`crate::render::OverlayFrame`] と分離してあるのは、HUD はテキスト描画を含み、
-//! `Layer` の閉じた表現に Text variant を足すと exhaustive match が崩れるため。
+//! Computes panel position, background, opacity, and text-row layout; the
+//! platform layer (`linerule-platform-windows::hud_renderer`) draws it with
+//! `DWrite` + `D2D`. Kept separate from [`crate::render::OverlayFrame`] because
+//! the HUD needs text, which `Layer`'s closed enum does not carry.
 
 use serde::Serialize;
 
@@ -15,110 +13,96 @@ use crate::geometry::{Logical, ScreenRect};
 use crate::input::hotkey_map::HotkeyMap;
 use crate::state::{Mode, State};
 
-/// HUD パネル + 行群。プラットフォーム側はパネルを塗って各 row を描画する。
-///
-/// 座標系は logical pixel 上の `f32`。整数ピクセル境界に揃えるのは
-/// プラットフォーム側の責務。
+/// HUD panel plus its text rows. Coordinates are `f32` logical pixels;
+/// snapping to integer pixels is the platform layer's job.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HudFrame {
-    /// HUD パネルの左上 x (logical px)。
+    /// Panel top-left x (logical px).
     pub panel_left: f32,
-    /// HUD パネルの左上 y (logical px)。
+    /// Panel top-left y (logical px).
     pub panel_top: f32,
-    /// パネル幅 (logical px)。
+    /// Panel width (logical px).
     pub panel_width: f32,
-    /// パネル高 (logical px)。
+    /// Panel height (logical px).
     pub panel_height: f32,
-    /// パネル背景色。
+    /// Panel background color.
     pub background: Rgba,
-    /// 全体の不透明度 (0.0–1.0)。`SetHudOpacity` で per-frame に更新される。
+    /// Overall opacity (0.0-1.0); updated per-frame by `SetHudOpacity`.
     pub opacity: f32,
-    /// 描画する行。
+    /// Rows to draw.
     pub rows: Vec<HudRow>,
 }
 
-/// HUD の 1 行。
+/// One HUD text row.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HudRow {
-    /// テキストレイアウト矩形の左上 x (logical px)。
+    /// Text layout rect top-left x (logical px).
     pub origin_x: f32,
-    /// テキストレイアウト矩形の左上 y (logical px)。
+    /// Text layout rect top-left y (logical px).
     pub origin_y: f32,
-    /// 描画する文字列。
+    /// Text to draw.
     pub text: String,
-    /// フォントサイズ (logical pt)。
+    /// Font size (logical pt).
     pub font_size: f32,
-    /// フォント family のロジカルキー（platform 側で実 family 名に解決）。
+    /// Logical font-family key, resolved to a real family by the platform layer.
     pub font: HudFontKey,
-    /// 文字色。
+    /// Text color.
     pub color: Rgba,
 }
 
-/// HUD で使うフォント family の論理キー。
-///
-/// プラットフォーム側で [`crate::config::HudFonts::title_family`] /
-/// [`crate::config::HudFonts::mono_family`] に解決される。
+/// Logical font-family key, resolved by the platform layer to
+/// [`crate::config::HudFonts::title_family`] / [`crate::config::HudFonts::mono_family`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HudFontKey {
-    /// プロポーショナル系（タイトル・状態・本文）。
+    /// Proportional (title, status, body).
     Title,
-    /// 等幅系（テレメトリ等の数値表示）。
+    /// Monospace (telemetry and other numeric rows).
     Mono,
 }
 
-/// HUD の panel 下端に表示する短寿命メッセージ。`Recoverable` な runtime error /
-/// hotkey 競合 / device-lost rebuild 等の即時通知を出す経路。
+/// Short-lived message shown at the panel's bottom edge (recoverable error,
+/// hotkey conflict, device-lost rebuild, etc.).
 ///
-/// `until_ms` は monotonic 時刻 (ms) — `now_ms >= until_ms` で `drain_expired_*`
-/// により消去される。永続表示したい場合は `i64::MAX` を渡す (hotkey conflict
-/// は config 経由なので永続)。
+/// `until_ms` is a monotonic time (ms): the notification is dropped once
+/// `now_ms >= until_ms`. Pass `i64::MAX` to keep it permanent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct HudNotification {
-    /// メッセージの種類。色分け表示に使う。
+    /// Message class; drives the color.
     pub class: NotificationClass,
-    /// 表示文字列 (例: `"Ctrl+Alt+R → already in use"`)。
+    /// Text to display.
     pub message: String,
-    /// この notification が消える時刻 (ms, monotonic)。
+    /// Expiry time (ms, monotonic).
     pub until_ms: i64,
 }
 
-/// [`HudNotification`] の種類。HUD palette とのマッピング:
-///
-/// - `Info` → `HudColors::accent`
-/// - `Warn` → `HudColors::hint`
-/// - `Error` → `Rgba::new(0xFF, 0x6B, 0x6B, 0xFF)` (palette 外、`hint` より強い赤)
+/// [`HudNotification`] class. Maps to the HUD palette: `Info` -> `accent`,
+/// `Warn` -> `hint`, `Error` -> a palette-external red.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationClass {
-    /// 情報通知 (例: `"DPI changed to 150%"`)。
+    /// Informational.
     Info,
-    /// 警告 (例: hotkey 競合)。
+    /// Warning (e.g. hotkey conflict).
     Warn,
-    /// エラー (例: device-lost rebuild 失敗)。
+    /// Error (e.g. device-lost rebuild failure).
     Error,
 }
 
-/// HUD telemetry の per-tick snapshot。`hud_frame()` の telemetry 行に表示する
-/// 3 指標を運ぶ純粋 ADT。platform 側 (`linerule-platform-windows::frame_timing`)
-/// が計測した値を core に値で渡す。
-///
-/// - `tick_p99_ms`: 直近 N フレームの tick 経過時間の 99 パーセンタイル (ms)。
-/// - `frames_dropped`: render budget (`warn_ratio` × frame budget) を超えた tick の累計。
-/// - `commit_timeouts`: composition commit 失敗 / timeout の累計 (`WinRT` 自動 commit 経路では現状 0)。
+/// Per-tick telemetry snapshot for the HUD's telemetry row. Measured by the
+/// platform layer (`linerule-platform-windows::frame_timing`) and passed by value.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct HudTelemetry {
-    /// 直近窓の p99 tick latency (ms)。
+    /// p99 tick latency over the recent window (ms).
     pub tick_p99_ms: f32,
-    /// budget 超過 frame の累計。
+    /// Cumulative count of ticks that exceeded the render budget.
     pub frames_dropped: u64,
-    /// composition commit 失敗の累計。
+    /// Cumulative count of composition commit failures / timeouts.
     pub commit_timeouts: u64,
 }
 
 impl HudTelemetry {
-    /// 計測前のゼロ値。`hud_frame()` の telemetry 引数として渡せる sentinel。
-    /// test helper / boot 直後の "no samples yet" 状態に使う。
+    /// All-zero value for the "no samples yet" state (boot, tests).
     pub const ZERO: Self = Self {
         tick_p99_ms: 0.0,
         frames_dropped: 0,
@@ -126,15 +110,15 @@ impl HudTelemetry {
     };
 }
 
-/// `State` + `HudConfig` + monitor + refresh Hz + notifications から HUD frame を
-/// 組み立てる。
+/// Build a HUD frame from `State`, `HudConfig`, monitor, refresh Hz, and
+/// notifications.
 ///
-/// 配置はパネル右上にアンカー（モニタ右上から `geometry.margin` だけ離れた位置）。
-/// 行は上から順に: title / status (Mode) / body (Thickness, Opacity, Effect) /
-/// telemetry (Refresh Hz) / hotkey help / 続けて notifications を 1 件 1 行で append。
+/// The panel is anchored top-right (`geometry.margin` from the monitor corner).
+/// Rows, top to bottom: title, status (Mode), body (Thickness, Opacity, Effect),
+/// telemetry (Refresh Hz), hotkey help, then one row per notification.
 ///
-/// `notifications` は呼び出し側で expire 済みを除去した snapshot を渡す前提
-/// (`hud_frame` 自体は時刻判定をしない、純粋にレイアウトのみ)。
+/// `notifications` must already have expired entries removed; `hud_frame` does
+/// no time checks, only layout.
 ///
 /// # Examples
 ///
@@ -151,10 +135,10 @@ impl HudTelemetry {
 ///     HotkeyMap::DEFAULT,
 ///     HudTelemetry::ZERO,
 /// );
-/// // 右上アンカー: パネル右端は monitor 右端から margin だけ左
+/// // Top-right anchor: panel right edge is `margin` left of the monitor right.
 /// let expected_right = 1920.0 - HudConfig::DEFAULT.geometry.margin;
 /// assert!((frame.panel_left + frame.panel_width - expected_right).abs() < 0.5);
-/// // 6 baseline + 1 header + 8 hotkey rows = 15 行 (Quit 含む)
+/// // 6 baseline + 1 header + 8 hotkey rows = 15 rows (Quit included).
 /// assert!(frame.rows.len() >= 15);
 /// ```
 #[must_use]
@@ -284,8 +268,7 @@ pub fn hud_frame(
 }
 
 /// Sequential row layout: pushes a [`HudRow`] at the running cursor, then the
-/// caller advances `y`. Keeps the `y` accumulation in one place instead of
-/// repeating `HudRow { origin_x, origin_y, .. }; y += ..` per row.
+/// caller advances `y`. Keeps `y` accumulation in one place.
 struct RowCursor {
     x: f32,
     y: f32,
@@ -301,8 +284,8 @@ impl RowCursor {
         }
     }
 
-    /// Push a row at the cursor and advance past its own font height. Pair with
-    /// [`advance`](Self::advance) to add the trailing row/section padding.
+    /// Push a row at the cursor and advance past its font height. Pair with
+    /// `advance` to add the trailing row/section padding.
     fn push(&mut self, text: String, font_size: f32, font: HudFontKey, color: Rgba) {
         self.rows.push(HudRow {
             origin_x: self.x,
@@ -337,7 +320,7 @@ const fn monitor_top(monitor: ScreenRect<Logical>) -> f32 {
     monitor.top() as f32
 }
 
-/// [`NotificationClass`] を [`HudConfig::colors`] のパレットに mapping する。
+/// Map a [`NotificationClass`] to a color from `HudConfig::colors`.
 const fn notification_color(class: NotificationClass, hud: HudConfig) -> Rgba {
     match class {
         NotificationClass::Info => hud.colors.accent,
@@ -346,8 +329,7 @@ const fn notification_color(class: NotificationClass, hud: HudConfig) -> Rgba {
     }
 }
 
-/// `State` の mode + visible を 1 つの表示ラベルに畳む。`visible == false` は
-/// hidden を上書き表示。
+/// Fold mode + visible into one label; `visible == false` shows "Hidden".
 const fn mode_label(mode: Mode, visible: bool) -> &'static str {
     if !visible {
         return "Hidden";
@@ -368,8 +350,7 @@ mod tests {
         ScreenRect::new(Point::new(0, 0), 1920, 1080)
     }
 
-    /// `hud_frame()` を default 引数 (`HotkeyMap::DEFAULT` / `HudTelemetry::ZERO`) で
-    /// 呼ぶ test helper。
+    /// Call `hud_frame()` with default `HotkeyMap` / `HudTelemetry` arguments.
     fn default_frame(state: State, refresh_hz: u32, notifications: &[HudNotification]) -> HudFrame {
         hud_frame(
             state,
@@ -408,7 +389,7 @@ mod tests {
         }
     }
 
-    /// 既定 (Dim) では Opacity 行が出る。
+    /// Default (Dim) effect shows an Opacity row.
     #[test]
     fn flat_effect_shows_opacity_row() {
         let mut s = State::DEFAULT;
@@ -422,8 +403,8 @@ mod tests {
         assert!(!f.rows.iter().any(|r| r.text.starts_with("Blur:")));
     }
 
-    /// Blur モードでは同じスロットが Blur σ 行に差し替わり、Opacity 行は消える
-    /// (行数は据え置き)。
+    /// Under Blur, the same slot becomes a Blur σ row and the Opacity row is
+    /// gone; row count stays the same.
     #[test]
     fn blur_effect_swaps_opacity_row_for_blur_amount() {
         use crate::state::SurroundEffect;
@@ -491,8 +472,7 @@ mod tests {
         );
     }
 
-    /// telemetry 行の format `{Hz}Hz · p99 {ms:F2}ms · drops {} · stalls {}` を pin する
-    /// (`·` は U+00B7 MIDDLE DOT)。値が反映されているかも同時に確認する。
+    /// Pin the telemetry row format and that values are interpolated.
     #[test]
     fn telemetry_line_format_is_pinned() {
         let t = HudTelemetry {
@@ -518,8 +498,7 @@ mod tests {
         assert_eq!(row.font, HudFontKey::Mono);
     }
 
-    /// `HudTelemetry::ZERO` の serde round-trip。Snapshot 互換のため公開 ADT の
-    /// serialize 安定性を pin する。
+    /// Pin the serde serialization of `HudTelemetry::ZERO` for snapshot stability.
     #[test]
     fn hud_telemetry_zero_serde_round_trip() {
         let json = serde_json::to_string(&HudTelemetry::ZERO).unwrap();
@@ -568,7 +547,7 @@ mod tests {
             until_ms: 1_000,
         };
         let f = default_frame(State::DEFAULT, 60, &[warn, info]);
-        // baseline 6 + hotkey help 1+8 = 15 + 2 notifications = 17 rows or more
+        // 15 baseline+hotkey rows + 2 notifications.
         assert!(f.rows.len() >= 17, "rows: {:?}", f.rows);
         let n1 = &f.rows[f.rows.len() - 2];
         let n2 = &f.rows[f.rows.len() - 1];
@@ -596,27 +575,12 @@ mod tests {
     #[test]
     fn empty_notifications_preserve_default_row_count() {
         let f = default_frame(State::DEFAULT, 60, &[]);
-        // baseline 6 (title + status + thickness + opacity + effect + telemetry)
-        // + 1 hotkey help header + 8 hotkey rows (mode / effect / show / thicker
-        // / thinner / more / less / quit) = 15 rows
+        // 6 baseline + 1 hotkey header + 8 hotkey rows = 15.
         assert_eq!(f.rows.len(), 15);
     }
 
-    /// 各 row の `origin_y` を `HudConfig::DEFAULT` 由来の算術で pin する。
-    /// ordering test は順序しか守らないので、`y += font + padding` 累積の値域を
-    /// ここで固定する (`HudConfig::DEFAULT` が変わったらこの test を更新)。
-    ///
-    /// 期待値はすべて `HudConfig::DEFAULT` から手計算:
-    /// - `panel_top` = `monitor_top + margin` = `0 + 24` = `24`
-    /// - row 0 (Title)            `y0 = 24 + 24 (edge)` = `48`
-    /// - row 1 (Status)           `y1 = 48 + 24 (title font) + 16 (section)` = `88`
-    /// - row 2 (Thickness)        `y2 = 88 + 22 (status font) + 8 (row)` = `118`
-    /// - row 3 (Opacity)          `y3 = 118 + 20 (body font) + 8 (row)` = `146`
-    /// - row 4 (Effect)           `y4 = 146 + 20 (body font) + 8 (row)` = `174`
-    /// - row 5 (Telemetry)        `y5 = 174 + 20 (body font) + 16 (section)` = `210`
-    /// - row 6 (Hotkeys header)   `y6 = 210 + 18 (telemetry) + 16 (section)` = `244`
-    /// - row 7 (Mode cycle)       `y7 = 244 + 20 (body font) + 8 (row)` = `272`
-    /// - row 8..14 (Hotkey rows)  `y{n+1} = y{n} + 18 (telemetry) + 8 (row)` = `+26 each`
+    /// Pin each row's `origin_y` against `HudConfig::DEFAULT`-derived layout
+    /// arithmetic; update if `HudConfig::DEFAULT` changes.
     #[test]
     fn row_origin_y_pins_default_layout_arithmetic() {
         let f = default_frame(State::DEFAULT, 60, &[]);
@@ -626,16 +590,16 @@ mod tests {
             "6 baseline + 1 header + 8 hotkeys expected"
         );
 
-        // `panel_top` itself は monitor_top + margin。
+        // panel_top == monitor_top + margin.
         assert!(
             (f.panel_top - 24.0).abs() < 0.001,
             "panel_top expected 24.0, got {}",
             f.panel_top
         );
 
-        // row 0..6: baseline + Hotkeys header
+        // rows 0..6: baseline + Hotkeys header.
         let baseline_y = [48.0_f32, 88.0, 118.0, 146.0, 174.0, 210.0, 244.0];
-        // row 7..14: 8 hotkey rows, starting at 272 with +26 step
+        // rows 7..14: 8 hotkey rows, starting at 272 with +26 step.
         let hotkey_y = [272.0_f32, 298.0, 324.0, 350.0, 376.0, 402.0, 428.0, 454.0];
         let expected_y: Vec<f32> = baseline_y.iter().chain(hotkey_y.iter()).copied().collect();
         for (i, exp) in expected_y.iter().enumerate() {
@@ -648,14 +612,8 @@ mod tests {
         }
     }
 
-    /// notification rows の `origin_y` を pin する。hotkey help section の後ろに
-    /// section 余白を挟んで notifications が並ぶ。
-    ///
-    /// 期待値:
-    /// - 最後の hotkey row (Quit) の y = 454 (上 test 参照)
-    /// - hotkey loop 終了後 `y += telemetry(18) + row(8) + (section - row)(8)` = +34 → 488
-    /// - notification[0] y = 488
-    /// - notification[1] y = `488 + 18 (telemetry) + 8 (row)` = `514`
+    /// Pin notification rows' `origin_y`: they follow the hotkey help section
+    /// after a section gap. Update if `HudConfig::DEFAULT` changes.
     #[test]
     fn notification_origin_y_pins_default_layout_arithmetic() {
         let n1 = HudNotification {
@@ -682,12 +640,12 @@ mod tests {
         );
     }
 
-    /// `hotkeys` 引数の chord 文字列が各 hotkey row に反映されることを pin する
-    /// (効かないと「HUD 操作説明が常に DEFAULT 表示」になる)。
+    /// Pin that the `hotkeys` argument's chord strings reach the hotkey rows
+    /// (otherwise the help would always show DEFAULT chords).
     #[test]
     fn hotkey_help_rows_reflect_hotkey_map_argument() {
-        // DEFAULT と完全に異なる chord にして substring 混同を避ける (`Ctrl+Alt+R`
-        // のような短い prefix が `Ctrl+Alt+Right` にマッチする問題を回避)。
+        // Use chords fully distinct from DEFAULT so a short prefix like
+        // `Ctrl+Alt+R` can't substring-match e.g. `Ctrl+Alt+Right`.
         let custom = HotkeyMap {
             cycle_mode: "Ctrl+Shift+M",
             cycle_effect: "Ctrl+Shift+E",
@@ -708,7 +666,6 @@ mod tests {
             HudTelemetry::ZERO,
         );
         let texts: Vec<&str> = f.rows.iter().map(|r| r.text.as_str()).collect();
-        // hotkey rows は telemetry 行の後の 1 header + 7 rows
         let cycle_row = texts
             .iter()
             .find(|t| t.contains("Mode cycle"))
@@ -716,7 +673,7 @@ mod tests {
         assert!(cycle_row.contains("Ctrl+Shift+M"), "cycle row: {cycle_row}");
         let quit_row = texts.iter().find(|t| t.contains("Quit")).expect("quit row");
         assert!(quit_row.contains("Ctrl+Shift+X"), "quit row: {quit_row}");
-        // DEFAULT chord は custom map に上書きされて表面化しないこと
+        // No DEFAULT chord should surface once the custom map overrides it.
         for r in &f.rows {
             assert!(
                 !r.text.contains("Ctrl+Alt+"),

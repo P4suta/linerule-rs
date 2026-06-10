@@ -5,8 +5,8 @@ use serde::Serialize;
 
 /// One chord string per `OverlayAction` variant the user can trigger.
 //
-// `Deserialize` is omitted — the fields are `&'static str`, which cannot
-// satisfy `Deserialize<'de>` for arbitrary `'de`. Compile-time const only.
+// `Deserialize` omitted: fields are `&'static str`, which cannot satisfy
+// `Deserialize<'de>` for arbitrary `'de`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct HotkeyMap {
     /// Chord that triggers `OverlayAction::CycleMode`.
@@ -30,12 +30,9 @@ pub struct HotkeyMap {
 impl HotkeyMap {
     /// Default chord assignments (`Ctrl+Alt+...`).
     ///
-    /// Bump / opacity adjustments are bound to arrow keys instead of OEM keys
-    /// (`]`/`[`/`=`/`-`) because the latter map to different virtual-key codes
-    /// depending on the active keyboard layout / IME on Windows — e.g. a JIS
-    /// keyboard with the English IME does *not* deliver `VK_OEM_4` for the
-    /// physical `[` key, so `RegisterHotKey(VK_OEM_4, ...)` silently misses.
-    /// Arrow keys (`VK_UP/DOWN/LEFT/RIGHT`) are layout-independent.
+    /// Bumps use arrow keys, not OEM keys (`]`/`[`/`=`/`-`): OEM virtual-key
+    /// codes vary by keyboard layout/IME on Windows, so `RegisterHotKey` can
+    /// silently miss. Arrow keys are layout-independent.
     pub const DEFAULT: Self = Self {
         cycle_mode: "Ctrl+Alt+R",
         cycle_effect: "Ctrl+Alt+E",

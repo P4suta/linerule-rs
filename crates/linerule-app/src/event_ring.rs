@@ -1,20 +1,18 @@
-//! 直近 N 件の tracing event を in-memory ring buffer に貯めるレイヤと、その
-//! snapshot を panic hook から読み取る API。
+//! A layer that keeps the last N tracing events in an in-memory ring buffer,
+//! plus an API for the panic hook to read a snapshot.
 //!
-//! 用途: panic 発生時に `crash_dump::CrashRecord::recent_events` に同梱する
-//! ことで「panic に至るまで直前に何が起きていたか」を `events.jsonl` を手で
-//! 漁らずに再構成できるようにする。`events.jsonl` には全 event が出るが、
-//! crash JSON にも直近 64 件を抱き合わせることで grep / jq の手数を削減。
+//! Purpose: bundle these into `crash_dump::CrashRecord::recent_events` on panic
+//! so the lead-up can be reconstructed without grepping `events.jsonl`.
 //!
-//! ## 設計判断
-//!
-//! - `static OnceLock<Mutex<VecDeque<RingEntry>>>` で global state。panic hook
-//!   (`'static` lifetime) からアクセスする必要があるため。
-//! - capacity 256 entry × ~1 KB = ~256 KB heap (環境依存)。`env_filter` で
-//!   `warn` 以上に絞れば release ビルドで実質ゼロ。
-//! - panic 中の lock poisoning は `PoisonError::into_inner()` で奪取する。
-//!   失敗時は空 tail を返して crash dump 自体は残す方針。
-//! - `RingBufferLayer` は `Send + Sync` を `Mutex + OnceLock` 経由で自動充足。
+//! Design notes:
+//! - Global state via `static OnceLock<Mutex<VecDeque<RingEntry>>>` because the
+//!   panic hook (`'static`) must reach it.
+//! - Capacity 256 entries; with `env_filter` set to `warn`+ this is near zero
+//!   in release.
+//! - On lock poisoning during a panic, take the inner via
+//!   `PoisonError::into_inner()`; on other failure return an empty tail so the
+//!   crash dump is still written.
+//! - `RingBufferLayer` is `Send + Sync` via `Mutex + OnceLock`.
 
 #![forbid(unsafe_code)]
 
@@ -26,23 +24,23 @@ use tracing::{Event, Subscriber};
 use tracing_subscriber::field::Visit;
 use tracing_subscriber::layer::{Context, Layer};
 
-/// Ring buffer の上限。1 frame ~16ms 単位で event が出るとして 256 entry ≒ 4 秒分
-/// の文脈を保持する。`env_filter` で `warn` 以上に絞ればもっと長い窓になる。
+/// Ring buffer cap. At ~16ms per frame, 256 entries holds roughly 4s of
+/// context; an `env_filter` of `warn`+ widens the window.
 const CAPACITY: usize = 256;
 
-/// 1 つの tracing event の snapshot。crash dump にそのまま埋め込めるよう
-/// `Serialize` を実装する。
+/// Snapshot of one tracing event. `Serialize` so it embeds directly into the
+/// crash dump.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct RingEntry {
-    /// Unix epoch からの ms (panic 後の post-mortem 解析用)。
+    /// Milliseconds since the Unix epoch.
     pub(crate) unix_ms: i64,
-    /// `tracing::Level` を文字列化したもの。
+    /// Stringified `tracing::Level`.
     pub(crate) level: String,
-    /// `event.metadata().target()`。subsystem 絞り込み用。
+    /// `event.metadata().target()`, for subsystem filtering.
     pub(crate) target: String,
-    /// event の message field (`tracing::info!("text")` の "text" 部分)。
+    /// The event's message field.
     pub(crate) message: String,
-    /// その他 fields を JSON Object として並べたもの。
+    /// Remaining fields as a JSON object.
     pub(crate) fields: serde_json::Value,
 }
 
@@ -52,9 +50,9 @@ fn ring() -> &'static Mutex<VecDeque<RingEntry>> {
     RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(CAPACITY)))
 }
 
-/// 直近 `n` 件の `RingEntry` を新しい順から古い順で並べた snapshot を返す。
-/// panic hook から呼ばれる。lock 取得に失敗した (panic 中の同 thread が
-/// 取りに来ている等) ケースでは `PoisonError::into_inner()` で奪取する。
+/// Return a snapshot of the last `n` `RingEntry`s in oldest-to-newest order.
+/// Called from the panic hook; takes the inner via `PoisonError::into_inner()`
+/// when the lock is poisoned.
 pub(crate) fn snapshot_tail(n: usize) -> Vec<RingEntry> {
     let guard = match ring().lock() {
         Ok(g) => g,
@@ -65,14 +63,14 @@ pub(crate) fn snapshot_tail(n: usize) -> Vec<RingEntry> {
     guard.iter().skip(start).cloned().collect()
 }
 
-/// 現在 ring に積まれている entry 数を返す (test 用 helper)。
+/// Number of entries currently in the ring (test helper).
 #[cfg(test)]
 pub(crate) fn len() -> usize {
     ring().lock().map_or(0, |g| g.len())
 }
 
-/// Ring buffer に event を push する `tracing_subscriber::Layer`。registry に
-/// `.with(RingBufferLayer)` で追加する。
+/// `tracing_subscriber::Layer` that pushes events into the ring buffer. Add via
+/// `.with(RingBufferLayer)` on the registry.
 pub(crate) struct RingBufferLayer;
 
 impl<S: Subscriber> Layer<S> for RingBufferLayer {
@@ -107,9 +105,9 @@ fn current_unix_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// `tracing_subscriber::Visit` 実装で event の fields を `serde_json::Map` に
-/// 取り出す。`message` field だけは特別扱いして専用 column に詰める (`events.jsonl`
-/// と同じ慣行)。
+/// `tracing_subscriber::Visit` impl that collects event fields into a
+/// `serde_json::Map`. The `message` field is pulled into its own column (same
+/// convention as `events.jsonl`).
 #[derive(Default)]
 struct FieldVisitor {
     message: String,
@@ -163,7 +161,7 @@ mod tests {
     use tracing_subscriber::Registry;
     use tracing_subscriber::layer::SubscriberExt;
 
-    /// `static` ring buffer はテスト間で共有されるので、必要なら最初にクリアする。
+    /// The `static` ring is shared across tests; clear it first when needed.
     fn clear_ring() {
         if let Ok(mut q) = ring().lock() {
             q.clear();
@@ -192,7 +190,7 @@ mod tests {
             }
         });
         let tail = snapshot_tail(CAPACITY);
-        // 最古は idx=50 から (0..50 が evict されているはず)
+        // Oldest is idx=50 (0..50 evicted).
         let first_idx = tail
             .first()
             .and_then(|e| e.fields.get("idx"))
@@ -217,7 +215,7 @@ mod tests {
         });
         let tail = snapshot_tail(5);
         assert_eq!(tail.len(), 5);
-        // 末尾 5 件は idx=5..10
+        // Last 5 are idx=5..10.
         let first_idx = tail.first().unwrap().fields.get("idx").unwrap().as_i64();
         assert_eq!(first_idx, Some(5));
     }
@@ -237,7 +235,7 @@ mod tests {
             entry.fields.get("key").and_then(|v| v.as_str()),
             Some("value")
         );
-        // message は fields の中には出ない
+        // message is not duplicated into fields.
         assert!(entry.fields.get("message").is_none());
     }
 
@@ -254,10 +252,9 @@ mod tests {
         assert_eq!(entry.target, "test_subsystem");
     }
 
-    /// ring buffer は `crash_dump` の `recent_events` field の供給源として動作する。
-    /// tracing event → ring → [`snapshot_tail`] → JSON serialize → deserialize の
-    /// round-trip で内容を維持することを確認し、crash dump の "recent events tail"
-    /// が event 内容を欠落させずに保存することを保証する。
+    /// The ring feeds `crash_dump`'s `recent_events`. Check the
+    /// event → ring → [`snapshot_tail`] → serialize → deserialize round-trip
+    /// preserves contents.
     #[test]
     fn ring_snapshot_round_trips_through_serde_json() {
         #[derive(serde::Deserialize)]
@@ -278,14 +275,13 @@ mod tests {
         let tail = snapshot_tail(64);
         assert_eq!(tail.len(), 2, "expected exactly 2 entries in the snapshot");
 
-        // Serialize ring entries (CrashRecord::recent_events と同じ形)。
+        // Serialize ring entries (same shape as CrashRecord::recent_events).
         let json = serde_json::to_string(&tail).expect("serialize ring snapshot");
         assert!(json.contains("panic-adjacent"));
         assert!(json.contains("crash_dump_integration"));
 
-        // Deserialize back via a structurally-equivalent shape. CrashRecord
-        // で使われる形と互換であることを示す: level / target / message / fields
-        // を読み戻せる。
+        // Deserialize via a structurally-equivalent shape, compatible with
+        // CrashRecord: level / target / message / fields read back.
         let parsed: Vec<ReadEntry> = serde_json::from_str(&json).expect("round-trip");
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].level, "WARN");
@@ -299,8 +295,7 @@ mod tests {
         assert_eq!(parsed[1].message, "after");
     }
 
-    /// [`snapshot_tail`] に `0` を渡したら空 `Vec` を返す。`crash_dump` で
-    /// `N=0` が誤って渡されても panic しないことを確認 (防御的)。
+    /// [`snapshot_tail`] with `0` returns an empty `Vec` and does not panic.
     #[test]
     fn snapshot_tail_zero_returns_empty_vec() {
         clear_ring();

@@ -1,13 +1,12 @@
-//! tracing subscriber + tracing-appender 構成。
+//! tracing subscriber + tracing-appender setup.
 //!
-//! `LINERULE_LOG` 環境変数で subsystem ごとのレベルを制御
-//! (`debug,wnd_proc=info,heartbeat=info` 等)。出力先は:
-//! - stderr (CLI モードのとき): human-readable
-//! - `<linerule.exe と同じ dir>/events.jsonl.YYYY-MM-DD`: machine-readable JSON Lines
+//! `LINERULE_LOG` controls per-subsystem levels (e.g.
+//! `debug,wnd_proc=info,heartbeat=info`). Outputs:
+//! - stderr (CLI mode): human-readable
+//! - `<exe dir>/events.jsonl.YYYY-MM-DD`: machine-readable JSON Lines
 //!
-//! 「薄い読書ツール」志向のため、`%APPDATA%` / `ProjectDirs` を使わず exe と
-//! 同階層に直接吐く portable 運用。書き込み権限が無い場合 (Program Files 配下に
-//! 置かれた場合等) は `init()` が `Err` を返す。
+//! Portable layout: logs go next to the exe rather than under `%APPDATA%`. If
+//! the dir is not writable (e.g. under Program Files) `init()` returns `Err`.
 
 #![forbid(unsafe_code)]
 
@@ -20,12 +19,12 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// アプリ開始時に tracing を初期化する。返却された `WorkerGuard` は
-/// `main` の寿命まで保持する必要がある（drop で background writer が flush）。
+/// Initialize tracing at startup. Hold the returned `WorkerGuard` for the life
+/// of `main` (dropping it flushes the background writer).
 ///
 /// # Errors
-/// exe path が解決できない、ログ dir を作れない、あるいは file appender 初期化
-/// 失敗時。
+/// When the exe path can't be resolved, the log dir can't be created, or the
+/// file appender fails to init.
 pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
     let log_dir = data_dir().context("resolving log dir next to linerule.exe")?;
     std::fs::create_dir_all(&log_dir)
@@ -46,8 +45,8 @@ pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
 
     let registry = tracing_subscriber::registry()
         .with(env_filter)
-        // panic 直前の event を crash_dump JSON に同梱するための ring buffer。
-        // env_filter で殺された event は ring にも入らない (filter は全 Layer 共通)。
+        // Ring buffer that supplies pre-panic events to the crash dump JSON.
+        // Events dropped by env_filter never reach the ring (filter is shared).
         .with(crate::event_ring::RingBufferLayer)
         .with(file_layer);
 
@@ -63,12 +62,11 @@ pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
     Ok(guard)
 }
 
-/// 現在実行中の `linerule.exe` と同じディレクトリを返す。`events.jsonl.*` と
-/// `crash-*.json` の両方がここに置かれる。
+/// Return the directory of the running `linerule.exe`. Both `events.jsonl.*`
+/// and `crash-*.json` live here.
 ///
 /// # Errors
-/// `std::env::current_exe()` が失敗した場合、または exe path に parent が無い
-/// 場合 (= 根本的に Win32 環境が壊れているケース)。
+/// When `std::env::current_exe()` fails or the exe path has no parent.
 pub(crate) fn data_dir() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("std::env::current_exe failed")?;
     let dir = exe
@@ -88,7 +86,7 @@ mod tests {
 
     #[test]
     fn data_dir_matches_current_exe_parent() {
-        // ログは exe と同じ階層に置く portable 運用。
+        // Portable layout: logs sit next to the exe.
         let p = data_dir().expect("current_exe resolves under cargo nextest");
         let expected = std::env::current_exe()
             .expect("current_exe resolves under cargo nextest")
@@ -122,9 +120,7 @@ mod tests {
         // `try_new` here exercises the same surface init() uses.
         let bad = "this-is-not-a-level";
         let parsed = EnvFilter::try_new(bad);
-        // EnvFilter accepts arbitrary target names; this is documenting that
-        // behavior rather than asserting strict rejection.
-        // We just ensure it doesn't panic.
+        // EnvFilter accepts arbitrary target names; just ensure no panic.
         let _ = parsed;
     }
 }

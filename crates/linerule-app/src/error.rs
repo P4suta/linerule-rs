@@ -1,20 +1,19 @@
-//! App 層のエラー集約型 `AppError`。
+//! App-layer error aggregator `AppError`.
 //!
-//! 依存方向 `app → platform-windows → core` を保ったまま、core と platform の
-//! エラーを合流させる aggregator。`LineruleError → AppError` と
-//! `PlatformError → AppError` は thiserror の `#[from]` で自動派生、I/O と serde
-//! 由来の失敗も同じ enum に統合する。
+//! Merges core and platform errors while keeping the dependency direction
+//! `app → platform-windows → core`. `LineruleError → AppError` and
+//! `PlatformError → AppError` come from thiserror `#[from]`; I/O and serde
+//! failures land in the same enum.
 //!
-//! `linerule-core::LineruleError` に `Platform` variant を生やさないのは orphan
-//! rule + 依存方向の純度のため。`linerule-core` は `linerule-platform-windows`
-//! を知らないままにし、合流点を app 層に持たせる。
+//! `LineruleError` has no `Platform` variant (orphan rule + keeping the
+//! dependency direction clean): core stays unaware of platform-windows, and the
+//! merge point lives in the app layer.
 //!
-//! `main()` は `anyhow::Result` を維持。`AppError` は `Into<anyhow::Error>` を
-//! thiserror が自動派生するので boundary で `?` 1 つで anyhow に上がる。
+//! `main()` keeps `anyhow::Result`; thiserror's `Into<anyhow::Error>` lets a
+//! single `?` lift `AppError` into anyhow at the boundary.
 //!
-//! `Platform` variant は Windows ターゲットでのみ存在する (`linerule-platform-
-//! windows` 自体が `[target.'cfg(windows)'.dependencies]` の cfg gate 下にある
-//! ため)。
+//! The `Platform` variant exists on Windows targets only (platform-windows is
+//! itself cfg-gated under `[target.'cfg(windows)'.dependencies]`).
 
 #![forbid(unsafe_code)]
 
@@ -23,51 +22,47 @@ use linerule_core::{ErrorClass, LineruleError};
 use linerule_platform_windows::PlatformError;
 use thiserror::Error;
 
-/// linerule-app の集約エラー型。core / platform / I/O / serde を同じ surface に
-/// まとめる。
+/// Aggregate error type for linerule-app, unifying core / platform / I/O /
+/// serde.
 ///
-/// `boot::run_overlay` のエラーパスから `class()` で分類して使う。
-/// `boot::run_overlay` は `cfg(target_os = "windows")` 限定なので Linux build
-/// では本型の caller が存在しない (test を除く)。`dead_code` allow は Linux
-/// だけに条件付与して、Windows build では実消費パスを保証する。
+/// Classified via `class()` on `boot::run_overlay`'s error path. That caller is
+/// Windows-only, so on Linux the `dead_code` allow is applied; on Windows the
+/// type is always consumed.
 #[cfg_attr(
     not(target_os = "windows"),
     allow(
         dead_code,
-        reason = "Linux build では `boot::run_overlay` (caller) が cfg gate で消えるが、\
-                  Windows build では classify_and_log 経由で必ず消費される"
+        reason = "caller boot::run_overlay is cfg-gated away on Linux; consumed on Windows"
     )
 )]
 #[derive(Debug, Error)]
 pub(crate) enum AppError {
-    /// `linerule-core` 由来 (`CoreError` / `ChordError`)。
+    /// From `linerule-core` (`CoreError` / `ChordError`).
     #[error(transparent)]
     Core(#[from] LineruleError),
-    /// `linerule-platform-windows` 由来。Windows target のみ。
+    /// From `linerule-platform-windows`. Windows target only.
     #[cfg(target_os = "windows")]
     #[error(transparent)]
     Platform(#[from] PlatformError),
-    /// 標準入出力 (`std::fs::read_dir` 等の diagnostics 経路で出る)。
+    /// I/O (e.g. `std::fs::read_dir` on the diagnostics path).
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
-    /// `serde_json::Error` (crash dump 読み書き等)。
+    /// `serde_json::Error` (crash dump read/write).
     #[error("serde: {0}")]
     Serde(#[from] serde_json::Error),
 }
 
 impl AppError {
-    /// 内部 error の `class()` に委譲する。`Io` / `Serde` は `Fatal` 既定 —
-    /// CLI 経路で `diagnostics --last-crash` 等が失敗すると I/O エラーは
-    /// `Fatal` (継続不能) として扱うのが自然。
+    /// Delegates to the inner error's `class()`. `Io` / `Serde` default to
+    /// `Fatal`.
     ///
-    /// Linux build では `classify_and_log` 自体が cfg gate で消えるため、
-    /// この method の唯一の caller がいなくなる (test を除く)。`dead_code` allow
-    /// を Linux 限定で付ける。
+    /// On Linux the only caller (`classify_and_log`) is cfg-gated away, hence
+    /// the Linux-only `dead_code` allow.
     #[cfg_attr(
         not(target_os = "windows"),
         allow(
             dead_code,
-            reason = "Linux build では classify_and_log (caller) が cfg gate で消える"
+            reason = "caller classify_and_log is cfg-gated away on Linux"
         )
     )]
     pub(crate) fn class(&self) -> ErrorClass {
@@ -80,10 +75,9 @@ impl AppError {
     }
 }
 
-/// `AppError` を [`ErrorClass`] に応じて log + 必要なら HUD notification として
-/// 通知する helper。`Recoverable` は呼び出し側に「続行可能」を `Continue` で
-/// 伝え、`Fatal` / `ProgrammerError` は `Stop` を返す。HUD push 経路自体は
-/// 呼び出し側の closure で渡す (overlay handle が文脈依存のため)。
+/// Log an `AppError` by its [`ErrorClass`]. `Recoverable` returns `Continue`,
+/// `Fatal` / `ProgrammerError` return `Stop`. The caller handles any HUD push
+/// (the overlay handle is context-dependent).
 #[cfg(target_os = "windows")]
 pub(crate) fn classify_and_log(err: &AppError) -> RunDecision {
     let class = err.class();
@@ -104,14 +98,14 @@ pub(crate) fn classify_and_log(err: &AppError) -> RunDecision {
     }
 }
 
-/// [`classify_and_log`] の戻り値。`Continue` は HUD に push して続行、`Stop` は
-/// `?` 経由で main に bubble up することを期待する。
+/// Return value of [`classify_and_log`]. `Continue` means push to the HUD and
+/// keep going; `Stop` means bubble up to main via `?`.
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunDecision {
-    /// 続行可能 (Recoverable)。呼び出し側で HUD notification を push する。
+    /// Recoverable. Caller pushes a HUD notification.
     Continue,
-    /// 中断 (Fatal / ProgrammerError)。呼び出し側で `Err(_)?` する。
+    /// Fatal / ProgrammerError. Caller does `Err(_)?`.
     Stop,
 }
 
@@ -149,8 +143,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn chord_error_via_platform_is_recoverable() {
-        // ChordError は PlatformError::Chord 経由でも AppError::Platform 経由でも
-        // `Recoverable` に流れる
+        // ChordError stays `Recoverable` through PlatformError and AppError.
         use linerule_core::ChordError;
         let e: AppError = PlatformError::from(ChordError::Empty).into();
         assert_eq!(e.class(), ErrorClass::Recoverable);
@@ -159,7 +152,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn app_error_converts_into_anyhow_via_question_mark() {
-        // `?` chain で anyhow に変換できることの compile-time check。
+        // Compile-time check that `?` converts into anyhow.
         fn try_chain() -> anyhow::Result<()> {
             let app: AppError = PlatformError::NullHandle { operation: "test" }.into();
             Err(app)?;

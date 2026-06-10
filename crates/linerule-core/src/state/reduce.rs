@@ -194,8 +194,8 @@ mod tests {
         assert!(!d.is_any());
     }
 
-    /// `BumpOpacity` が `opacity` field を実際に更新することを pin する
-    /// (`Horizontal` + DEFAULT 0xAA から +8 で 0xB2)。
+    /// `BumpOpacity` actually mutates the `opacity` field
+    /// (`Horizontal` + DEFAULT 0xAA, +8 → 0xB2).
     #[test]
     fn bump_opacity_actually_mutates_opacity_field() {
         let s0 = State {
@@ -210,7 +210,7 @@ mod tests {
             "opacity must change from DEFAULT after BumpOpacity(+8)"
         );
         assert!(d.config_changed);
-        // 同時に thickness と effect は変化しない (他 field を巻き込まない)
+        // thickness and effect stay put (no other field is touched).
         assert_eq!(s1.config.thickness, s0.config.thickness);
         assert_eq!(s1.config.effect, s0.config.effect);
     }
@@ -234,7 +234,7 @@ mod tests {
         assert!(d3.config_changed);
     }
 
-    /// Blur モードでは `BumpOpacity` が σ 量 (`blur`) を動かし、`opacity` は不変。
+    /// Under the Blur effect, `BumpOpacity` moves the σ amount (`blur`); `opacity` is inert.
     #[test]
     fn bump_opacity_retargets_to_blur_amount_under_blur_effect() {
         use crate::color::BlurAmount;
@@ -256,7 +256,7 @@ mod tests {
         assert!(d.config_changed);
     }
 
-    /// 非 Blur (Dim) モードでは従来通り `opacity` を動かし、`blur` は不変。
+    /// Under a flat (non-Blur) effect, `BumpOpacity` moves `opacity`; `blur` is inert.
     #[test]
     fn bump_opacity_tunes_opacity_under_flat_effect() {
         use crate::color::Opacity;
@@ -273,8 +273,8 @@ mod tests {
         assert!(d.config_changed);
     }
 
-    /// σ 量だけが変わるケースでも `config_changed` が立つこと
-    /// (`config_unchanged` の `blur` 比較漏れ回帰防止)。
+    /// A blur-amount-only change still flags `config_changed`; guards against
+    /// `config_unchanged` dropping the `blur` comparison.
     #[test]
     fn blur_amount_only_change_marks_config_changed() {
         use crate::state::SurroundEffect;
