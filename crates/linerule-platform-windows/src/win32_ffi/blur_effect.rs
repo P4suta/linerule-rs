@@ -73,6 +73,9 @@ const BLUR_NOISE_FREQ: f32 = 0.70;
 struct D2dEffectNode {
     name: RefCell<HSTRING>,
     clsid: GUID,
+    /// 登録スキーマ順の D2D プロパティ名 (`GetNamedPropertyMapping` 用)。`properties`
+    /// と同じ index に対応する。
+    prop_names: Vec<&'static str>,
     properties: Vec<IPropertyValue>,
     sources: Vec<IGraphicsEffectSource>,
 }
@@ -98,13 +101,25 @@ impl IGraphicsEffectD2D1Interop_Impl for D2dEffectNode_Impl {
 
     fn GetNamedPropertyMapping(
         &self,
-        _name: &PCWSTR,
-        _index: *mut u32,
-        _mapping: *mut GRAPHICS_EFFECT_PROPERTY_MAPPING,
+        name: &PCWSTR,
+        index: *mut u32,
+        mapping: *mut GRAPHICS_EFFECT_PROPERTY_MAPPING,
     ) -> WinResult<()> {
-        // 名前引きは未実装。single-arg CreateEffectFactory は animatable property を
-        // 宣言しないので呼ばれない。canonical 実装に合わせ E_NOTIMPL を返す。
-        Err(Error::from(windows::Win32::Foundation::E_NOTIMPL))
+        // D2D プロパティ名 → 自分の index + mapping(DIRECT)。Composition の
+        // CreateEffectFactory はこの mapping を使って各プロパティ (特に VECTOR2) を
+        // D2D effect に push する。E_NOTIMPL のままだと vector プロパティが解釈されず
+        // factory が E_INVALIDARG になる (scalar は fallback で通るが vector は通らない)。
+        let wanted = unsafe { name.to_string() }
+            .map_err(|_| Error::from(windows::Win32::Foundation::E_INVALIDARG))?;
+        let Some(i) = self.prop_names.iter().position(|n| *n == wanted) else {
+            return Err(Error::from(windows::Win32::Foundation::E_INVALIDARG));
+        };
+        // すべて DIRECT (値をそのまま D2D プロパティに設定)。
+        unsafe {
+            *index = u32::try_from(i).unwrap_or(0);
+            *mapping = GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT;
+        }
+        Ok(())
     }
 
     fn GetPropertyCount(&self) -> WinResult<u32> {
@@ -132,16 +147,19 @@ impl IGraphicsEffectD2D1Interop_Impl for D2dEffectNode_Impl {
 }
 
 /// ノードを構築し、`IGraphicsEffect` として返す (次段の source に差すには
-/// [`as_source`] で `IGraphicsEffectSource` に cast する)。
+/// [`as_source`] で `IGraphicsEffectSource` に cast する)。`prop_names` は登録スキーマ順の
+/// D2D プロパティ名で、`properties` と同じ並び。
 fn node(
     name: &str,
     clsid: GUID,
+    prop_names: &[&'static str],
     properties: Vec<IPropertyValue>,
     sources: Vec<IGraphicsEffectSource>,
 ) -> IGraphicsEffect {
     D2dEffectNode {
         name: RefCell::new(HSTRING::from(name)),
         clsid,
+        prop_names: prop_names.to_vec(),
         properties,
         sources,
     }
@@ -229,6 +247,7 @@ pub fn create_backdrop_blur_brush(
     let blur = node(
         "LineruleBlur",
         CLSID_D2D1GaussianBlur,
+        &["StandardDeviation", "Optimization", "BorderMode"],
         vec![
             single(standard_deviation)?,
             uint(D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED.0 as u32)?,
@@ -239,12 +258,14 @@ pub fn create_backdrop_blur_brush(
     let saturation_node = node(
         "LineruleSaturation",
         CLSID_D2D1Saturation,
+        &["Saturation"],
         vec![single(saturation)?],
         vec![as_source(&blur)?],
     );
     let contrast_node = node(
         "LineruleContrast",
         CLSID_D2D1Contrast,
+        &["Contrast", "ClampInput"],
         vec![single(contrast)?, boolean(false)?],
         vec![as_source(&saturation_node)?],
     );
@@ -261,6 +282,7 @@ pub fn create_backdrop_blur_brush(
         let op = node(
             "ProbeOpacity",
             CLSID_D2D1Opacity,
+            &["Opacity"],
             vec![single(noise)?],
             vec![as_source(&build_turbulence(noise_freq)?)?],
         );
@@ -268,6 +290,7 @@ pub fn create_backdrop_blur_brush(
         let comp = node(
             "ProbeComposite",
             CLSID_D2D1Composite,
+            &["Mode"],
             vec![uint(D2D1_COMPOSITE_MODE_SOURCE_OVER.0 as u32)?],
             vec![
                 as_source(&build_turbulence(noise_freq)?)?,
@@ -321,6 +344,15 @@ fn build_turbulence(frequency: f32) -> Result<IGraphicsEffect> {
     Ok(node(
         "LineruleTurbulence",
         CLSID_D2D1Turbulence,
+        &[
+            "Offset",
+            "Size",
+            "BaseFrequency",
+            "NumOctaves",
+            "Seed",
+            "Noise",
+            "Stitchable",
+        ],
         vec![
             vector2(-8192.0, -8192.0)?,
             vector2(32768.0, 32768.0)?,
@@ -346,6 +378,7 @@ fn build_noise_composite(
     let grey = node(
         "LineruleNoiseGrey",
         CLSID_D2D1Saturation,
+        &["Saturation"],
         vec![single(0.0)?],
         vec![as_source(&turbulence)?],
     );
@@ -353,6 +386,7 @@ fn build_noise_composite(
     let faded = node(
         "LineruleNoiseOpacity",
         CLSID_D2D1Opacity,
+        &["Opacity"],
         vec![single(strength)?],
         vec![as_source(&grey)?],
     );
@@ -360,6 +394,7 @@ fn build_noise_composite(
     Ok(node(
         "LineruleComposite",
         CLSID_D2D1Composite,
+        &["Mode"],
         vec![uint(D2D1_COMPOSITE_MODE_SOURCE_OVER.0 as u32)?],
         vec![as_source(base)?, as_source(&faded)?],
     ))
