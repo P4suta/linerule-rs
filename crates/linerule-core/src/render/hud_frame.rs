@@ -160,12 +160,8 @@ impl HudTelemetry {
 #[must_use]
 #[allow(
     clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "row 構築は逐次的でラインアウト計算が局所的に追跡できる方が読みやすい。\
-              分割すると `y` 累積を渡し回す必要があり可読性が落ちる。\
-              引数は既存 (refresh_hz/notifications/hotkeys) に並べて per-tick の\
-              非決定値 (telemetry) を 1 つ追加したもので、グルーピング struct を\
-              作るより呼び出し側が読みやすい"
+    reason = "config + per-tick state are distinct inputs; a grouping struct \
+              would read worse at the call site than the flat list"
 )]
 pub fn hud_frame(
     state: State,
@@ -176,117 +172,74 @@ pub fn hud_frame(
     hotkeys: HotkeyMap,
     telemetry: HudTelemetry,
 ) -> HudFrame {
-    let panel_width = hud.geometry.width;
-    let panel_height = hud.geometry.height;
-    let margin = hud.geometry.margin;
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "screen-space px は f32 mantissa に余裕で収まる"
-    )]
-    let monitor_right = (monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX)) as f32;
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "screen-space px は f32 mantissa に余裕で収まる"
-    )]
-    let monitor_top = monitor.top() as f32;
+    let panel_left = monitor_right(monitor) - hud.geometry.margin - hud.geometry.width;
+    let panel_top = monitor_top(monitor) + hud.geometry.margin;
 
-    let panel_left = monitor_right - margin - panel_width;
-    let panel_top = monitor_top + margin;
+    let mut cur = RowCursor::new(panel_left + hud.padding.edge, panel_top + hud.padding.edge);
+    let title = HudFontKey::Title;
+    let mono = HudFontKey::Mono;
 
-    let mut rows = Vec::with_capacity(6);
-    let mut y = panel_top + hud.padding.edge;
-    let x = panel_left + hud.padding.edge;
+    cur.push(
+        "linerule".to_string(),
+        hud.fonts.title,
+        title,
+        hud.colors.foreground,
+    );
+    cur.advance(hud.padding.section);
 
-    // Title
-    rows.push(HudRow {
-        origin_x: x,
-        origin_y: y,
-        text: "linerule".to_string(),
-        font_size: hud.fonts.title,
-        font: HudFontKey::Title,
-        color: hud.colors.foreground,
-    });
-    y += hud.fonts.title + hud.padding.section;
+    cur.push(
+        format!("Mode: {}", mode_label(state.mode, state.visible)),
+        hud.fonts.status,
+        title,
+        hud.colors.foreground,
+    );
+    cur.advance(hud.padding.row);
 
-    // Status: Mode
-    rows.push(HudRow {
-        origin_x: x,
-        origin_y: y,
-        text: format!("Mode: {}", mode_label(state.mode, state.visible)),
-        font_size: hud.fonts.status,
-        font: HudFontKey::Title,
-        color: hud.colors.foreground,
-    });
-    y += hud.fonts.status + hud.padding.row;
+    cur.push(
+        format!("Thickness: {} px", state.config.thickness.get()),
+        hud.fonts.body,
+        title,
+        hud.colors.subtle,
+    );
+    cur.advance(hud.padding.row);
 
-    // Body: Thickness
-    rows.push(HudRow {
-        origin_x: x,
-        origin_y: y,
-        text: format!("Thickness: {} px", state.config.thickness.get()),
-        font_size: hud.fonts.body,
-        font: HudFontKey::Title,
-        color: hud.colors.subtle,
-    });
-    y += hud.fonts.body + hud.padding.row;
-
-    // Body: Opacity — or, under the Blur effect, the blur σ amount (the opacity
-    // hotkeys retarget onto it). Same row slot, so the HUD row count is stable.
-    let intensity_text = if state.config.effect.is_blur() {
-        // Show the derived σ (px), not the raw perceptual level — the level is an
-        // internal index. `round()` on the f32 prints without a decimal.
+    // Under Blur, the opacity hotkeys retarget onto the σ amount, so the same
+    // row slot shows the derived σ (px) instead of opacity.
+    let intensity = if state.config.effect.is_blur() {
         format!("Blur: {} px", state.config.blur.to_std_dev().round())
     } else {
         format!("Opacity: {}", state.config.opacity.get())
     };
-    rows.push(HudRow {
-        origin_x: x,
-        origin_y: y,
-        text: intensity_text,
-        font_size: hud.fonts.body,
-        font: HudFontKey::Title,
-        color: hud.colors.subtle,
-    });
-    y += hud.fonts.body + hud.padding.row;
+    cur.push(intensity, hud.fonts.body, title, hud.colors.subtle);
+    cur.advance(hud.padding.row);
 
-    // Body: Effect (surround treatment)
-    rows.push(HudRow {
-        origin_x: x,
-        origin_y: y,
-        text: format!("Effect: {}", state.config.effect.label()),
-        font_size: hud.fonts.body,
-        font: HudFontKey::Title,
-        color: hud.colors.subtle,
-    });
-    y += hud.fonts.body + hud.padding.section;
+    cur.push(
+        format!("Effect: {}", state.config.effect.label()),
+        hud.fonts.body,
+        title,
+        hud.colors.subtle,
+    );
+    cur.advance(hud.padding.section);
 
-    // Telemetry (mono family). format: "{Hz}Hz · p99 {ms:F2}ms · drops {} · stalls {}"
-    // `·` は U+00B7 MIDDLE DOT。空白は等幅整列に合わせて固定。
-    rows.push(HudRow {
-        origin_x: x,
-        origin_y: y,
-        text: format!(
+    // `·` is U+00B7; spacing is fixed for monospace alignment.
+    cur.push(
+        format!(
             "{refresh_hz}Hz · p99 {:.2}ms · drops {} · stalls {}",
             telemetry.tick_p99_ms, telemetry.frames_dropped, telemetry.commit_timeouts,
         ),
-        font_size: hud.fonts.telemetry,
-        font: HudFontKey::Mono,
-        color: hud.colors.accent,
-    });
-    y += hud.fonts.telemetry + hud.padding.section;
+        hud.fonts.telemetry,
+        mono,
+        hud.colors.accent,
+    );
+    cur.advance(hud.padding.section);
 
-    // Hotkey help section: section header (body/title font) → hotkey rows
-    // (telemetry/mono font)。Quit は緊急退避手段なので必ず出す。
-    rows.push(HudRow {
-        origin_x: x,
-        origin_y: y,
-        text: "Hotkeys".to_string(),
-        font_size: hud.fonts.body,
-        font: HudFontKey::Title,
-        color: hud.colors.foreground,
-    });
-    y += hud.fonts.body + hud.padding.row;
-
+    cur.push(
+        "Hotkeys".to_string(),
+        hud.fonts.body,
+        title,
+        hud.colors.foreground,
+    );
+    cur.advance(hud.padding.row);
     let hotkey_lines: [(&str, &str); 8] = [
         ("Mode cycle", hotkeys.cycle_mode),
         ("Effect cycle", hotkeys.cycle_effect),
@@ -298,42 +251,90 @@ pub fn hud_frame(
         ("Quit", hotkeys.quit),
     ];
     for (label, chord) in hotkey_lines {
-        rows.push(HudRow {
-            origin_x: x,
-            origin_y: y,
-            text: format!("{label:<12} {chord}"),
-            font_size: hud.fonts.telemetry,
-            font: HudFontKey::Mono,
-            color: hud.colors.subtle,
-        });
-        y += hud.fonts.telemetry + hud.padding.row;
+        cur.push(
+            format!("{label:<12} {chord}"),
+            hud.fonts.telemetry,
+            mono,
+            hud.colors.subtle,
+        );
+        cur.advance(hud.padding.row);
     }
-    // section の終わりに余白を入れて notifications との視認分離を作る
-    y += hud.padding.section - hud.padding.row;
+    // Extra gap separating the hotkey section from notifications.
+    cur.advance(hud.padding.section - hud.padding.row);
 
-    // Notifications (短寿命 toast or 永続 conflict 表示)。
-    // 行間は `padding.row`、 font は telemetry size を使う (status より控えめ)。
     for notification in notifications {
-        rows.push(HudRow {
-            origin_x: x,
-            origin_y: y,
-            text: notification.message.clone(),
-            font_size: hud.fonts.telemetry,
-            font: HudFontKey::Title,
-            color: notification_color(notification.class, hud),
-        });
-        y += hud.fonts.telemetry + hud.padding.row;
+        cur.push(
+            notification.message.clone(),
+            hud.fonts.telemetry,
+            title,
+            notification_color(notification.class, hud),
+        );
+        cur.advance(hud.padding.row);
     }
 
     HudFrame {
         panel_left,
         panel_top,
-        panel_width,
-        panel_height,
+        panel_width: hud.geometry.width,
+        panel_height: hud.geometry.height,
         background: hud.colors.background,
         opacity: hud.base_opacity,
-        rows,
+        rows: cur.rows,
     }
+}
+
+/// Sequential row layout: pushes a [`HudRow`] at the running cursor, then the
+/// caller advances `y`. Keeps the `y` accumulation in one place instead of
+/// repeating `HudRow { origin_x, origin_y, .. }; y += ..` per row.
+struct RowCursor {
+    x: f32,
+    y: f32,
+    rows: Vec<HudRow>,
+}
+
+impl RowCursor {
+    fn new(x: f32, y: f32) -> Self {
+        Self {
+            x,
+            y,
+            rows: Vec::with_capacity(16),
+        }
+    }
+
+    /// Push a row at the cursor and advance past its own font height. Pair with
+    /// [`advance`](Self::advance) to add the trailing row/section padding.
+    fn push(&mut self, text: String, font_size: f32, font: HudFontKey, color: Rgba) {
+        self.rows.push(HudRow {
+            origin_x: self.x,
+            origin_y: self.y,
+            text,
+            font_size,
+            font,
+            color,
+        });
+        self.y += font_size;
+    }
+
+    /// Advance `y` by trailing padding after a row, or a standalone gap.
+    fn advance(&mut self, delta: f32) {
+        self.y += delta;
+    }
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "screen-space px fits f32 mantissa with room to spare"
+)]
+fn monitor_right(monitor: ScreenRect<Logical>) -> f32 {
+    (monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX)) as f32
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "screen-space px fits f32 mantissa with room to spare"
+)]
+const fn monitor_top(monitor: ScreenRect<Logical>) -> f32 {
+    monitor.top() as f32
 }
 
 /// [`NotificationClass`] を [`HudConfig::colors`] のパレットに mapping する。
