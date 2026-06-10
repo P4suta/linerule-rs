@@ -171,9 +171,11 @@ impl Thickness {
 pub struct BlurAmount(u8);
 
 impl BlurAmount {
-    /// Smallest legal level (maps to [`BlurAmount::SIGMA_MIN_PX`] σ).
+    /// Smallest legal level (maps to the minimum σ, ~2 logical px — a
+    /// barely-there frosting).
     pub const MIN: Self = Self(1);
-    /// Largest legal level (maps to [`BlurAmount::SIGMA_MAX_PX`] σ).
+    /// Largest legal level (maps to the maximum σ, ~64 logical px — heavy
+    /// frosted glass).
     pub const MAX: Self = Self(255);
 
     /// Default level — chosen so [`to_std_dev`](Self::to_std_dev) ≈ 9 px, the
@@ -185,6 +187,9 @@ impl BlurAmount {
     const SIGMA_MIN_PX: f32 = 2.0;
     /// σ (logical px) at [`MAX`](Self::MAX) — heavy frosted glass.
     const SIGMA_MAX_PX: f32 = 64.0;
+    // NOTE: keep public doc comments from linking to the two `SIGMA_*_PX`
+    // consts above — they are private, and `cargo doc -D warnings` (the `docs`
+    // CI job) rejects public→private intra-doc links. Spell the px values out.
 
     /// Inner level byte in `[1, 255]` (a perceptual index, *not* σ — use
     /// [`to_std_dev`](Self::to_std_dev) for the pixel radius).
@@ -204,9 +209,9 @@ impl BlurAmount {
     }
 
     /// Gaussian σ in logical pixels for this level. σ is interpolated
-    /// *geometrically* between [`SIGMA_MIN_PX`](Self::SIGMA_MIN_PX) and
-    /// [`SIGMA_MAX_PX`](Self::SIGMA_MAX_PX) across `[MIN, MAX]`, so uniform level
-    /// steps land on a Weber–Fechner-uniform (constant-ratio) σ progression.
+    /// *geometrically* between the σ bounds (~2 px at [`MIN`](Self::MIN) and
+    /// ~64 px at [`MAX`](Self::MAX)), so uniform level steps land on a
+    /// Weber–Fechner-uniform (constant-ratio) σ progression.
     #[must_use]
     pub fn to_std_dev(self) -> f32 {
         let span = f32::from(Self::MAX.0 - Self::MIN.0);
