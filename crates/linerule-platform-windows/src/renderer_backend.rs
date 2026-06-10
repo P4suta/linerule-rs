@@ -1,7 +1,5 @@
-//! Overlay / HUD レンダラの構築ヘルパ。
-//!
-//! composition backend は WinRT `Windows.UI.Composition` 単一。`attach_compositor`
-//! と device-lost rebuild がこの 1 箇所でレンダラ一式を組み立てる。
+//! Helper to build the overlay / HUD renderers on the WinRT
+//! `Windows.UI.Composition` backend.
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
@@ -13,11 +11,11 @@ use crate::error::Result;
 use crate::winrt_composition_renderer::WinrtCompositionRenderer;
 use crate::winrt_hud_renderer::WinrtHudRenderer;
 
-/// overlay slit + HUD のレンダラ一式を WinRT composition で構築する。HUD は
-/// overlay の共有 pipeline (graphics device) を借りて同じ device 上に描く。
+/// Build the overlay and HUD renderers on WinRT composition. The HUD shares the
+/// overlay's pipeline (graphics device).
 ///
 /// # Errors
-/// WinRT pipeline / overlay / HUD レンダラのいずれかの構築に失敗したとき。
+/// When building the pipeline, overlay, or HUD renderer fails.
 pub fn build_backends(
     hwnd: HWND,
     hud_config: &HudConfig,

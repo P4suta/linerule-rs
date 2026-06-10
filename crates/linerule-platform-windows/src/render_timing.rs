@@ -1,17 +1,13 @@
-//! ディスプレイのリフレッシュレートを取得する。
-//!
-//! Pacer は `DwmFlush` で待つので動作自体は Hz を陽に知る必要はないが、
-//! HUD telemetry で `144 Hz` 等を表示するために `EnumDisplaySettingsW` 経由で
-//! 取得する。
+//! Display refresh rate. Not needed for pacing (the pacer waits on `DwmFlush`),
+//! only for HUD telemetry; read via `EnumDisplaySettingsW`.
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
 
 use crate::win32_ffi;
 
-/// プライマリディスプレイのリフレッシュレート (Hz) を取得する。失敗時 / OS が
-/// `0` または `1` を返す（remote desktop / generic display driver）ときは
-/// fallback として 60 Hz を返す。
+/// Primary display refresh rate in Hz. Falls back to 60 on failure or when the
+/// OS reports 0/1 (remote desktop / generic display driver).
 #[must_use]
 pub fn refresh_rate_hz() -> u32 {
     win32_ffi::enum_display_settings_current()

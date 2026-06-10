@@ -1,11 +1,11 @@
-//! `IDWriteFactory` / `IDWriteTextFormat` / `ID2D1DeviceContext::DrawText` の
-//! 薄い safe wrapper。
+//! Safe wrappers over `IDWriteFactory` / `IDWriteTextFormat` /
+//! `ID2D1DeviceContext::DrawText`.
 //!
-//! `winrt_hud_renderer.rs` から呼ばれる。`unsafe` の境界をこの 1 ファイルに集約する。
+//! Called from `winrt_hud_renderer.rs`. Confines the `unsafe` boundary here.
 
 #![allow(
     unsafe_code,
-    reason = "FFI 境界。DWrite / D2D の各 COM API は windows crate でも全部 unsafe。"
+    reason = "FFI boundary; DWrite/D2D COM APIs are all unsafe in the windows crate."
 )]
 
 use linerule_core::Rgba;
@@ -23,15 +23,15 @@ use windows_numerics::Matrix3x2;
 
 use crate::error::{PlatformError, Result};
 
-/// `IDWriteFactory` を新規作成する（`DWRITE_FACTORY_TYPE_SHARED`）。
+/// Creates an `IDWriteFactory` (`DWRITE_FACTORY_TYPE_SHARED`).
 ///
-/// プロセス内で 1 つだけ生成すれば十分。`HudRenderer::new` の初期化で 1 度呼ぶ。
+/// One per process suffices; called once in `HudRenderer::new`.
 ///
 /// # Errors
-/// `DWriteCreateFactory` が失敗したとき (極めて稀)。
+/// When `DWriteCreateFactory` fails (very rare).
 pub fn create_dwrite_factory() -> Result<IDWriteFactory> {
-    // SAFETY: factory_type は windows-rs の enum、riid は &IDWriteFactory::IID を
-    // out param 用に正しく渡す。
+    // SAFETY: factory_type is a windows-rs enum; riid passes &IDWriteFactory::IID
+    // correctly for the out param.
     let factory: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
         .map_err(|e| PlatformError::BadHr {
             operation: "DWriteCreateFactory",
@@ -40,13 +40,13 @@ pub fn create_dwrite_factory() -> Result<IDWriteFactory> {
     Ok(factory)
 }
 
-/// `IDWriteFactory::CreateTextFormat` の薄い safe wrapper。
+/// Safe wrapper over `IDWriteFactory::CreateTextFormat`.
 ///
-/// `weight = SemiBold` (title 用に少し太め) / style = Normal / stretch = Normal /
-/// locale = "en-us" (HUD ラベルは英字のみのため CJK locale を意識しない)。
+/// `weight = SemiBold` (slightly bold, for titles) / style = Normal / stretch =
+/// Normal / locale = "en-us" (HUD labels are ASCII-only).
 ///
 /// # Errors
-/// font family が存在しない / 引数不正のとき。
+/// When the font family is missing or arguments are invalid.
 pub fn create_text_format(
     factory: &IDWriteFactory,
     family_name: &str,
@@ -60,7 +60,7 @@ pub fn create_text_format(
     } else {
         DWRITE_FONT_WEIGHT_NORMAL
     };
-    // SAFETY: family / locale は valid PCWSTR (HSTRING の借用)。size は plain f32。
+    // SAFETY: family / locale are valid PCWSTR (HSTRING borrows); size is plain f32.
     let format: IDWriteTextFormat = unsafe {
         factory.CreateTextFormat(
             &family,
@@ -79,28 +79,27 @@ pub fn create_text_format(
     Ok(format)
 }
 
-/// 1 行分の描画指示（HUD レイアウトを `draw_hud_rows` に渡すための値型）。
+/// One row's draw instruction (value type passing HUD layout to `draw_hud_rows`).
 ///
-/// 借用ベース（`&str` / `&IDWriteTextFormat`）にして HUD 1 frame 分の Vec を
-/// caller 側で `let` で組み立ててから一括投入できるようにする。
+/// Borrow-based (`&str` / `&IDWriteTextFormat`) so the caller can build a Vec for
+/// one HUD frame and submit it in one call.
 pub struct HudDrawRow<'a> {
-    /// surface-local の描画矩形（logical px / surface 原点起点）。
+    /// Surface-local draw rect (logical px, from the surface origin).
     pub rect: D2D_RECT_F,
-    /// 描画するテキスト。
+    /// Text to draw.
     pub text: &'a str,
-    /// 適用する text format（HudFontKey + font_size から `create_text_format`
-    /// で得たもの）。
+    /// Text format to apply (from `create_text_format` for HudFontKey + font_size).
     pub format: &'a IDWriteTextFormat,
-    /// テキスト色（straight alpha）。
+    /// Text color (straight alpha).
     pub color: Rgba,
 }
 
-/// 既に drawing session が開かれた `ID2D1DeviceContext` に「背景クリア + 行描画」を
-/// 発行する。surface tile の `offset` を `SetTransform` に反映する。WinRT
-/// composition surface に対する描画本体 (begin/end は呼び出し側の責務)。
+/// Issues "clear background + draw rows" on an `ID2D1DeviceContext` whose drawing
+/// session is already open, applying the surface tile `offset` via
+/// `SetTransform`. begin/end are the caller's responsibility.
 ///
 /// # Errors
-/// brush 生成が失敗したとき。
+/// When brush creation fails.
 pub fn draw_hud_rows(
     dc: &ID2D1DeviceContext,
     offset: windows::Win32::Foundation::POINT,
@@ -110,11 +109,11 @@ pub fn draw_hud_rows(
 ) -> Result<()> {
     let opacity = opacity.clamp(0.0, 1.0);
     let bg = color_to_premultiplied_f(scale_alpha(background, opacity));
-    // SAFETY: 呼び出し側が drawing session を開いた状態で dc を渡す前提。
+    // SAFETY: caller passes dc with its drawing session already open.
     unsafe {
         #[allow(
             clippy::cast_precision_loss,
-            reason = "surface tile offset は通常 < 4096; f32 精度に余裕"
+            reason = "surface tile offset is usually < 4096; well within f32 precision"
         )]
         dc.SetTransform(&Matrix3x2 {
             M11: 1.0,
@@ -148,7 +147,7 @@ pub fn draw_hud_rows(
     Ok(())
 }
 
-/// `[0, 255]` straight alpha の `Rgba` を D2D premultiplied float に変換する。
+/// Converts a `[0, 255]` straight-alpha `Rgba` to a D2D premultiplied float color.
 fn color_to_premultiplied_f(color: Rgba) -> D2D1_COLOR_F {
     let a = f32::from(color.a) / 255.0;
     let r = (f32::from(color.r) / 255.0) * a;
@@ -157,13 +156,13 @@ fn color_to_premultiplied_f(color: Rgba) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
 }
 
-/// `Rgba::a` に `factor (0.0–1.0)` を乗算する。dcomp visual の opacity を使わず、
-/// HUD frame の opacity を各色の alpha に bake するためのヘルパ。
+/// Multiplies `Rgba::a` by `factor` (0.0–1.0). Bakes HUD frame opacity into each
+/// color's alpha instead of using a dcomp visual's opacity.
 fn scale_alpha(color: Rgba, factor: f32) -> Rgba {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "factor は 0..=1 clamp 済み、(u8 * f32) → u8 は明示的に floor"
+        reason = "factor is clamped 0..=1; (u8 * f32) -> u8 floors explicitly"
     )]
     let a = (f32::from(color.a) * factor).clamp(0.0, 255.0) as u8;
     Rgba { a, ..color }

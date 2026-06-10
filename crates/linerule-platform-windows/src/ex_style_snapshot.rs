@@ -1,9 +1,7 @@
-//! 診断ヘルパ: `GetWindowLongPtrW(GWL_EXSTYLE)` を取得し、`WS_EX_LAYERED` /
-//! `WS_EX_TRANSPARENT` / `WS_EX_NOREDIRECTIONBITMAP` 等のフラグが set されて
-//! いるかを tracing に流す。
-//!
-//! `OverlayWindow::new` のチェックポイント（CreateWindowExW 直後、attach
-//! 直後、Show 直後）で呼んで、style が崩れていないかを後から確認する。
+//! Diagnostic helper: reads `GetWindowLongPtrW(GWL_EXSTYLE)` and logs whether
+//! key ex-style flags (`WS_EX_LAYERED`, `WS_EX_TRANSPARENT`,
+//! `WS_EX_NOREDIRECTIONBITMAP`, etc.) are set, for checkpoints during overlay
+//! window setup.
 
 #![forbid(unsafe_code)]
 
@@ -14,7 +12,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::win32_ffi;
 
-/// 指定した HWND の ex-style flag を取得し、主要フラグの有無を tracing に流す。
+/// Read the HWND's ex-style flags and log presence of the key flags.
 pub fn capture(hwnd: HWND, label: &'static str) {
     let ex = win32_ffi::get_ex_style(hwnd);
     let bits: u32 = u32::try_from(ex).unwrap_or(u32::MAX);

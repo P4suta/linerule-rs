@@ -1,8 +1,8 @@
-//! 透明 click-through な topmost オーバーレイ HWND のライフサイクル管理。
+//! Lifecycle of the transparent, click-through, topmost overlay HWND.
 //!
-//! WinRT composition renderer を attach して `OverlayWndState`
-//! 側に install し、同じ HWND を `RegisterHotKey` の target にして `WM_HOTKEY` を
-//! 受信する（message-only HWND を作らない設計）。
+//! Attaches the WinRT composition renderer and installs it into
+//! `OverlayWndState`, and uses the same HWND as the `RegisterHotKey` target for
+//! `WM_HOTKEY` (no separate message-only HWND).
 
 #![forbid(unsafe_code)]
 
@@ -23,14 +23,13 @@ use crate::overlay_state::{HotkeyConflict, HotkeyFailure, OverlayWndState};
 use crate::win32_ffi::hotkey as hotkey_ffi;
 use crate::{ex_style_snapshot, win32_ffi, window_class};
 
-/// linerule overlay window の組み合わせ ex-style。
+/// Combined ex-style for the overlay window.
 ///
-/// - [`WS_EX_LAYERED`] + [`WS_EX_NOREDIRECTIONBITMAP`]: DWM が GPU 直結で
-///   per-pixel α 合成する layered window
-/// - [`WS_EX_TRANSPARENT`]: DWM レベルでクリックを下層に通す（click-through）
-/// - [`WS_EX_NOACTIVATE`]: 通常 focus を奪わない
-/// - [`WS_EX_TOOLWINDOW`]: Alt+Tab / taskbar から除外
-/// - [`WS_EX_TOPMOST`]: 常時最前面
+/// - `WS_EX_LAYERED` + `WS_EX_NOREDIRECTIONBITMAP` — DWM-composited per-pixel alpha (layered window)
+/// - `WS_EX_TRANSPARENT` — click-through at the DWM level
+/// - `WS_EX_NOACTIVATE` — never steals focus
+/// - `WS_EX_TOOLWINDOW` — excluded from Alt+Tab / taskbar
+/// - `WS_EX_TOPMOST` — always on top
 pub const OVERLAY_EX_STYLE: WINDOW_EX_STYLE = WINDOW_EX_STYLE(
     WS_EX_LAYERED.0
         | WS_EX_TRANSPARENT.0
@@ -40,23 +39,23 @@ pub const OVERLAY_EX_STYLE: WINDOW_EX_STYLE = WINDOW_EX_STYLE(
         | WS_EX_TOPMOST.0,
 );
 
-/// 透明 click-through オーバーレイ HWND。Drop で `UnregisterHotKey` 群と
-/// `DestroyWindow` を呼ぶ RAII ハンドル。
+/// RAII handle for the transparent click-through overlay HWND; Drop calls
+/// `UnregisterHotKey` and `DestroyWindow`.
 pub struct OverlayWindow {
     hwnd: HWND,
-    /// `Box::into_raw` 由来のポインタ。実 drop は WM_NCDESTROY 経由で
-    /// `win32_ffi::take_userdata` が回収する。
+    /// Pointer from `Box::into_raw`; reclaimed via `win32_ffi::take_userdata`
+    /// on WM_NCDESTROY.
     state: NonNull<OverlayWndState>,
 }
 
-// SAFETY equivalent: HWND は thread-affinity を持つので明示的に Send/Sync を実装しない。
+// SAFETY: HWND is thread-affine, so no Send/Sync is implemented.
 
 impl OverlayWindow {
-    /// 指定した monitor bounds に重なる位置・サイズで HWND を作成する。
-    /// デフォルトの `TickWorld::INITIAL` (mode = Off) で起動する。
+    /// Create the HWND covering `monitor`, starting at `TickWorld::INITIAL`
+    /// (mode = Off).
     ///
     /// # Errors
-    /// `RegisterClassExW` / `CreateWindowExW` / `GetModuleHandleW` が失敗したとき。
+    /// If `RegisterClassExW` / `CreateWindowExW` / `GetModuleHandleW` fail.
     pub fn new(monitor: ScreenRect<Logical>, hud_config: HudConfig) -> Result<Self> {
         Self::new_with_initial_world(
             monitor,
@@ -65,11 +64,11 @@ impl OverlayWindow {
         )
     }
 
-    /// 指定 monitor bounds + 任意 `TickWorld` で HWND を作成する。
-    /// `--initial-mode horizontal` 等の経路で起動時 mode を上書きする場合に使う。
+    /// Create the HWND covering `monitor` with an explicit `TickWorld`, used to
+    /// override the startup mode (e.g. `--initial-mode horizontal`).
     ///
     /// # Errors
-    /// `RegisterClassExW` / `CreateWindowExW` / `GetModuleHandleW` が失敗したとき。
+    /// If `RegisterClassExW` / `CreateWindowExW` / `GetModuleHandleW` fail.
     pub fn new_with_initial_world(
         monitor: ScreenRect<Logical>,
         hud_config: HudConfig,
@@ -103,48 +102,44 @@ impl OverlayWindow {
         match create_result {
             Ok(hwnd) => {
                 ex_style_snapshot::capture(hwnd, "after CreateWindowExW");
-                // `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP` + composition でも
-                // ShowWindow を明示呼びしないと visible にならないことがある。
-                // SW_SHOWNOACTIVATE + WS_EX_NOACTIVATE の二重防壁で focus 奪取は防ぐ。
+                // Explicit ShowWindow is needed for the window to become visible;
+                // SW_SHOWNOACTIVATE + WS_EX_NOACTIVATE both prevent focus steal.
                 win32_ffi::show_window_noactivate(hwnd);
 
-                // SAFETY-equivalent: NonNull<_> は Box::into_raw の戻り値で常に non-null
+                // SAFETY: Box::into_raw is never null.
                 let state = NonNull::new(state_ptr).expect("Box::into_raw is never null");
-                // device-lost rebuild で `WinrtCompositionRenderer::new(hwnd)` を呼び直す
-                // 必要があるため、HWND を state に shelve する。`OnceCell` で 1 回だけ
-                // 確定する不変条件を表現。
+                // Shelve the HWND so device-lost rebuild can call
+                // `WinrtCompositionRenderer::new(hwnd)` again.
                 win32_ffi::state_ref(state).set_hwnd(hwnd);
                 Ok(Self { hwnd, state })
             },
             Err(e) => {
-                // CreateWindowExW 失敗時は WM_NCCREATE が呼ばれていない可能性が
-                // ある（Win32 仕様上、呼ばれてから失敗するケースもあるが、保守的に
-                // 失敗を確認したらこちらで box を回収する）。`take_userdata` で
-                // 既に WM_NCDESTROY 経由で回収されていれば no-op。
+                // On CreateWindowExW failure, reclaim the box here; no-op if
+                // WM_NCDESTROY already reclaimed it via `take_userdata`.
                 win32_ffi::drop_userdata_raw(state_ptr);
                 Err(e)
             },
         }
     }
 
-    /// 内部 HWND を借りる。`RenderClock::spawn` 等から target を取得するときに使う。
+    /// The inner HWND.
     #[must_use]
     pub fn hwnd(&self) -> HWND {
         self.hwnd
     }
 
-    /// instance state を借りる（テスト / 診断用）。
+    /// The instance state (test / diagnostics).
     #[must_use]
     pub fn state(&self) -> &OverlayWndState {
         win32_ffi::state_ref(self.state)
     }
 
-    /// composition visual tree (WinRT `Windows.UI.Composition`) を attach し、
-    /// overlay slit / HUD レンダラを `OverlayWndState` 側に install する。
+    /// Attach the WinRT composition visual tree and install the overlay / HUD
+    /// renderers into `OverlayWndState`.
     ///
     /// # Errors
-    /// D3D11 / DXGI / D2D / DWrite / WinRT composition のいずれかの初期化に失敗
-    /// したとき。WinRT 一本化につきフォールバックは無く、失敗は致命となる。
+    /// If any of D3D11 / DXGI / D2D / DWrite / WinRT composition init fails.
+    /// There is no fallback, so failure is fatal.
     pub fn attach_compositor(&mut self) -> Result<()> {
         let hud_config = *self.state().hud_config();
         let (overlay, hud) = crate::renderer_backend::build_backends(self.hwnd, &hud_config)?;
@@ -155,20 +150,18 @@ impl OverlayWindow {
         Ok(())
     }
 
-    /// `HotkeyMap` の chord を順に解析・`RegisterHotKey` し、成功した組を
-    /// `OverlayWndState::record_hotkey` に積む。失敗した chord は warn +
-    /// `record_hotkey_conflict` で残し、続きを継続する。
+    /// Parse and `RegisterHotKey` each chord in the `HotkeyMap`, recording the
+    /// successes; failed chords are warned and pushed to the conflict list.
     ///
     /// # Errors
-    /// 通常は失敗しない（個別の chord 失敗は内部で warn して conflict に積む）。
-    /// 将来 OS レベルで catastrophic に失敗する API を呼ぶようになった場合のみ
-    /// `Err` を返す可能性を残す。
+    /// Normally infallible (per-chord failures become conflicts). Reserved for a
+    /// future catastrophic OS-level failure.
     pub fn register_hotkeys(&self, hotkeys: &HotkeyMap, tap_step: TapStepConfig) -> Result<()> {
-        // HUD 操作説明セクションが表示する chord 文字列の取得元として state に控える。
+        // Retain the chords as the source for the HUD hotkey-help rows.
         self.state().record_hotkeys(*hotkeys);
         let bumps = (tap_step.thickness, tap_step.opacity);
-        // 4 番目の field は `repeatable`: Bump 系のみ `true` (`MOD_NOREPEAT` 抜き) で
-        // 長押し連続調整を許可、Toggle 系 (Cycle / Visible / Quit) は `false` で誤連打を防ぐ。
+        // The `repeatable` field is `true` only for Bump actions (drops
+        // `MOD_NOREPEAT`) to allow hold-to-repeat; Toggle actions stay `false`.
         let pairs: [(i32, &'static str, OverlayAction, bool); 8] = [
             (1, hotkeys.cycle_mode, OverlayAction::CycleMode, false),
             (
@@ -253,15 +246,15 @@ impl OverlayWindow {
 
 impl Drop for OverlayWindow {
     fn drop(&mut self) {
-        // HWND が生きているうちに UnregisterHotKey を済ませる
+        // Unregister hotkeys while the HWND is still alive.
         let ids = self.state().registered_hotkey_ids();
         for id in ids {
             if let Err(e) = hotkey_ffi::unregister_hotkey(self.hwnd, id) {
                 tracing::warn!(id, error = %e, "UnregisterHotKey failed during OverlayWindow::drop");
             }
         }
-        // `DestroyWindow` が WM_NCDESTROY を発火し、`crate::wndproc::dispatch`
-        // が `win32_ffi::take_userdata` を呼んで Box<OverlayWndState> を回収する。
+        // `DestroyWindow` fires WM_NCDESTROY, which reclaims the
+        // `Box<OverlayWndState>` via `win32_ffi::take_userdata`.
         if let Err(e) = win32_ffi::destroy_window(self.hwnd) {
             tracing::warn!(error = %e, "DestroyWindow failed during OverlayWindow::drop");
         }
@@ -270,9 +263,8 @@ impl Drop for OverlayWindow {
 
 #[cfg(test)]
 mod tests {
-    //! `OverlayWindow::new` 自体は HWND 作成を伴い Windows 環境必須なので、
-    //! ここでは pure const `OVERLAY_EX_STYLE` の bit pattern を検証し、各 flag が
-    //! 確実に立っていることを test で固定する。
+    //! `OverlayWindow::new` needs a real HWND, so these tests only pin the
+    //! `OVERLAY_EX_STYLE` bit pattern.
 
     use super::*;
 
@@ -330,9 +322,8 @@ mod tests {
         );
     }
 
-    /// `OVERLAY_EX_STYLE` には 6 つの WS_EX_* フラグだけが立っている。
-    /// 余計な flag が混入していないか (例: 誤って WS_EX_APPWINDOW を加えると
-    /// taskbar に出てしまう) を XOR check で監視する。
+    /// `OVERLAY_EX_STYLE` holds exactly the six expected WS_EX_* flags and no
+    /// extras (e.g. a stray WS_EX_APPWINDOW would show it in the taskbar).
     #[test]
     fn overlay_ex_style_has_no_unintended_flags() {
         let expected = WS_EX_LAYERED.0

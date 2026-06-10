@@ -1,28 +1,17 @@
-//! Overlay HWND ごとに 1 つ存在する instance state。
+//! Per-overlay-HWND instance state.
 //!
-//! `Box::into_raw` で確保したアドレスが `GWLP_USERDATA` に格納され、WndProc
-//! から `win32_ffi::get_userdata` 経由で `NonNull<OverlayWndState>` として
-//! 取り出される。本ファイル自体は `#![forbid(unsafe_code)]`。
+//! Allocated via `Box::into_raw`, stored in `GWLP_USERDATA`, and recovered by
+//! the WndProc through `win32_ffi::get_userdata` as `NonNull<OverlayWndState>`.
 //!
-//! ## RefCell 不変条件
+//! RefCell rule: mutable fields are `RefCell`s shared across the single UI
+//! thread. While a `borrow_mut()` is held, do NOT call a Win32 API that
+//! re-enters synchronously (`SendMessageW` / `DestroyWindow` / `MessageBoxW` /
+//! `BringWindowToTop` dispatch `WM_*` on the same stack); `PostMessageW` is
+//! async and safe. A violation panics in `borrow_mut` and is caught by
+//! `overlay_wnd_proc`'s `catch_unwind`.
 //!
-//! 可変フィールド (renderers / `tick_world` / hotkey maps / notifications 等) は
-//! [`RefCell`] で保持される。WndProc は単一 UI thread からのみ呼ばれるため、
-//! 通常の RefCell 規則に従えば安全に共有できる。ただし以下を守ること:
-//!
-//! - `borrow_mut()` の保持中に Win32 API のうち **同期再入** を起こすものを
-//!   呼ばないこと。具体的には `SendMessageW` / `DestroyWindow` / `MessageBoxW`
-//!   系 / `BringWindowToTop` 等は同 stack で `WM_*` を発火する。`PostMessageW`
-//!   は async なので OK。
-//! - 違反は [`RefCell::borrow_mut`] の panic で必ず検出され、
-//!   `overlay_wnd_proc` の `catch_unwind` で吸収される（visual が一瞬欠ける
-//!   程度の影響に閉じる）。
-//!
-//! ## RAII
-//!
-//! `Box<OverlayWndState>` が `WM_NCDESTROY` 経由で `take_userdata` により
-//! reclaim されると、renderers が抱える COM オブジェクトも Drop で確実に
-//! Release される。
+//! On `WM_NCDESTROY`, `take_userdata` reclaims the `Box`, dropping the
+//! renderers and releasing their COM objects.
 
 #![forbid(unsafe_code)]
 
@@ -43,25 +32,25 @@ use windows::Win32::Foundation::HWND;
 use crate::winrt_composition_renderer::WinrtCompositionRenderer;
 use crate::winrt_hud_renderer::WinrtHudRenderer;
 
-/// 1 つの hotkey 登録に失敗した理由。HUD に列挙表示するために保持する。
+/// A failed hotkey registration, retained for the HUD conflict list.
 #[derive(Debug, Clone)]
 pub struct HotkeyConflict {
-    /// ユーザー設定の chord 文字列（例: `"Ctrl+Alt+R"`）。
+    /// Chord string from user config (e.g. `"Ctrl+Alt+R"`).
     pub spec: &'static str,
-    /// この chord が割り当てられていた action。
+    /// Action this chord was bound to.
     pub action: OverlayAction,
-    /// 失敗理由。
+    /// Why registration failed.
     pub reason: HotkeyFailure,
 }
 
-/// `HotkeyConflict::reason` のバリアント。
+/// Reason a hotkey registration failed.
 #[derive(Debug, Clone)]
 pub enum HotkeyFailure {
-    /// chord 文字列の解析に失敗。
+    /// Chord string failed to parse.
     ChordParse(ChordError),
-    /// `RegisterHotKey` 失敗（多くは `ERROR_HOTKEY_ALREADY_REGISTERED`）。
+    /// `RegisterHotKey` failed (usually `ERROR_HOTKEY_ALREADY_REGISTERED`).
     RegisterHotKey {
-        /// 失敗時の HRESULT / GetLastError 値（参考情報）。
+        /// HRESULT / GetLastError at failure (informational).
         hresult: i32,
     },
 }
@@ -122,16 +111,14 @@ pub struct OverlayWndState {
 }
 
 impl OverlayWndState {
-    /// 新しい instance state を構築する。デフォルトの `TickWorld::INITIAL`
-    /// (mode = Off) で初期化される。
+    /// New instance state initialized with `TickWorld::INITIAL` (mode = Off).
     #[must_use]
     pub fn new(log_span: Span, monitor: ScreenRect<Logical>, hud_config: HudConfig) -> Self {
         Self::new_with_initial_world(log_span, monitor, hud_config, TickWorld::INITIAL)
     }
 
-    /// 任意の `TickWorld` で初期化する。`--initial-mode` 等で起動時 mode を
-    /// 上書きする経路で使う (CI smoke test が slit 描画パスを cover するため
-    /// `Mode::Horizontal` で起動する用途)。
+    /// New instance state initialized with an explicit `TickWorld`, used to
+    /// override the startup mode (e.g. `--initial-mode`).
     #[must_use]
     pub fn new_with_initial_world(
         log_span: Span,
@@ -166,15 +153,14 @@ impl OverlayWndState {
         }
     }
 
-    /// HUD telemetry tracker への可変アクセス。`wndproc` から record_tick /
-    /// record_timeout / snapshot を呼ぶ。
+    /// Mutable access to the HUD telemetry tracker.
     #[must_use]
     pub fn frame_timing(&self) -> &RefCell<crate::frame_timing::FrameTimingTracker> {
         &self.frame_timing
     }
 
-    /// 短寿命 toast を queue する。`lifetime_ms` 経過後に `live_notifications`
-    /// で除去される。永続させたい場合は `i64::MAX` を渡す。
+    /// Queue a toast, evicted by `live_notifications` after `lifetime_ms`.
+    /// Pass `i64::MAX` to persist it.
     pub fn push_notification(&self, class: NotificationClass, message: String, lifetime_ms: i64) {
         let until_ms = self.now_ms().saturating_add(lifetime_ms);
         self.notifications.borrow_mut().push(HudNotification {
@@ -184,8 +170,7 @@ impl OverlayWndState {
         });
     }
 
-    /// `now_ms` 時点で expire していない toast の snapshot を返す。expire 済みは
-    /// 同時に内部から除去する (`retain` で eviction)。
+    /// Snapshot of toasts unexpired at `now_ms`; evicts expired ones in place.
     pub fn live_notifications(&self) -> Vec<HudNotification> {
         let now = self.now_ms();
         let mut q = self.notifications.borrow_mut();
@@ -193,13 +178,13 @@ impl OverlayWndState {
         q.clone()
     }
 
-    /// この HWND の tracing span を借りる。
+    /// This HWND's tracing span.
     pub fn span(&self) -> &Span {
         &self.log_span
     }
 
-    /// `WM_NCHITTEST` を 1 回受信したとカウントし、サンプリング閾値（先頭 3 件
-    /// または 200 件ごと）に該当すれば `true` を返す。
+    /// Count one `WM_NCHITTEST`; returns the count at sampling thresholds
+    /// (first 3, then every 200th), else `None`.
     #[must_use]
     pub fn tick_nchit(&self) -> Option<u64> {
         let n = self.nchit_count.fetch_add(1, Ordering::Relaxed) + 1;
@@ -210,57 +195,57 @@ impl OverlayWndState {
         }
     }
 
-    /// `WM_LBUTTONDOWN` 系を受信した（= click-through 失敗）。
+    /// Count one button-down message (a click-through failure).
     pub fn tick_click(&self) -> u64 {
         self.click_count.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// `attach_compositor` で構築された overlay renderer を仕込む。
+    /// Install the overlay renderer built by `attach_compositor`.
     pub fn install_renderer(&self, renderer: WinrtCompositionRenderer) {
         *self.renderers.overlay.borrow_mut() = Some(renderer);
     }
 
-    /// レンダラへの可変アクセス（WndProc の `WM_APP_TICK` ハンドラから利用）。
+    /// Mutable access to the overlay renderer.
     pub fn renderer(&self) -> &RefCell<Option<WinrtCompositionRenderer>> {
         &self.renderers.overlay
     }
 
-    /// `attach_compositor` で構築された HUD renderer を仕込む。
+    /// Install the HUD renderer built by `attach_compositor`.
     pub fn install_hud_renderer(&self, renderer: WinrtHudRenderer) {
         *self.renderers.hud.borrow_mut() = Some(renderer);
     }
 
-    /// HUD レンダラへの可変アクセス（`RefreshHud` / `SetHudOpacity` 効果適用用）。
+    /// Mutable access to the HUD renderer.
     pub fn hud_renderer(&self) -> &RefCell<Option<WinrtHudRenderer>> {
         &self.renderers.hud
     }
 
-    /// 現在の tick world snapshot を取り出す。
+    /// Current tick world snapshot.
     #[must_use]
     pub fn tick_world_snapshot(&self) -> TickWorld {
         *self.tick_world.borrow()
     }
 
-    /// tick world を書き戻す。
+    /// Store the tick world.
     pub fn store_tick_world(&self, world: TickWorld) {
         *self.tick_world.borrow_mut() = world;
     }
 
-    /// hotkey sender を借りる（`WM_HOTKEY` ハンドラから利用）。
+    /// The hotkey sender.
     pub fn hotkey_sender(&self) -> &Sender<OverlayAction> {
         &self.hotkeys.sender
     }
 
-    /// hotkey id に対応する `OverlayAction` を引く。
+    /// Action bound to a hotkey id.
     #[must_use]
     pub fn action_for(&self, id: i32) -> Option<OverlayAction> {
         self.hotkeys.id_to_action.borrow().get(&id).copied()
     }
 
-    /// `register_hotkeys` から hotkey id と action の対応を仕込む。
+    /// Record a hotkey id → action mapping.
     ///
-    /// debug build では同 id を二重登録すると `debug_assert!` で即捕捉する。
-    /// release では `HashMap::insert` の上書き挙動に委ねる (last-write-wins)。
+    /// Each id must be unique; a duplicate trips `debug_assert!` in debug and
+    /// is last-write-wins in release.
     pub fn record_hotkey(&self, id: i32, action: OverlayAction) {
         let prev = self.hotkeys.id_to_action.borrow_mut().insert(id, action);
         debug_assert!(
@@ -270,22 +255,22 @@ impl OverlayWndState {
         );
     }
 
-    /// 現在登録済みの hotkey id 一覧。Drop で `UnregisterHotKey` する際に使う。
+    /// Registered hotkey ids, used to `UnregisterHotKey` on Drop.
     pub fn registered_hotkey_ids(&self) -> Vec<i32> {
         self.hotkeys.id_to_action.borrow().keys().copied().collect()
     }
 
-    /// hotkey 登録失敗を記録する。
+    /// Record a failed hotkey registration.
     pub fn record_hotkey_conflict(&self, conflict: HotkeyConflict) {
         self.hotkeys.conflicts.borrow_mut().push(conflict);
     }
 
-    /// hotkey 競合の一覧。
+    /// The hotkey conflict list.
     pub fn hotkey_conflicts(&self) -> Vec<HotkeyConflict> {
         self.hotkeys.conflicts.borrow().clone()
     }
 
-    /// 受信 channel から OverlayAction を drain する。
+    /// Drain queued actions from the inbox channel.
     pub fn drain_hotkeys(&self) -> Vec<OverlayAction> {
         let mut out = Vec::new();
         while let Ok(a) = self.hotkeys.inbox.try_recv() {
@@ -294,57 +279,53 @@ impl OverlayWndState {
         out
     }
 
-    /// 現在の active monitor bounds の snapshot。`ScreenRect` は `Copy` なので
-    /// 借用のたびに値を取り出して返す。
+    /// Snapshot of the active monitor bounds.
     #[must_use]
     pub fn monitor(&self) -> ScreenRect<Logical> {
         *self.monitor.borrow()
     }
 
-    /// active monitor bounds を上書きする。tick ごとに cursor 位置から解決した
-    /// 最新値を反映するために使う。
+    /// Replace the active monitor bounds (re-resolved per tick from the cursor).
     pub fn set_monitor(&self, monitor: ScreenRect<Logical>) {
         *self.monitor.borrow_mut() = monitor;
     }
 
-    /// HUD 設定を借りる。
+    /// The HUD config.
     #[must_use]
     pub fn hud_config(&self) -> &HudConfig {
         &self.hud_config
     }
 
-    /// `register_hotkeys` から HUD 表示用に chord map を仕込む。
+    /// Store the chord map shown in the HUD hotkey-help rows.
     pub fn record_hotkeys(&self, hotkeys: HotkeyMap) {
         *self.hotkeys.display_map.borrow_mut() = hotkeys;
     }
 
-    /// HUD 表示用の chord map を借りる。`hud_frame()` の操作説明 rows に渡す。
+    /// The chord map for the HUD hotkey-help rows.
     #[must_use]
     pub fn hotkeys(&self) -> HotkeyMap {
         *self.hotkeys.display_map.borrow()
     }
 
-    /// 起動時刻からの経過 ms。`tick::step` の `now_ms` に使う。
+    /// Milliseconds since process start; the `now_ms` for `tick::step`.
     #[must_use]
     pub fn now_ms(&self) -> i64 {
         i64::try_from(self.start_time.elapsed().as_millis()).unwrap_or(i64::MAX)
     }
 
-    /// device-lost 連続失敗カウンタへのアクセサ。`wndproc` の rebuild path で
-    /// `get()` / `set()` を使う。`Cell` なので shared ref で更新可。
+    /// The consecutive device-lost failure counter (read/written on the
+    /// `wndproc` rebuild path).
     #[must_use]
     pub fn device_lost_count(&self) -> &Cell<u8> {
         &self.device_lost_count
     }
 
-    /// overlay HWND を 1 度だけ設定する (`OverlayWindow::new` 後に呼ぶ)。
-    /// 既に設定済みの場合は無視 (`OnceCell::set` の挙動)。
+    /// Set the overlay HWND once; ignored if already set (`OnceCell::set`).
     pub fn set_hwnd(&self, hwnd: HWND) {
         let _ = self.hwnd.set(hwnd);
     }
 
-    /// 設定済みであれば overlay HWND を返す。device-lost rebuild の経路で
-    /// `WinrtCompositionRenderer::new(hwnd)` に渡すために使う。
+    /// The overlay HWND, if set. Used to rebuild the renderer on device-lost.
     #[must_use]
     pub fn hwnd(&self) -> Option<HWND> {
         self.hwnd.get().copied()
@@ -365,9 +346,8 @@ impl core::fmt::Debug for OverlayWndState {
     }
 }
 
-// `Sender` と `Receiver` が `Send + !Sync` であることから [`OverlayWndState`] は
-// 自動で `!Sync` になり、UI thread 越しの shared 参照を型レベルで防ぐ。
-// HWND の thread-affinity が型に伝わる狙い。
+// `Sender`/`Receiver` are `!Sync`, so `OverlayWndState` is `!Sync` too,
+// enforcing HWND thread-affinity at the type level.
 
 #[cfg(test)]
 mod tests {
@@ -432,7 +412,6 @@ mod tests {
     #[test]
     fn hotkey_pump_round_trips_actions() {
         let s = fresh_state();
-        // sender → receiver round trip
         s.hotkey_sender()
             .send(OverlayAction::CycleMode)
             .expect("sender alive");
@@ -441,7 +420,7 @@ mod tests {
             .expect("sender alive");
         let drained = s.drain_hotkeys();
         assert_eq!(drained, vec![OverlayAction::CycleMode, OverlayAction::Quit]);
-        // 2 回目 drain は空
+        // Second drain is empty.
         assert!(s.drain_hotkeys().is_empty());
     }
 

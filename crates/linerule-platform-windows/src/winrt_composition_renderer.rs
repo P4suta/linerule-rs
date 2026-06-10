@@ -1,13 +1,12 @@
-//! `OverlayFrame` を WinRT composition visual tree に反映するレンダラ。
+//! Renderer that applies an `OverlayFrame` to a WinRT composition visual tree.
 //!
-//! `composition_renderer` (Win32 DComp) の WinRT 版。layer の brush に応じて:
-//! - `Brush::Solid` → `SpriteVisual` + `CompositionColorBrush`
-//! - `Brush::Blur`  → `SpriteVisual` + backdrop blur effect brush (純粋なぼかし、
-//!   色ベール無し)
+//! Per-layer brush:
+//! - `Brush::Solid` -> `SpriteVisual` + `CompositionColorBrush`.
+//! - `Brush::Blur`  -> `SpriteVisual` + backdrop blur brush (no color veil).
 //!
-//! 色は WinRT が premultiply するので straight alpha の `Rgba` をそのまま渡す。
-//! WinRT は DispatcherQueue tick で自動 commit する。座標は Win32 DComp 経路と同じ
-//! 規約 (visual offset = `rect.left()/top()`、size = `rect.width/height`) を使う。
+//! Straight-alpha `Rgba` is passed as-is (WinRT premultiplies). WinRT
+//! auto-commits on the DispatcherQueue tick. Visual offset is `rect.left()/top()`,
+//! size is `rect.width/height`.
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
@@ -21,16 +20,15 @@ use crate::error::{Result, map_hr};
 use crate::win32_ffi::blur_effect::{BlurConfig, create_backdrop_blur_brush};
 use crate::win32_ffi::composition::{WinrtPipeline, create_winrt_pipeline};
 
-/// pooled sprite の中身。`Solid` は単色 brush、`Blur` は backdrop blur brush のみ
-/// (色ベール無し)。`Blur` の `amount` は brush に焼き込んだ σ を覚えておき、値が
-/// 変わったら pool を作り直す (`apply` の kind 署名照合) ために保持する。
+/// Pooled sprite contents. `Blur` keeps `amount` because the sigma is baked
+/// into the brush; a change forces a pool rebuild (kind-signature match).
 enum SpriteKind {
     Solid(CompositionColorBrush),
     Blur { amount: BlurAmount },
 }
 
-/// 1 layer ぶんの主 `SpriteVisual` と brush 状態。前回の rect / brush を覚え、
-/// 変化が無ければ更新をスキップする。
+/// One layer's `SpriteVisual` and brush state; remembers the last rect/brush to
+/// skip unchanged updates.
 struct PooledSprite {
     visual: SpriteVisual,
     kind: SpriteKind,
@@ -39,7 +37,7 @@ struct PooledSprite {
 }
 
 impl PooledSprite {
-    /// この sprite の blur σ (`Solid` なら `None`)。pool 再構築要否の判定に使う。
+    /// This sprite's blur sigma, or `None` for `Solid`.
     const fn blur_amount(&self) -> Option<BlurAmount> {
         match self.kind {
             SpriteKind::Blur { amount, .. } => Some(amount),
@@ -48,7 +46,7 @@ impl PooledSprite {
     }
 }
 
-/// WinRT composition tree を保持し、`OverlayFrame` をその状態に反映する。
+/// Holds the WinRT composition tree and applies `OverlayFrame`s to it.
 pub struct WinrtCompositionRenderer {
     pipeline: WinrtPipeline,
     layers: Vec<PooledSprite>,
@@ -57,10 +55,10 @@ pub struct WinrtCompositionRenderer {
 }
 
 impl WinrtCompositionRenderer {
-    /// 指定 HWND に WinRT composition tree を attach した renderer を構築する。
+    /// Build a renderer with a WinRT composition tree attached to `hwnd`.
     ///
     /// # Errors
-    /// WinRT pipeline 構築に失敗したとき。
+    /// When building the WinRT pipeline fails.
     pub fn new(hwnd: windows::Win32::Foundation::HWND) -> Result<Self> {
         let pipeline = create_winrt_pipeline(hwnd)?;
         Ok(Self {
@@ -70,24 +68,22 @@ impl WinrtCompositionRenderer {
         })
     }
 
-    /// 共有 pipeline を borrow する (`WinrtHudRenderer::new` から graphics device を
-    /// 共有するために使う)。
+    /// Borrow the shared pipeline (so `WinrtHudRenderer::new` can share the
+    /// graphics device).
     #[must_use]
     pub fn pipeline(&self) -> &WinrtPipeline {
         &self.pipeline
     }
 
-    /// `OverlayFrame` の内容を visual tree に反映する。WinRT が自動 commit する。
+    /// Apply an `OverlayFrame` to the visual tree. WinRT auto-commits.
     ///
     /// # Errors
-    /// visual / brush 生成・更新が失敗したとき。
+    /// When creating or updating a visual or brush fails.
     pub fn apply(&mut self, frame: &linerule_core::OverlayFrame) -> Result<()> {
-        // brush-kind の並び (Solid / Blur(σ)) が変わったら pool を idx 順に作り直す。
-        // 個別 slot の差し替え + InsertAtTop だと z-order が崩れるため、kind 列が
-        // 一致しないときは全 teardown → 順次再構築する (effect 切替/端での layer
-        // 数変化は稀なのでコストは無視できる)。σ は brush に焼き込まれており
-        // `SetColor` では変えられないので、σ 変化も再構築トリガに含める
-        // (kind 署名を `Option<BlurAmount>` にして比較する)。
+        // Rebuild the pool when the brush-kind signature changes. Per-slot
+        // swaps would break z-order, so a mismatch tears down and rebuilds in
+        // index order. Sigma is baked into the blur brush (not settable via
+        // SetColor), so it is part of the signature and triggers a rebuild too.
         let want_kinds: Vec<Option<BlurAmount>> = frame
             .layers()
             .iter()
@@ -131,9 +127,9 @@ impl WinrtCompositionRenderer {
             .map_err(map_hr("ContainerVisual::Children"))
     }
 
-    /// pool を `want_kinds` (`Some(σ)`=blur / `None`=solid) に合わせて全 teardown →
-    /// idx 順に再構築する。各 sprite を `InsertAtTop` で順に積むので z-order は idx
-    /// 順 (末尾が最前面)。
+    /// Tear down the pool and rebuild it to match `want_kinds` (`Some` = blur,
+    /// `None` = solid). Sprites are `InsertAtTop`ped in index order, so z-order
+    /// follows index order (last is frontmost).
     fn rebuild_pool(&mut self, want_kinds: &[Option<BlurAmount>]) -> Result<()> {
         let children = self.overlay_children()?;
         for popped in self.layers.drain(..) {
@@ -151,8 +147,8 @@ impl WinrtCompositionRenderer {
         Ok(())
     }
 
-    /// 単一 sprite (`want` が `Some(σ)` なら blur+tint、`None` なら solid) を構築して
-    /// 返す。children への挿入は呼び出し側 (`rebuild_pool`) が行う。
+    /// Build a single sprite (`Some` = blur, `None` = solid). The caller inserts
+    /// it into the children collection.
     fn create_sprite(&self, want: Option<BlurAmount>) -> Result<PooledSprite> {
         let compositor = &self.pipeline.compositor;
         let visual = compositor
@@ -160,8 +156,8 @@ impl WinrtCompositionRenderer {
             .map_err(map_hr("Compositor::CreateSpriteVisual"))?;
 
         let kind = if let Some(amount) = want {
-            // σ は logical px。perceptual level → σ への変換は float 境界 (ここ) でのみ行う。
-            // backdrop blur brush をそのまま visual に載せる (色ベール無しの純粋なぼかし)。
+            // Sigma is in logical px. Put the backdrop blur brush directly on
+            // the visual (no color veil).
             let blur_brush =
                 create_backdrop_blur_brush(compositor, amount.to_std_dev(), &self.blur)?;
             visual
@@ -192,14 +188,13 @@ fn apply_brush_color(kind: &SpriteKind, brush: Brush) -> Result<()> {
         (SpriteKind::Solid(color_brush), Brush::Solid(c)) => color_brush
             .SetColor(rgba_to_color(c))
             .map_err(map_hr("CompositionColorBrush::SetColor")),
-        // Blur sprite は色を持たない (純粋なぼかし)。σ 変化は rebuild_pool で反映する
-        // ので、ここでは何もしない。kind は apply_layer で brush に揃えてあるので
-        // 到達しない組み合わせも含め no-op で良い。
+        // Blur sprites have no color; sigma changes are handled in
+        // rebuild_pool. Other combinations are unreachable, so no-op.
         _ => Ok(()),
     }
 }
 
-/// straight-alpha `Rgba` を WinRT の `Color` (straight ARGB) にそのまま写す。
+/// Map straight-alpha `Rgba` to WinRT `Color` (straight ARGB).
 fn rgba_to_color(c: Rgba) -> Color {
     Color {
         A: c.a,
@@ -211,7 +206,7 @@ fn rgba_to_color(c: Rgba) -> Color {
 
 #[allow(
     clippy::cast_precision_loss,
-    reason = "screen pixel coords は f32 mantissa に収まる"
+    reason = "screen pixel coords fit in the f32 mantissa"
 )]
 fn rect_offset(rect: ScreenRect<Logical>) -> Vector3 {
     Vector3 {
@@ -223,7 +218,7 @@ fn rect_offset(rect: ScreenRect<Logical>) -> Vector3 {
 
 #[allow(
     clippy::cast_precision_loss,
-    reason = "screen pixel coords は f32 mantissa に収まる"
+    reason = "screen pixel coords fit in the f32 mantissa"
 )]
 fn rect_size(rect: ScreenRect<Logical>) -> Vector2 {
     Vector2 {

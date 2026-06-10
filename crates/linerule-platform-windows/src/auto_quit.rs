@@ -1,12 +1,9 @@
-//! `--duration-ms` CI smoke test 用の自動終了タイマー。
+//! Auto-quit timer for the `--duration-ms` CI smoke test.
 //!
-//! 別 thread で `thread::sleep(duration)` 後に `PostMessageW(hwnd,
-//! WM_APP_QUIT_TIMER, 0, 0)` を発行し、UI thread の wndproc が
-//! `PostQuitMessage(0)` に変換することで、`Ctrl+Alt+Q` 経由 quit と同じ
-//! graceful な終了 flow を自動化する。
-//!
-//! 設計は `RenderClock` と同じ「別 thread + `JoinHandle` を `Drop` で join」
-//! パターン。pacer thread とは独立してライフサイクル管理する。
+//! A background thread sleeps for `duration`, then posts `WM_APP_QUIT_TIMER`;
+//! the wndproc turns it into `PostQuitMessage(0)`, matching the `Ctrl+Alt+Q`
+//! graceful shutdown. Background-thread + `Drop`-join pattern, like
+//! `RenderClock`.
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
@@ -20,20 +17,20 @@ use crate::error::{PlatformError, Result};
 use crate::messages::WM_APP_QUIT_TIMER;
 use crate::win32_ffi::pacer;
 
-/// `duration` 経過後に overlay HWND に `WM_APP_QUIT_TIMER` を 1 回 post する
-/// タイマー。`Drop` で thread join。
+/// One-shot timer that posts `WM_APP_QUIT_TIMER` to the overlay HWND after
+/// `duration`. Joins the thread on `Drop`.
 pub struct AutoQuitTimer {
     handle: Option<JoinHandle<()>>,
 }
 
 impl AutoQuitTimer {
-    /// 指定 duration 後に発火する 1-shot timer thread を spawn する。
+    /// Spawn a one-shot timer thread that fires after `duration`.
     ///
     /// # Errors
-    /// `std::thread::Builder::spawn` の生成に失敗したとき。
+    /// When `std::thread::Builder::spawn` fails.
     pub fn spawn(target: HWND, duration: Duration) -> Result<Self> {
-        // HWND は !Send だが、PostMessageW 自体は thread-safe (Windows 仕様)。
-        // HWND を isize 化して thread 境界を越える (render_clock と同じパターン)。
+        // HWND is !Send, but PostMessageW is thread-safe; pass it across the
+        // thread boundary as an isize.
         let hwnd_isize = target.0 as isize;
         let handle = thread::Builder::new()
             .name("linerule-auto-quit".into())
