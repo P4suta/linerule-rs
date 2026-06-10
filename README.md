@@ -26,11 +26,14 @@ HUD パネル（画面右上）に Mode / Thickness / Opacity / Effect / Refresh
 composition backend は WinRT `Windows.UI.Composition` 単一（旧 Win32 DirectComposition
 backend と `LINERULE_COMPOSITOR` 環境変数は撤去、ADR 0016）。`Blur`（背後ぼかし）は
 WinRT backdrop blur で常時レンダリングされる。色ベール（tint）は重ねないが、純粋なぼかしだけ
-だと実機での見えが「のっぺり」するため、ぼかしの後段に彩度（Saturation）とコントラスト
-（Contrast）を持ち上げる D2D エフェクトを連結し、摺りガラス的な素材感を出している
-（`backdrop → GaussianBlur → Saturation → Contrast`）。彩度/コントラストの強さは実機調整用に
-環境変数 `LINERULE_BLUR_SATURATION`（`[0,1]`、既定 0.70、0.5 で原画）/ `LINERULE_BLUR_CONTRAST`
-（`[-1,1]`、既定 0.15、0 で原画）で再ビルド無しに上書きできる。ぼかし量（Gaussian σ）は
+だと実機での見えが「のっぺり」するため、ぼかしの後段に彩度（Saturation）・コントラスト
+（Contrast）を持ち上げる D2D エフェクトを連結し、さらに procedural な Turbulence ノイズを
+グレー化して薄く重ね、摺りガラス的な素材感／粒状感を出している
+（`backdrop → GaussianBlur → Saturation → Contrast`、その上に `Turbulence → Saturation(0) →
+Opacity` を `Composite[SOURCE_OVER]`）。強さは実機調整用に環境変数で再ビルド無しに上書きできる:
+`LINERULE_BLUR_SATURATION`（`[0,1]`、既定 0.70、0.5 で原画）/ `LINERULE_BLUR_CONTRAST`
+（`[-1,1]`、既定 0.15、0 で原画）/ `LINERULE_BLUR_NOISE`（`[0,1]`、既定 0.05、0 でノイズ無効）/
+`LINERULE_BLUR_NOISE_FREQ`（`[0.05,1]`、既定 0.70、高いほど細かい粒）。ぼかし量（Gaussian σ）は
 `Ctrl+Alt+Right/Left` で調整でき（既定 ≈9px、範囲 ≈2–64px）、ステップは Weber–Fechner 則に
 沿って σ を幾何級数的に変化させる（内部の知覚レベルを等間隔に動かす）ため、どの強さでも
 1 タップの体感変化がほぼ一定になる。ぼけ方は実機の GPU / compositor に依存するため見え方は

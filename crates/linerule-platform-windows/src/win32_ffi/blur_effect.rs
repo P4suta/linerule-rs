@@ -2,14 +2,18 @@
 //!
 //! WinRT には `IGraphicsEffect` を実装した D2D エフェクトクラスが Win2D (UWP 専用)
 //! にしか無いため、`IGraphicsEffectD2D1Interop` を汎用ノード [`D2dEffectNode`] として
-//! 自前実装する。各ノードは CLSID・プロパティ列・1 source を記述し、source に別ノードを
+//! 自前実装する。各ノードは CLSID・プロパティ列・0..N source を記述し、source に別ノードを
 //! 差すことでエフェクトグラフを組める。
 //!
-//! backdrop blur 用には `backdrop → GaussianBlur(σ) → Saturation → Contrast` を構築し、
-//! root を `Compositor::CreateEffectFactory` に渡す。leaf (blur) の source に
-//! `CompositionBackdropBrush` を差し込むと「窓の背後をぼかし、彩度とコントラストを
-//! 持ち上げた」effect brush になる (純粋なぼかしだけだと実機での見えが「のっぺり」
-//! するため、後段で彩度/明暗を張って素材感を出す)。
+//! backdrop blur 用には以下を構築し、root を `Compositor::CreateEffectFactory` に渡す:
+//! ```text
+//! BASE  = backdrop → GaussianBlur(σ) → Saturation → Contrast
+//! NOISE = Turbulence → Saturation(0=グレー化) → Opacity(強度)
+//! root  = Composite[SOURCE_OVER]( BASE, NOISE )
+//! ```
+//! 純粋なぼかしだけだと実機での見えが「のっぺり」するため、後段で彩度/明暗を張り
+//! (vibrancy)、さらに procedural な Turbulence ノイズを薄く重ねて摺りガラスの粒状感を
+//! 出す。leaf (blur) の source に `CompositionBackdropBrush` を差し込む。
 
 #![allow(
     unsafe_code,
@@ -27,10 +31,12 @@ use windows::Graphics::Effects::{
     IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectSource_Impl,
 };
 use windows::UI::Composition::{CompositionBrush, CompositionEffectSourceParameter, Compositor};
-use windows::Win32::Graphics::Direct2D::Common::D2D1_BORDER_MODE_HARD;
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_BORDER_MODE_HARD, D2D1_COMPOSITE_MODE_SOURCE_OVER, D2D1_TURBULENCE_NOISE_FRACTAL_SUM,
+};
 use windows::Win32::Graphics::Direct2D::{
-    CLSID_D2D1Contrast, CLSID_D2D1GaussianBlur, CLSID_D2D1Saturation,
-    D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED,
+    CLSID_D2D1Composite, CLSID_D2D1Contrast, CLSID_D2D1GaussianBlur, CLSID_D2D1Opacity,
+    CLSID_D2D1Saturation, CLSID_D2D1Turbulence, D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED,
 };
 use windows::Win32::System::WinRT::Graphics::Direct2D::{
     GRAPHICS_EFFECT_PROPERTY_MAPPING, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT,
@@ -50,21 +56,25 @@ const BLUR_SATURATION: f32 = 0.70;
 /// 後段 `Contrast` の既定値。`D2D1_CONTRAST_PROP_CONTRAST` は `[-1, 1]` で 0 = identity、
 /// 正で明暗の張り (コントラスト) が増す。
 const BLUR_CONTRAST: f32 = 0.15;
+/// ノイズ粒状感の既定強度 (`Opacity`、`[0, 1]`)。0 でノイズ枝を作らない (無効)。
+const BLUR_NOISE: f32 = 0.05;
+/// ノイズの既定 base frequency (`[0.05, 1.0]`、1/DIP)。高いほど細かい粒。
+const BLUR_NOISE_FREQ: f32 = 0.70;
 
 /// 汎用 D2D エフェクトノード。1 つの CLSID・プロパティ列 (登録スキーマ順に box 済み)・
-/// 1 source (子ノード or backdrop source param) を保持し、`IGraphicsEffectD2D1Interop`
+/// 0..N source (子ノード or backdrop source param) を保持し、`IGraphicsEffectD2D1Interop`
 /// として CreateEffectFactory に解釈させる。
 ///
-/// `CreateEffectFactory` は各 CLSID の登録スキーマとプロパティの数・型が一致することを
-/// 検証し、不一致だと `E_INVALIDARG` を返す。よってプロパティは「数・順序・型」を
-/// 正しく box して渡す (例: `GaussianBlur` は 3 個、`Saturation` は 1 個、`Contrast` は
-/// 2 個)。
+/// `CreateEffectFactory` は各 CLSID の登録スキーマとプロパティ/source の数・型が一致する
+/// ことを検証し、不一致だと `E_INVALIDARG` を返す。よってプロパティは「数・順序・型」を、
+/// source は「数」を正しく渡す (例: GaussianBlur=プロパティ3/source1、Turbulence=
+/// プロパティ7/source0、Composite=プロパティ1/source2)。
 #[implement(IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectD2D1Interop)]
 struct D2dEffectNode {
     name: RefCell<HSTRING>,
     clsid: GUID,
     properties: Vec<IPropertyValue>,
-    source: IGraphicsEffectSource,
+    sources: Vec<IGraphicsEffectSource>,
 }
 
 // IGraphicsEffect は IGraphicsEffectSource を継承するため marker も実装する。
@@ -110,30 +120,30 @@ impl IGraphicsEffectD2D1Interop_Impl for D2dEffectNode_Impl {
     }
 
     fn GetSource(&self, index: u32) -> WinResult<IGraphicsEffectSource> {
-        match index {
-            0 => Ok(self.source.clone()),
-            _ => Err(Error::from(windows::Win32::Foundation::E_INVALIDARG)),
-        }
+        self.sources
+            .get(index as usize)
+            .cloned()
+            .ok_or_else(|| Error::from(windows::Win32::Foundation::E_INVALIDARG))
     }
 
     fn GetSourceCount(&self) -> WinResult<u32> {
-        Ok(1)
+        Ok(u32::try_from(self.sources.len()).unwrap_or(u32::MAX))
     }
 }
 
 /// ノードを構築し、`IGraphicsEffect` として返す (次段の source に差すには
-/// `.cast::<IGraphicsEffectSource>()` する)。
+/// [`as_source`] で `IGraphicsEffectSource` に cast する)。
 fn node(
     name: &str,
     clsid: GUID,
     properties: Vec<IPropertyValue>,
-    source: IGraphicsEffectSource,
+    sources: Vec<IGraphicsEffectSource>,
 ) -> IGraphicsEffect {
     D2dEffectNode {
         name: RefCell::new(HSTRING::from(name)),
         clsid,
         properties,
-        source,
+        sources,
     }
     .into()
 }
@@ -170,6 +180,14 @@ fn boolean(v: bool) -> Result<IPropertyValue> {
         .map_err(map_hr("PropertyValue::cast (boolean)"))
 }
 
+/// VECTOR2 (`D2D1_VECTOR_2F`) プロパティを box する (FLOAT 配列で表現)。
+fn vector2(x: f32, y: f32) -> Result<IPropertyValue> {
+    PropertyValue::CreateSingleArray(&[x, y])
+        .map_err(map_hr("PropertyValue::CreateSingleArray"))?
+        .cast()
+        .map_err(map_hr("PropertyValue::cast (vector2)"))
+}
+
 /// env から f32 を読む (実機での見え方チューニング用)。無効値は `default`。
 fn env_f32(name: &str, default: f32) -> f32 {
     std::env::var(name)
@@ -179,13 +197,15 @@ fn env_f32(name: &str, default: f32) -> f32 {
         .unwrap_or(default)
 }
 
-/// 背後 (backdrop) を Gaussian blur し、後段で彩度/コントラストを持ち上げる
-/// `CompositionBrush` を作る。`standard_deviation` は logical px 基準
-/// (DPI スケールは呼び出し側で補正)。
+/// 背後 (backdrop) を Gaussian blur し、後段で彩度/コントラストを持ち上げ、さらに
+/// procedural ノイズで粒状感を足した `CompositionBrush` を作る。`standard_deviation` は
+/// logical px 基準 (DPI スケールは呼び出し側で補正)。
 ///
-/// 彩度/コントラストの強さは既定 [`BLUR_SATURATION`] / [`BLUR_CONTRAST`]。実機での
-/// 調整用に env `LINERULE_BLUR_SATURATION` (`[0,1]`) / `LINERULE_BLUR_CONTRAST`
-/// (`[-1,1]`) で上書きできる (再ビルド不要)。
+/// 強さは既定 [`BLUR_SATURATION`] / [`BLUR_CONTRAST`] / [`BLUR_NOISE`] /
+/// [`BLUR_NOISE_FREQ`]。実機調整用に env で上書きできる (再ビルド不要):
+/// `LINERULE_BLUR_SATURATION` (`[0,1]`) / `LINERULE_BLUR_CONTRAST` (`[-1,1]`) /
+/// `LINERULE_BLUR_NOISE` (`[0,1]`、0 でノイズ無効) / `LINERULE_BLUR_NOISE_FREQ`
+/// (`[0.05,1]`)。
 ///
 /// # Errors
 /// effect factory / brush 生成が失敗したとき。
@@ -195,6 +215,8 @@ pub fn create_backdrop_blur_brush(
 ) -> Result<CompositionBrush> {
     let saturation = env_f32("LINERULE_BLUR_SATURATION", BLUR_SATURATION).clamp(0.0, 1.0);
     let contrast = env_f32("LINERULE_BLUR_CONTRAST", BLUR_CONTRAST).clamp(-1.0, 1.0);
+    let noise = env_f32("LINERULE_BLUR_NOISE", BLUR_NOISE).clamp(0.0, 1.0);
+    let noise_freq = env_f32("LINERULE_BLUR_NOISE_FREQ", BLUR_NOISE_FREQ).clamp(0.05, 1.0);
 
     let source_param = CompositionEffectSourceParameter::Create(&HSTRING::from(SOURCE_NAME))
         .map_err(map_hr("CompositionEffectSourceParameter::Create"))?;
@@ -202,9 +224,8 @@ pub fn create_backdrop_blur_brush(
         "CompositionEffectSourceParameter::cast<IGraphicsEffectSource>",
     ))?;
 
-    // backdrop → GaussianBlur → Saturation → Contrast。
-    // GaussianBlur のプロパティ: 0 StandardDeviation(FLOAT) / 1 Optimization(enum) /
-    // 2 BorderMode(enum) の 3 個 (数・型が登録スキーマと一致しないと E_INVALIDARG)。
+    // BASE: backdrop → GaussianBlur → Saturation → Contrast。
+    // GaussianBlur: 0 StandardDeviation(FLOAT) / 1 Optimization(enum) / 2 BorderMode(enum)。
     let blur = node(
         "LineruleBlur",
         CLSID_D2D1GaussianBlur,
@@ -213,24 +234,27 @@ pub fn create_backdrop_blur_brush(
             uint(D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED.0 as u32)?,
             uint(D2D1_BORDER_MODE_HARD.0 as u32)?,
         ],
-        source_param,
+        vec![source_param],
     );
-
-    // Saturation のプロパティ: 0 Saturation(FLOAT) の 1 個。
     let saturation_node = node(
         "LineruleSaturation",
         CLSID_D2D1Saturation,
         vec![single(saturation)?],
-        as_source(&blur)?,
+        vec![as_source(&blur)?],
     );
-
-    // Contrast のプロパティ: 0 Contrast(FLOAT) / 1 ClampInput(BOOL) の 2 個。
-    let root = node(
+    let contrast_node = node(
         "LineruleContrast",
         CLSID_D2D1Contrast,
         vec![single(contrast)?, boolean(false)?],
-        as_source(&saturation_node)?,
+        vec![as_source(&saturation_node)?],
     );
+
+    // root: ノイズ無効なら BASE(=Contrast)、有効なら NOISE を SOURCE_OVER で重ねる。
+    let root = if noise > 0.0 {
+        build_noise_composite(&contrast_node, noise, noise_freq)?
+    } else {
+        contrast_node
+    };
 
     let factory = compositor
         .CreateEffectFactory(&root)
@@ -260,6 +284,53 @@ pub fn create_backdrop_blur_brush(
         .SetSourceParameter(&HSTRING::from(SOURCE_NAME), &backdrop)
         .map_err(map_hr("CompositionEffectBrush::SetSourceParameter"))?;
     brush.cast().map_err(map_hr("CompositionEffectBrush::cast"))
+}
+
+/// `base` (背景) の上に procedural ノイズ粒 (前景) を `Composite[SOURCE_OVER]` で重ねた
+/// root ノードを返す。ノイズ枝 = `Turbulence → Saturation(0=グレー化) → Opacity(strength)`。
+fn build_noise_composite(
+    base: &IGraphicsEffect,
+    strength: f32,
+    frequency: f32,
+) -> Result<IGraphicsEffect> {
+    // Turbulence (入力 0 のジェネレータ): 0 Offset(V2) / 1 Size(V2) / 2 BaseFrequency(V2) /
+    // 3 NumOctaves(UINT32) / 4 Seed(UINT32) / 5 Noise(enum) / 6 Stitchable(BOOL)。
+    // Offset/Size は仮想デスクトップの負側も覆うよう大きく取り、空出力を避ける。
+    let turbulence = node(
+        "LineruleTurbulence",
+        CLSID_D2D1Turbulence,
+        vec![
+            vector2(-8192.0, -8192.0)?,
+            vector2(32768.0, 32768.0)?,
+            vector2(frequency, frequency)?,
+            uint(1)?,
+            uint(0)?,
+            uint(D2D1_TURBULENCE_NOISE_FRACTAL_SUM.0 as u32)?,
+            boolean(false)?,
+        ],
+        vec![],
+    );
+    // Saturation(0) で RGB ノイズ → 輝度グレー粒に。
+    let grey = node(
+        "LineruleNoiseGrey",
+        CLSID_D2D1Saturation,
+        vec![single(0.0)?],
+        vec![as_source(&turbulence)?],
+    );
+    // Opacity で粒の強度を下げる。
+    let faded = node(
+        "LineruleNoiseOpacity",
+        CLSID_D2D1Opacity,
+        vec![single(strength)?],
+        vec![as_source(&grey)?],
+    );
+    // Composite: index0=destination(背景=base), index1=source(前景=noise)。
+    Ok(node(
+        "LineruleComposite",
+        CLSID_D2D1Composite,
+        vec![uint(D2D1_COMPOSITE_MODE_SOURCE_OVER.0 as u32)?],
+        vec![as_source(base)?, as_source(&faded)?],
+    ))
 }
 
 const _: GRAPHICS_EFFECT_PROPERTY_MAPPING = GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT;
