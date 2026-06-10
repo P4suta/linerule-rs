@@ -1,0 +1,11 @@
+
+crate xtask
+├── struct Cli: pub(crate)
+├── enum Command: pub(crate)
+├── mod ci: pub(crate)
+│   └── fn run: pub(crate)
+├── mod dep_graph: pub(crate)
+│   └── fn run: pub(crate)
+├── mod lint: pub(crate)
+│   └── fn run: pub(crate)
+└── fn main: pub(crate)

@@ -123,6 +123,34 @@ just crash-latest                   # 最新クラッシュダンプ
 
 <!-- cargo-rdme start -->
 
+linerule-core
+
+純粋ロジック層: ADT、reducer、render、parser、FSM。`#![forbid(unsafe_code)]`
+で `unsafe` を完全に排除し、非決定性 (時刻・乱数・I/O) は呼び出し側から引数で
+受け取る。
+
+#### 構成
+
+- [`color`] — `Rgba` / `Opacity` / `DimLevel` / `Thickness` / `BlurAmount` と perceptual カーブ
+- [`config`] — `UserConfig` ツリー (`OverlayConfig` / `HudConfig` / ...)
+- [`diagnostics`] — `LineruleError` / `Severity`
+- [`geometry`] — 座標空間タグ付き `Point<S>` / `ScreenRect<S>`
+- [`input`] — chord parser / hold FSM / tick pipeline / HUD fade / hotkey map
+- [`render`] — `OverlayFrame` ADT と純粋関数 `render::frame`
+- [`state`] — `State` / `OverlayAction` / `StateDelta` と `state::reduce::apply`
+
+#### 短い public path
+
+主要型は `lib.rs` で再エクスポートしているので、consumer は
+`linerule_core::Rgba` / `linerule_core::frame(...)` のような短い path で
+書ける。internal 実装は `linerule_core::color::rgba::Rgba` などの長い
+path で書き、リファクタの自由度を残す。
+
+#### 依存方向
+
+`linerule-app` → `linerule-platform-windows` → `linerule-core`。本クレートは
+他の linerule-rs クレートに依存しない。
+
 <!-- cargo-rdme end -->
 
 ## モジュールツリー・依存グラフ
