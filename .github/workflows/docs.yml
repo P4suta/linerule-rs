@@ -35,6 +35,8 @@ jobs:
           # need nightly; we write a manual redirect HTML in the next step
           # so the gh-pages root lands on linerule_core's index.
           RUSTDOCFLAGS: -D warnings
+        # Same command is gated on PRs by the `doc` job in ci.yml (without the
+        # Pages deploy below). Keep the two in sync.
         run: cargo doc --workspace --no-deps --exclude linerule-platform-windows
       - name: write redirect index.html (stable rustdoc has no auto-index)
         run: |
