@@ -6,26 +6,33 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::color::{Opacity, Rgba, Thickness};
+use crate::color::{BlurAmount, Opacity, Rgba, Thickness};
 use crate::state::SurroundEffect;
 
-/// Surround effect + thickness + opacity. Composed into a [`crate::state::State`].
+/// Surround effect + thickness + opacity + blur amount. Composed into a
+/// [`crate::state::State`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OverlayConfig {
     /// Treatment of the region around the slit (mask color is derived from it).
     pub effect: SurroundEffect,
     /// Slit width in logical pixels.
     pub thickness: Thickness,
-    /// Mask opacity (perceptual-mapped on output).
+    /// Mask opacity (perceptual-mapped on output). Inert under the `Blur`
+    /// effect — see [`blur`](Self::blur).
     pub opacity: Opacity,
+    /// Backdrop-blur amount (Gaussian σ, logical px). Only meaningful under the
+    /// `Blur` effect, where the opacity hotkeys retarget onto it.
+    pub blur: BlurAmount,
 }
 
 impl OverlayConfig {
-    /// Default surround: `DimBlack` × `Thickness::DEFAULT` × `Opacity::DEFAULT`.
+    /// Default surround: `DimBlack` × `Thickness::DEFAULT` × `Opacity::DEFAULT`
+    /// × `BlurAmount::DEFAULT`.
     pub const DEFAULT: Self = Self {
         effect: SurroundEffect::DimBlack,
         thickness: Thickness::DEFAULT,
         opacity: Opacity::DEFAULT,
+        blur: BlurAmount::DEFAULT,
     };
 }
 

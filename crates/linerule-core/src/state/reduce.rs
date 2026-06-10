@@ -52,9 +52,21 @@ pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
             thickness: c.thickness.saturating_add(delta),
             ..c
         }),
-        A::BumpOpacity(delta) => bump_config(state, |c| OverlayConfig {
-            opacity: c.opacity.saturating_add(delta),
-            ..c
+        // Under the `Blur` effect the opacity hotkeys retarget onto the blur σ
+        // amount (the brightness knob was dropped, so opacity is inert there);
+        // for the flat effects they tune opacity as before.
+        A::BumpOpacity(delta) => bump_config(state, |c| {
+            if c.effect.is_blur() {
+                OverlayConfig {
+                    blur: c.blur.saturating_add(delta),
+                    ..c
+                }
+            } else {
+                OverlayConfig {
+                    opacity: c.opacity.saturating_add(delta),
+                    ..c
+                }
+            }
         }),
         A::Quit => (state, StateDelta::NONE),
     }
@@ -84,7 +96,7 @@ fn bump_config(
 }
 
 fn config_unchanged(a: OverlayConfig, b: OverlayConfig) -> bool {
-    a.thickness == b.thickness && a.opacity == b.opacity && a.effect == b.effect
+    a.thickness == b.thickness && a.opacity == b.opacity && a.effect == b.effect && a.blur == b.blur
 }
 
 // ----- private helpers on StateDelta to keep the reducer terse ----------------
@@ -220,6 +232,66 @@ mod tests {
         let (s3, d3) = apply(s2, OverlayAction::CycleEffect);
         assert_eq!(s3.config.effect, SurroundEffect::DimBlack);
         assert!(d3.config_changed);
+    }
+
+    /// Blur モードでは `BumpOpacity` が σ 量 (`blur`) を動かし、`opacity` は不変。
+    #[test]
+    fn bump_opacity_retargets_to_blur_amount_under_blur_effect() {
+        use crate::color::BlurAmount;
+        use crate::state::SurroundEffect;
+        let s0 = State {
+            mode: Mode::Horizontal,
+            config: OverlayConfig {
+                effect: SurroundEffect::Blur,
+                ..OverlayConfig::DEFAULT
+            },
+            ..State::DEFAULT
+        };
+        let (s1, d) = apply(s0, OverlayAction::BumpOpacity(8));
+        assert_eq!(s1.config.blur, BlurAmount::DEFAULT.saturating_add(8));
+        assert_eq!(
+            s1.config.opacity, s0.config.opacity,
+            "opacity must stay put under the Blur effect"
+        );
+        assert!(d.config_changed);
+    }
+
+    /// 非 Blur (Dim) モードでは従来通り `opacity` を動かし、`blur` は不変。
+    #[test]
+    fn bump_opacity_tunes_opacity_under_flat_effect() {
+        use crate::color::Opacity;
+        let s0 = State {
+            mode: Mode::Horizontal,
+            ..State::DEFAULT // DimBlack
+        };
+        let (s1, d) = apply(s0, OverlayAction::BumpOpacity(8));
+        assert_eq!(s1.config.opacity, Opacity::DEFAULT.saturating_add(8));
+        assert_eq!(
+            s1.config.blur, s0.config.blur,
+            "blur amount must stay put under a flat effect"
+        );
+        assert!(d.config_changed);
+    }
+
+    /// σ 量だけが変わるケースでも `config_changed` が立つこと
+    /// (`config_unchanged` の `blur` 比較漏れ回帰防止)。
+    #[test]
+    fn blur_amount_only_change_marks_config_changed() {
+        use crate::state::SurroundEffect;
+        let s0 = State {
+            mode: Mode::Horizontal,
+            config: OverlayConfig {
+                effect: SurroundEffect::Blur,
+                ..OverlayConfig::DEFAULT
+            },
+            ..State::DEFAULT
+        };
+        let (s1, d) = apply(s0, OverlayAction::BumpOpacity(8));
+        assert_ne!(s1.config.blur, s0.config.blur);
+        assert!(
+            d.config_changed,
+            "a blur-amount-only change must still flag config_changed"
+        );
     }
 
     #[test]

@@ -230,11 +230,19 @@ pub fn hud_frame(
     });
     y += hud.fonts.body + hud.padding.row;
 
-    // Body: Opacity
+    // Body: Opacity — or, under the Blur effect, the blur σ amount (the opacity
+    // hotkeys retarget onto it). Same row slot, so the HUD row count is stable.
+    let intensity_text = if state.config.effect.is_blur() {
+        // Show the derived σ (px), not the raw perceptual level — the level is an
+        // internal index. `round()` on the f32 prints without a decimal.
+        format!("Blur: {} px", state.config.blur.to_std_dev().round())
+    } else {
+        format!("Opacity: {}", state.config.opacity.get())
+    };
     rows.push(HudRow {
         origin_x: x,
         origin_y: y,
-        text: format!("Opacity: {}", state.config.opacity.get()),
+        text: intensity_text,
         font_size: hud.fonts.body,
         font: HudFontKey::Title,
         color: hud.colors.subtle,
@@ -397,6 +405,48 @@ mod tests {
                 w[1].text
             );
         }
+    }
+
+    /// 既定 (Dim) では Opacity 行が出る。
+    #[test]
+    fn flat_effect_shows_opacity_row() {
+        let mut s = State::DEFAULT;
+        s.mode = Mode::Horizontal;
+        let f = default_frame(s, 60, &[]);
+        assert!(
+            f.rows.iter().any(|r| r.text.starts_with("Opacity:")),
+            "rows: {:?}",
+            f.rows
+        );
+        assert!(!f.rows.iter().any(|r| r.text.starts_with("Blur:")));
+    }
+
+    /// Blur モードでは同じスロットが Blur σ 行に差し替わり、Opacity 行は消える
+    /// (行数は据え置き)。
+    #[test]
+    fn blur_effect_swaps_opacity_row_for_blur_amount() {
+        use crate::state::SurroundEffect;
+        let mut s = State::DEFAULT;
+        s.mode = Mode::Horizontal;
+        s.config.effect = SurroundEffect::Blur;
+        let baseline = {
+            let mut d = State::DEFAULT;
+            d.mode = Mode::Horizontal;
+            default_frame(d, 60, &[]).rows.len()
+        };
+        let f = default_frame(s, 60, &[]);
+        assert_eq!(f.rows.len(), baseline, "row count must stay stable");
+        assert!(
+            f.rows
+                .iter()
+                .any(|r| r.text == format!("Blur: {} px", s.config.blur.to_std_dev().round())),
+            "rows: {:?}",
+            f.rows
+        );
+        assert!(
+            !f.rows.iter().any(|r| r.text.starts_with("Opacity:")),
+            "Opacity row must be gone under Blur"
+        );
     }
 
     #[test]

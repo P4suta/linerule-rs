@@ -6,7 +6,7 @@
 //!
 //! ## 構成
 //!
-//! - [`color`] — `Rgba` / `Opacity` / `DimLevel` / `Thickness` と perceptual カーブ
+//! - [`color`] — `Rgba` / `Opacity` / `DimLevel` / `Thickness` / `BlurAmount` と perceptual カーブ
 //! - [`config`] — `UserConfig` ツリー (`OverlayConfig` / `HudConfig` / ...)
 //! - [`diagnostics`] — `LineruleError` / `Severity`
 //! - [`geometry`] — 座標空間タグ付き `Point<S>` / `ScreenRect<S>`
@@ -36,7 +36,7 @@ pub mod input;
 pub mod render;
 pub mod state;
 
-pub use color::{DimLevel, Opacity, Rgba, Thickness};
+pub use color::{BlurAmount, DimLevel, Opacity, Rgba, Thickness};
 pub use config::{
     HudColors, HudConfig, HudFonts, HudGeometry, HudPadding, InputConfig, OverlayConfig,
     RenderConfig, RepeatConfig, TapStepConfig, UserConfig,
