@@ -1,14 +1,14 @@
-//! D3D11 + DXGI + D2D デバイススタックの薄い safe wrapper。
+//! Safe wrapper over the D3D11 + DXGI + D2D device stack.
 //!
-//! WinRT composition host (`win32_ffi::composition`) がこのスタックの上に乗る。
-//! COM オブジェクト生成の `unsafe` をこのファイルに吸収し、composition / renderer
-//! 側は `#![forbid(unsafe_code)]` で safe な状態遷移だけ書けるようにする。
+//! The WinRT composition host (`win32_ffi::composition`) sits on this stack.
+//! Confines COM-object-creation `unsafe` here so composition / renderer code can
+//! stay `#![forbid(unsafe_code)]`.
 //!
-//! Windows-only。Linux 上では `cfg(target_os = "windows")` でビルドされない。
+//! Windows-only; not built on Linux via `cfg(target_os = "windows")`.
 
 #![allow(
     unsafe_code,
-    reason = "FFI 境界。D3D11 / DXGI / D2D の各 COM API は windows crate でも全部 unsafe。"
+    reason = "FFI boundary; D3D11/DXGI/D2D COM APIs are all unsafe in the windows crate."
 )]
 
 use windows::Win32::Foundation::HMODULE;
@@ -27,27 +27,28 @@ use windows::core::Interface;
 
 use crate::error::{PlatformError, Result};
 
-/// D3D11 + DXGI + D2D デバイス一式。WinRT composition host がこの上に乗る共有スタック。
+/// The D3D11 + DXGI + D2D device set; shared stack the WinRT composition host
+/// sits on.
 pub struct D2dStack {
-    /// D3D11 デバイス (BGRA + ハードウェア)。
+    /// D3D11 device (BGRA + hardware).
     pub d3d11: ID3D11Device,
-    /// `IDXGIDevice` view。
+    /// `IDXGIDevice` view.
     pub dxgi: IDXGIDevice,
-    /// D2D1 ファクトリ (single-threaded)。
+    /// D2D1 factory (single-threaded).
     pub d2d_factory: ID2D1Factory1,
-    /// D2D デバイス。
+    /// D2D device.
     pub d2d_device: ID2D1Device,
-    /// D2D デバイスコンテキスト。
+    /// D2D device context.
     pub d2d_context: ID2D1DeviceContext,
 }
 
-/// D3D11 → DXGI → D2D factory → D2D device → D2D context を生成する。
+/// Creates D3D11 → DXGI → D2D factory → D2D device → D2D context.
 ///
 /// # Errors
-/// D3D11 / DXGI / D2D のいずれかの生成に失敗したとき。
+/// When D3D11 / DXGI / D2D creation fails.
 pub fn create_d2d_stack() -> Result<D2dStack> {
     let mut d3d11: Option<ID3D11Device> = None;
-    // SAFETY: 出力は Option<>、null も許容。flags の組み合わせは MSDN documented。
+    // SAFETY: output is Option<> (null allowed); the flag combination is documented.
     unsafe {
         D3D11CreateDevice(
             None,
@@ -75,7 +76,7 @@ pub fn create_d2d_stack() -> Result<D2dStack> {
     })?;
 
     let factory_options = D2D1_FACTORY_OPTIONS::default();
-    // SAFETY: factory_options は zero-init OK、戻り値は Result<ID2D1Factory1>
+    // SAFETY: factory_options is zero-init OK; returns Result<ID2D1Factory1>.
     let d2d_factory: ID2D1Factory1 = unsafe {
         D2D1CreateFactory::<ID2D1Factory1>(
             D2D1_FACTORY_TYPE_SINGLE_THREADED,
@@ -87,14 +88,14 @@ pub fn create_d2d_stack() -> Result<D2dStack> {
         hr: e.code().0,
     })?;
 
-    // SAFETY: dxgi は valid IDXGIDevice
+    // SAFETY: dxgi is a valid IDXGIDevice.
     let d2d_device: ID2D1Device =
         unsafe { d2d_factory.CreateDevice(&dxgi) }.map_err(|e| PlatformError::BadHr {
             operation: "ID2D1Factory1::CreateDevice",
             hr: e.code().0,
         })?;
 
-    // SAFETY: d2d_device は valid
+    // SAFETY: d2d_device is valid.
     let d2d_context: ID2D1DeviceContext =
         unsafe { d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE) }.map_err(
             |e| PlatformError::BadHr {

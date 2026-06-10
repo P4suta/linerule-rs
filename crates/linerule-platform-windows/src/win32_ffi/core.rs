@@ -1,16 +1,12 @@
-//! ★ FFI 境界 — `linerule-platform-windows` 内で唯一 `unsafe` を含むファイル。
+//! FFI boundary — the core `unsafe` file in `linerule-platform-windows`.
 //!
-//! windows crate の Win32 / COM API は実質すべて `unsafe fn`。本ファイルは
-//! それらを薄く safe にラップし、他のモジュール
-//! (`overlay_window.rs`, `wndproc.rs`, `monitor_info.rs`, `windows_app.rs`, ...)
-//! はここから safe 関数だけを呼ぶ。各 `unsafe { ... }` ブロックの直前に
-//! `// SAFETY: ...` コメントを必須化する。
+//! The windows crate's Win32 / COM APIs are effectively all `unsafe fn`. This
+//! file thinly safe-wraps them; other modules call only the safe functions
+//! here. Every `unsafe { ... }` block carries a `// SAFETY:` comment.
 
 #![allow(
     unsafe_code,
-    reason = "FFI 境界。windows crate の Win32 / COM API は全部 unsafe fn。\
-              他の全モジュールは #![forbid(unsafe_code)] で、本ファイルが\
-              唯一の集約点。"
+    reason = "FFI boundary; windows crate Win32/COM APIs are all unsafe fn."
 )]
 
 use core::ptr::NonNull;
@@ -32,10 +28,10 @@ use crate::overlay_state::OverlayWndState;
 
 // ---- module handle ---------------------------------------------------------
 
-/// 現在のプロセスの module handle を取得する。`CreateWindowExW` や
-/// `RegisterClassExW` の `hInstance` 引数に渡す。
+/// Module handle of the current process, for the `hInstance` arg of
+/// `CreateWindowExW` / `RegisterClassExW`.
 pub fn module_handle() -> Result<HINSTANCE> {
-    // SAFETY: PCWSTR::null() で current process の HMODULE を取得する標準呼び出し。
+    // SAFETY: standard call; PCWSTR::null() returns the current process HMODULE.
     let h: HMODULE =
         unsafe { GetModuleHandleW(PCWSTR::null()) }.map_err(|e| PlatformError::BadHr {
             operation: "GetModuleHandleW",
@@ -46,7 +42,7 @@ pub fn module_handle() -> Result<HINSTANCE> {
 
 // ---- class registration ----------------------------------------------------
 
-/// `RegisterClassExW` の薄い safe wrapper。成功時 class atom を返す。
+/// Safe wrapper over `RegisterClassExW`. Returns the class atom on success.
 pub fn register_class(name: PCWSTR, wnd_proc: WNDPROC) -> Result<u16> {
     let h_instance = module_handle()?;
     let wc = WNDCLASSEXW {
@@ -57,7 +53,7 @@ pub fn register_class(name: PCWSTR, wnd_proc: WNDPROC) -> Result<u16> {
         ..Default::default()
     };
 
-    // SAFETY: `wc` は完全初期化、ポインタ引数も valid。失敗時 0 を返す。
+    // SAFETY: `wc` fully initialized, pointer args valid. Returns 0 on failure.
     let atom = unsafe { RegisterClassExW(&wc) };
     if atom == 0 {
         return Err(last_error("RegisterClassExW"));
@@ -67,13 +63,13 @@ pub fn register_class(name: PCWSTR, wnd_proc: WNDPROC) -> Result<u16> {
 
 // ---- window lifecycle ------------------------------------------------------
 
-/// `CreateWindowExW` の薄い safe wrapper。
+/// Safe wrapper over `CreateWindowExW`.
 ///
-/// `create_param` は WM_NCCREATE 経由で WndProc に届く `*mut OverlayWndState`
-/// （`Box::into_raw` の結果）を期待する。
+/// `create_param` is the `*mut OverlayWndState` (from `Box::into_raw`) that
+/// reaches the WndProc via WM_NCCREATE.
 #[allow(
     clippy::too_many_arguments,
-    reason = "Win32 API の引数構造をそのまま反映するため。グルーピングは型では行わない方が呼び出し側で読みやすい"
+    reason = "mirrors the Win32 API argument shape; flat is clearer for callers"
 )]
 pub fn create_window(
     ex_style: WINDOW_EX_STYLE,
@@ -87,7 +83,7 @@ pub fn create_window(
     create_param: *mut OverlayWndState,
 ) -> Result<HWND> {
     let h_instance = module_handle()?;
-    // SAFETY: 引数はすべて valid 範囲。失敗時 null HWND を返す。
+    // SAFETY: all args in valid range. Returns null HWND on failure.
     let hwnd = unsafe {
         CreateWindowExW(
             ex_style,
@@ -116,27 +112,27 @@ pub fn create_window(
     Ok(hwnd)
 }
 
-/// `DestroyWindow` の薄い safe wrapper。失敗してもプログラムは続行する想定
-/// （Drop から呼ばれるため）。
+/// Safe wrapper over `DestroyWindow`. May fail (called from Drop) without
+/// aborting the program.
 pub fn destroy_window(hwnd: HWND) -> Result<()> {
-    // SAFETY: hwnd は OverlayWindow が所有する有効 HWND。
+    // SAFETY: hwnd is a valid HWND owned by OverlayWindow.
     unsafe { DestroyWindow(hwnd) }.map_err(|e| PlatformError::BadHr {
         operation: "DestroyWindow",
         hr: e.code().0,
     })
 }
 
-/// `SetWindowPos(hwnd, NULL, x, y, width, height, SWP_NOACTIVATE | SWP_NOZORDER)`
-/// の薄い safe wrapper。`WM_DPICHANGED` ハンドラから OS 推奨 rect で overlay
-/// HWND を再配置するために使う。`SWP_NOACTIVATE` で focus 奪取を防ぎ、
-/// `SWP_NOZORDER` で WS_EX_TOPMOST の z-order を維持する。
+/// Safe wrapper over `SetWindowPos(hwnd, NULL, x, y, width, height,
+/// SWP_NOACTIVATE | SWP_NOZORDER)`. Used by the `WM_DPICHANGED` handler to
+/// reposition the overlay HWND to the OS-recommended rect. `SWP_NOACTIVATE`
+/// avoids stealing focus; `SWP_NOZORDER` preserves the WS_EX_TOPMOST z-order.
 ///
 /// # Errors
-/// `SetWindowPos` が失敗したとき。
+/// When `SetWindowPos` fails.
 pub fn set_window_pos_rect(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
-    // SAFETY: hwnd は overlay が所有する valid HWND、SWP_* は Win32 定数、
-    // hwndinsertafter = None は z-order 変更を伴わない (SWP_NOZORDER と整合)。
+    // SAFETY: hwnd is a valid overlay-owned HWND, SWP_* are Win32 constants,
+    // hwndinsertafter = None makes no z-order change (consistent with SWP_NOZORDER).
     unsafe {
         SetWindowPos(
             hwnd,
@@ -154,114 +150,113 @@ pub fn set_window_pos_rect(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) 
     })
 }
 
-/// `WM_DPICHANGED` の `lparam` を `RECT` (OS 推奨の新 window rect) に
-/// 解釈して値を返す safe wrapper。`wndproc::dispatch` は
-/// `#![forbid(unsafe_code)]` のため、生 pointer 解参を本ファイルに閉じる。
+/// Interprets a `WM_DPICHANGED` `lparam` as the OS-recommended new window
+/// `RECT` and returns it by value. Keeps the raw-pointer deref in this file
+/// since `wndproc::dispatch` is `#![forbid(unsafe_code)]`.
 ///
 /// # Safety
-/// 呼び出し側は `msg == WM_DPICHANGED` のときだけ呼ぶこと。それ以外の
-/// メッセージで呼ぶと未定義動作になる (lparam が RECT* を指していない)。
+/// Call only when `msg == WM_DPICHANGED`; for other messages `lparam` is not a
+/// `RECT*` and this is undefined behavior.
 pub fn rect_from_wm_dpichanged_lparam(lparam: LPARAM) -> windows::Win32::Foundation::RECT {
-    // SAFETY: WM_DPICHANGED の lparam は (Win32 仕様) `RECT*` で OS が
-    // 提供する有効ポインタ。値を 1 度コピーして即解放する。
+    // SAFETY: per Win32, the WM_DPICHANGED lparam is an OS-provided valid
+    // `RECT*`. Copy the value once.
     unsafe { *(lparam.0 as *const windows::Win32::Foundation::RECT) }
 }
 
-/// `ShowWindow(hwnd, SW_SHOWNOACTIVATE)` の safe wrapper。
+/// Safe wrapper over `ShowWindow(hwnd, SW_SHOWNOACTIVATE)`.
 ///
-/// `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` の overlay HWND は、
-/// `ShowWindow` を明示的に呼ばないと visible にならないことがある。
-/// `SW_SHOWNOACTIVATE` を使い、`WS_EX_NOACTIVATE` と合わせ focus 奪取を二重に防ぐ。
+/// A `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` overlay HWND may not
+/// become visible without an explicit `ShowWindow`. `SW_SHOWNOACTIVATE` plus
+/// `WS_EX_NOACTIVATE` doubly avoids stealing focus.
 ///
-/// `ShowWindow` の戻り値 BOOL は「前回 visible だったか」を返すだけで失敗を
-/// 示さないため、戻り値は捨てる。
+/// The BOOL return only reports whether the window was previously visible, not
+/// failure, so it is discarded.
 #[allow(
     clippy::disallowed_methods,
-    reason = "ShowWindow を許可する唯一の場所。caller には clippy::disallowed_methods で deny。"
+    reason = "the only place ShowWindow is allowed; callers deny it via clippy::disallowed_methods"
 )]
 pub fn show_window_noactivate(hwnd: HWND) {
-    // SAFETY: hwnd は OverlayWindow が所有する有効 HWND。SW_SHOWNOACTIVATE は
-    // WinAPI 定数。本 API は失敗 HRESULT を返さない。
+    // SAFETY: hwnd is a valid HWND owned by OverlayWindow. SW_SHOWNOACTIVATE is
+    // a WinAPI constant. This API returns no failure HRESULT.
     let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
 }
 
 // ---- GWLP_USERDATA (instance state) ----------------------------------------
 
-/// WM_NCCREATE で `Box::into_raw` した `*mut OverlayWndState` を `GWLP_USERDATA`
-/// に格納する。
+/// Stores the WM_NCCREATE `*mut OverlayWndState` (from `Box::into_raw`) in
+/// `GWLP_USERDATA`.
 pub fn set_userdata(hwnd: HWND, ptr: *mut OverlayWndState) {
-    // SAFETY: hwnd は valid、ptr は呼び出し側が所有する Box::into_raw 由来か null。
+    // SAFETY: hwnd valid; ptr is either a caller-owned Box::into_raw result or null.
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize) };
 }
 
-/// `GWLP_USERDATA` に格納された `*mut OverlayWndState` を `NonNull` で取り出す。
-/// まだ設定されていない（WM_NCCREATE 前）ときは `None`。
+/// Reads the `*mut OverlayWndState` stored in `GWLP_USERDATA` as `NonNull`.
+/// `None` if not yet set (before WM_NCCREATE).
 pub fn get_userdata(hwnd: HWND) -> Option<NonNull<OverlayWndState>> {
-    // SAFETY: 単純な GWLP_USERDATA 読み出し。null チェックで安全化。
+    // SAFETY: plain GWLP_USERDATA read, made safe by the null check.
     let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut OverlayWndState;
     NonNull::new(raw)
 }
 
-/// `GWLP_USERDATA` を 0 にクリアし、保存していた Box を回収して所有権を返す。
-/// WM_NCDESTROY の中で 1 度だけ呼ぶ。
+/// Clears `GWLP_USERDATA` to 0 and reclaims the stored Box. Call once in
+/// WM_NCDESTROY.
 pub fn take_userdata(hwnd: HWND) -> Option<Box<OverlayWndState>> {
-    // SAFETY: SetWindowLongPtrW で 0 を入れ、直前の値を読み出す（atomic swap 相当）。
+    // SAFETY: SetWindowLongPtrW writes 0 and returns the prior value (atomic swap).
     let raw = unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) } as *mut OverlayWndState;
     if raw.is_null() {
         return None;
     }
-    // SAFETY: WM_NCCREATE で `Box::into_raw` した値を WM_NCDESTROY で 1 度だけ回収。
+    // SAFETY: reclaims the WM_NCCREATE Box::into_raw value once, in WM_NCDESTROY.
     Some(unsafe { Box::from_raw(raw) })
 }
 
-/// CreateWindowExW が失敗したときの Box 解放専用 helper。WM_NCCREATE が呼ばれて
-/// いないため `GWLP_USERDATA` には届かない値を、呼び出し側から直接渡して drop する。
+/// Drops a Box when CreateWindowExW failed before WM_NCCREATE, so the pointer
+/// never reached `GWLP_USERDATA`; the caller passes it directly.
 pub fn drop_userdata_raw(ptr: *mut OverlayWndState) {
     if ptr.is_null() {
         return;
     }
-    // SAFETY: 呼び出し側が `Box::into_raw` の結果を渡し、二重解放しないことを保証。
+    // SAFETY: caller passes a Box::into_raw result and guarantees no double free.
     drop(unsafe { Box::from_raw(ptr) });
 }
 
-/// `NonNull<OverlayWndState>` を `&OverlayWndState` に変換する。
-/// WndProc 1 回の dispatch 中のみ valid な参照を返す。
+/// Converts `NonNull<OverlayWndState>` to `&OverlayWndState`, valid only for the
+/// duration of one WndProc dispatch.
 pub fn state_ref<'a>(ptr: NonNull<OverlayWndState>) -> &'a OverlayWndState {
-    // SAFETY: ptr は WM_NCCREATE で確立した stable address。WndProc は単一 UI
-    // thread からのみ呼ばれ、dispatch 関数が return するまで生きている。
+    // SAFETY: ptr is the stable address established at WM_NCCREATE. WndProc runs
+    // only on the single UI thread and the box lives until dispatch returns.
     unsafe { ptr.as_ref() }
 }
 
 // ---- message dispatch ------------------------------------------------------
 
-/// `DefWindowProcW` の薄い safe wrapper。
+/// Safe wrapper over `DefWindowProcW`.
 pub fn def_window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    // SAFETY: 標準的な Win32 メッセージ転送。引数は WndProc から受け取った
-    // ものをそのまま流す。
+    // SAFETY: standard Win32 message forwarding; args come straight from WndProc.
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-/// `PostQuitMessage(exit_code)` の薄い safe wrapper。
+/// Safe wrapper over `PostQuitMessage(exit_code)`.
 pub fn post_quit(exit_code: i32) {
-    // SAFETY: 単純な POST。失敗しない。
+    // SAFETY: plain POST; cannot fail.
     unsafe { PostQuitMessage(exit_code) };
 }
 
-/// メッセージポンプを 1 周。
+/// Pumps one message.
 ///
-/// 戻り値:
-/// - `Some(true)`: メッセージを処理した。続行可能。
-/// - `Some(false)`: `WM_QUIT` を受信。ループを抜ける。
-/// - `None`: `GetMessageW` が -1 を返した（API エラー）。
+/// Returns:
+/// - `Some(true)`: a message was processed; keep going.
+/// - `Some(false)`: `WM_QUIT` received; exit the loop.
+/// - `None`: `GetMessageW` returned -1 (API error).
 pub fn pump_one() -> Option<bool> {
     let mut msg = MSG::default();
-    // SAFETY: msg は zero-init の out param、他は default 引数。
+    // SAFETY: msg is a zero-init out param; other args are defaults.
     let r = unsafe { GetMessageW(&mut msg, None, 0, 0) };
     match r.0 {
         0 => Some(false),
         -1 => None,
         _ => {
-            // SAFETY: msg は GetMessageW が成功時に初期化済み。
+            // SAFETY: msg was initialized by GetMessageW on success.
             unsafe {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
@@ -273,12 +268,12 @@ pub fn pump_one() -> Option<bool> {
 
 // ---- cursor position -------------------------------------------------------
 
-/// `GetCursorPos` の薄い safe wrapper。
+/// Safe wrapper over `GetCursorPos`.
 pub fn cursor_pos() -> Result<linerule_core::Point<linerule_core::Logical>> {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
     let mut pt = POINT::default();
-    // SAFETY: pt は zero-init の out param
+    // SAFETY: pt is a zero-init out param.
     unsafe { GetCursorPos(&mut pt) }.map_err(|e| PlatformError::BadHr {
         operation: "GetCursorPos",
         hr: e.code().0,
@@ -288,26 +283,26 @@ pub fn cursor_pos() -> Result<linerule_core::Point<linerule_core::Logical>> {
 
 // ---- monitor info ----------------------------------------------------------
 
-/// `GetSystemMetrics(SM_CXSCREEN)` の薄い safe wrapper。
+/// Safe wrapper over `GetSystemMetrics(SM_CXSCREEN)`.
 pub fn screen_width() -> i32 {
-    // SAFETY: GetSystemMetrics は引数チェックなしで読み出すだけ。
+    // SAFETY: GetSystemMetrics is a read-only call with no argument validation.
     unsafe { GetSystemMetrics(SM_CXSCREEN) }
 }
 
-/// `GetSystemMetrics(SM_CYSCREEN)` の薄い safe wrapper。
+/// Safe wrapper over `GetSystemMetrics(SM_CYSCREEN)`.
 pub fn screen_height() -> i32 {
-    // SAFETY: 同上。
+    // SAFETY: as above.
     unsafe { GetSystemMetrics(SM_CYSCREEN) }
 }
 
-/// virtual screen 全体の bounds (`SM_XVIRTUALSCREEN` / `SM_YVIRTUALSCREEN` /
-/// `SM_CXVIRTUALSCREEN` / `SM_CYVIRTUALSCREEN`) を `(left, top, width, height)`
-/// で返す。multi-monitor 環境ではすべての monitor を覆う矩形。
+/// Returns the whole virtual-screen bounds (`SM_XVIRTUALSCREEN` /
+/// `SM_YVIRTUALSCREEN` / `SM_CXVIRTUALSCREEN` / `SM_CYVIRTUALSCREEN`) as
+/// `(left, top, width, height)` — the rect covering all monitors.
 pub fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
     use windows::Win32::UI::WindowsAndMessaging::{
         SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
-    // SAFETY: 4 連の read-only API call。
+    // SAFETY: four read-only API calls.
     unsafe {
         (
             GetSystemMetrics(SM_XVIRTUALSCREEN),
@@ -320,17 +315,16 @@ pub fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
 
 // ---- WndProc entry point ---------------------------------------------------
 
-/// linerule overlay の WndProc 本体。
+/// The linerule overlay WndProc.
 ///
-/// `RegisterClassExW` の `lpfnWndProc` に渡す `unsafe extern "system" fn` の型を
-/// 満たすため、本関数だけは declaration に `unsafe` キーワードを持つ。本体内では
-/// - WM_NCCREATE で `GWLP_USERDATA` に instance state を仕込み
-/// - その他は `crate::wndproc::dispatch` (safe) に委譲し
-/// - dispatch 中の panic を `catch_unwind` で吸収して `DefWindowProcW` に
-///   フォールバックする
+/// Only this function is declared `unsafe` to satisfy the `unsafe extern
+/// "system" fn` type for `RegisterClassExW`'s `lpfnWndProc`. It:
+/// - on WM_NCCREATE, stores instance state in `GWLP_USERDATA`;
+/// - otherwise delegates to `crate::wndproc::dispatch` (safe);
+/// - absorbs any dispatch panic via `catch_unwind`, falling back to
+///   `DefWindowProcW`.
 ///
-/// `dispatch` は `#![forbid(unsafe_code)]` の wndproc.rs にあり、追加の unsafe を
-/// 発生させない。
+/// `dispatch` lives in `#![forbid(unsafe_code)]` wndproc.rs and adds no unsafe.
 pub unsafe extern "system" fn overlay_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -338,7 +332,7 @@ pub unsafe extern "system" fn overlay_wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if msg == WM_NCCREATE {
-        // SAFETY: WM_NCCREATE 時の lparam は CREATESTRUCTW* (Win32 仕様)。
+        // SAFETY: per Win32, the WM_NCCREATE lparam is a CREATESTRUCTW*.
         let cs = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
         let raw = cs.lpCreateParams.cast::<OverlayWndState>();
         set_userdata(hwnd, raw);
@@ -353,7 +347,7 @@ pub unsafe extern "system" fn overlay_wnd_proc(
         Ok(Some(lresult)) => lresult,
         Ok(None) => def_window_proc(hwnd, msg, wparam, lparam),
         Err(_panic) => {
-            // panic は飲み込み、プロセスは生かす（読書ツールが落ちないこと）。
+            // Swallow the panic and keep the process alive.
             def_window_proc(hwnd, msg, wparam, lparam)
         },
     }
@@ -361,19 +355,19 @@ pub unsafe extern "system" fn overlay_wnd_proc(
 
 // ---- ex-style snapshot helpers ---------------------------------------------
 
-/// `GWL_EXSTYLE` (= -20) を `GetWindowLongPtrW` で取り出す薄い safe wrapper。
+/// Safe wrapper reading `GWL_EXSTYLE` (= -20) via `GetWindowLongPtrW`.
 pub fn get_ex_style(hwnd: HWND) -> isize {
     use windows::Win32::UI::WindowsAndMessaging::GWL_EXSTYLE;
-    // SAFETY: GWL_EXSTYLE 単純読み出し。
+    // SAFETY: plain GWL_EXSTYLE read.
     unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) }
 }
 
 // ---- last-error helpers ----------------------------------------------------
 
-/// `GetLastError()` を読み取り [`PlatformError::LastError`] を構築する。
+/// Reads `GetLastError()` and builds a `PlatformError::LastError`.
 pub fn last_error(operation: &'static str) -> PlatformError {
     use windows::Win32::Foundation::GetLastError;
-    // SAFETY: GetLastError は副作用なく直近の thread-local エラーを返す。
+    // SAFETY: GetLastError returns the last thread-local error with no side effects.
     let code = unsafe { GetLastError() }.0;
     PlatformError::LastError {
         operation,
@@ -384,31 +378,31 @@ pub fn last_error(operation: &'static str) -> PlatformError {
 
 // ---- monitor info ----------------------------------------------------------
 
-/// `MonitorFromPoint(0, 0, MONITOR_DEFAULTTOPRIMARY)` の薄い safe wrapper。
+/// Safe wrapper over `MonitorFromPoint(0, 0, MONITOR_DEFAULTTOPRIMARY)`.
 pub fn primary_monitor() -> HMONITOR {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTOPRIMARY;
-    // SAFETY: MonitorFromPoint は座標と flag を受け取り HMONITOR を返す read-only API。
+    // SAFETY: MonitorFromPoint is a read-only API taking a point and flag.
     unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) }
 }
 
-/// `MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST)` の薄い safe wrapper。
-/// 任意座標から最も近い monitor を返す（cursor が monitor 外に出ても OK）。
+/// Safe wrapper over `MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST)`. Returns the
+/// nearest monitor to any point (fine if the cursor is off all monitors).
 pub fn monitor_from_point(x: i32, y: i32) -> HMONITOR {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST;
-    // SAFETY: 任意 i32 座標を受け付ける read-only API。
+    // SAFETY: read-only API accepting any i32 coordinates.
     unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) }
 }
 
-/// `GetMonitorInfoW` の薄い safe wrapper。
+/// Safe wrapper over `GetMonitorInfoW`.
 pub fn get_monitor_info(hmonitor: HMONITOR) -> Result<MONITORINFO> {
     use windows::Win32::Graphics::Gdi::GetMonitorInfoW;
     let mut info = MONITORINFO {
         cbSize: u32::try_from(core::mem::size_of::<MONITORINFO>()).unwrap_or(u32::MAX),
         ..Default::default()
     };
-    // SAFETY: info.cbSize が正しく設定されており、hmonitor は valid を期待。
+    // SAFETY: info.cbSize is set correctly; hmonitor is expected valid.
     let ok = unsafe { GetMonitorInfoW(hmonitor, &mut info) };
     if !ok.as_bool() {
         return Err(last_error("GetMonitorInfoW"));
@@ -418,21 +412,22 @@ pub fn get_monitor_info(hmonitor: HMONITOR) -> Result<MONITORINFO> {
 
 // ---- DPI awareness ---------------------------------------------------------
 
-/// `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)`
-/// の薄い safe wrapper。プロセス起動時に 1 回だけ呼ぶ。
+/// Safe wrapper over
+/// `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)`.
+/// Call once at process startup.
 ///
-/// V2 awareness は per-monitor DPI を尊重し、`WM_DPICHANGED` をオーバーレイ
-/// HWND が受け取れるようにする (Windows 10 1703+ 必須)。失敗時 (既に dpi awareness
-/// が設定済み等) でも fatal にはせず、log のみ。
+/// V2 awareness respects per-monitor DPI and lets the overlay HWND receive
+/// `WM_DPICHANGED` (requires Windows 10 1703+). Failure (e.g. awareness already
+/// set) is not fatal; only logged.
 ///
 /// # Errors
-/// `SetProcessDpiAwarenessContext` が `FALSE` を返したとき。
+/// When `SetProcessDpiAwarenessContext` returns `FALSE`.
 pub fn set_dpi_aware() -> Result<()> {
     use windows::Win32::UI::HiDpi::{
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
     };
-    // SAFETY: DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 は windows-rs 提供の
-    // 定数。本 API は冪等で、起動直後の 1 回だけ呼ぶ前提。
+    // SAFETY: DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is a windows-rs constant.
+    // The API is idempotent; called once right after startup.
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }.map_err(
         |e| PlatformError::BadHr {
             operation: "SetProcessDpiAwarenessContext",
@@ -443,20 +438,20 @@ pub fn set_dpi_aware() -> Result<()> {
 
 // ---- display settings (refresh rate) ---------------------------------------
 
-/// `EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &mut devmode)` の薄い
-/// safe wrapper。プライマリディスプレイの現在の `DEVMODEW` を取得する。
-/// HUD telemetry が `DEVMODEW::dmDisplayFrequency` (Hz) を表示するために使う。
+/// Safe wrapper over `EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS,
+/// &mut devmode)`. Reads the primary display's current `DEVMODEW`. Used by HUD
+/// telemetry to show `DEVMODEW::dmDisplayFrequency` (Hz).
 ///
 /// # Errors
-/// `EnumDisplaySettingsW` が FALSE を返したとき (通常起こらない)。
+/// When `EnumDisplaySettingsW` returns FALSE (normally never).
 pub fn enum_display_settings_current() -> Result<windows::Win32::Graphics::Gdi::DEVMODEW> {
     use windows::Win32::Graphics::Gdi::{DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW};
     let mut dm = DEVMODEW {
         dmSize: u16::try_from(core::mem::size_of::<DEVMODEW>()).unwrap_or(u16::MAX),
         ..Default::default()
     };
-    // SAFETY: dm.dmSize は正しく設定済み、device name = NULL (PCWSTR::null) は
-    // primary display を指す Win32 仕様。out param は zero-init 済み。
+    // SAFETY: dm.dmSize is set correctly; device name = NULL (PCWSTR::null)
+    // means the primary display per Win32. The out param is zero-init.
     let ok = unsafe { EnumDisplaySettingsW(PCWSTR::null(), ENUM_CURRENT_SETTINGS, &mut dm) };
     if !ok.as_bool() {
         return Err(last_error("EnumDisplaySettingsW"));

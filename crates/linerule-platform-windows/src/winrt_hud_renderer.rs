@@ -1,9 +1,8 @@
-//! `HudFrame` を WinRT composition の `CompositionDrawingSurface` に DWrite 経由で
-//! 描画する renderer。`hud_renderer` (Win32 DComp) の WinRT 版。
+//! Renderer that draws a `HudFrame` to a WinRT `CompositionDrawingSurface` via
+//! DWrite.
 //!
-//! テキスト描画本体は `dwrite::draw_hud_rows` を共有し、surface の取得だけ
-//! WinRT (`CompositionDrawingSurface`) に差し替える。SpriteVisual の opacity で
-//! cursor 距離 fade を multiplicative に適用する。
+//! Text drawing reuses `dwrite::draw_hud_rows`; only the surface is WinRT.
+//! Cursor-distance fade is applied via the SpriteVisual's opacity.
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
@@ -22,7 +21,7 @@ use crate::win32_ffi::composition::{
 };
 use crate::win32_ffi::dwrite;
 
-/// WinRT HUD パネル描画器。
+/// WinRT HUD panel renderer.
 pub struct WinrtHudRenderer {
     visual: SpriteVisual,
     surface_brush: CompositionSurfaceBrush,
@@ -36,10 +35,10 @@ pub struct WinrtHudRenderer {
 }
 
 impl WinrtHudRenderer {
-    /// `pipeline.hud_root` の下に HUD visual を attach した renderer を構築する。
+    /// Build a renderer with a HUD visual attached under `pipeline.hud_root`.
     ///
     /// # Errors
-    /// visual / brush / DWrite factory 生成が失敗したとき。
+    /// When creating the visual, brush, or DWrite factory fails.
     pub fn new(pipeline: &WinrtPipeline, hud: &HudConfig) -> Result<Self> {
         let compositor = pipeline.compositor.clone();
         let visual = compositor
@@ -71,10 +70,10 @@ impl WinrtHudRenderer {
         })
     }
 
-    /// HUD 1 frame を描画する。WinRT が自動 commit する。
+    /// Draw one HUD frame. WinRT auto-commits.
     ///
     /// # Errors
-    /// surface 生成 / text format 生成 / D2D 描画が失敗したとき。
+    /// When creating the surface or text format, or D2D drawing, fails.
     pub fn apply(&mut self, frame: &HudFrame) -> Result<()> {
         let width = ceil_to_u32(frame.panel_width);
         let height = ceil_to_u32(frame.panel_height);
@@ -82,7 +81,7 @@ impl WinrtHudRenderer {
         if self.last_size != Some((width, height)) {
             #[allow(
                 clippy::cast_precision_loss,
-                reason = "panel サイズは数百 px、f32 精度に余裕"
+                reason = "panel size is a few hundred px, well within f32 precision"
             )]
             let surface =
                 create_drawing_surface(&self.graphics_device, width as f32, height as f32)?;
@@ -139,10 +138,10 @@ impl WinrtHudRenderer {
             .map_err(map_hr("SpriteVisual::SetOffset (HUD)"))
     }
 
-    /// HUD visual の opacity を `[0.0, 1.0]` に設定する (cursor 距離 fade 用)。
+    /// Set the HUD visual's opacity, clamped to `[0.0, 1.0]` (cursor-distance fade).
     ///
     /// # Errors
-    /// `Visual::SetOpacity` が失敗したとき。
+    /// When `Visual::SetOpacity` fails.
     pub fn set_opacity(&self, opacity: f32) -> Result<()> {
         self.visual
             .SetOpacity(opacity.clamp(0.0, 1.0))
@@ -168,7 +167,7 @@ fn size_to_centi(size: f32) -> u32 {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "size は HudConfig 由来の正の有限 f32。centi 化で十分な精度"
+        reason = "size is a positive finite f32 from HudConfig; centi precision suffices"
     )]
     let v = (size * 100.0).round() as u32;
     v
@@ -181,7 +180,7 @@ fn ceil_to_u32(v: f32) -> u32 {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "is_finite + 非負を確認済み、ceil 後の値は u32 範囲内"
+        reason = "checked finite and non-negative; the ceil'd value is within u32 range"
     )]
     let out = v.ceil() as u32;
     out

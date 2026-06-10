@@ -1,8 +1,7 @@
-//! ★ FFI 境界 — `linerule-platform-windows` 内で `unsafe` を含む唯一の領域。
+//! FFI boundary — the only `unsafe` area in `linerule-platform-windows`.
 //!
-//! 各サブモジュールは Win32 / COM API を薄く safe ラップする。クレート内の他
-//! ファイルは `#![forbid(unsafe_code)]` を強制し、本モジュール経由でのみ
-//! Win32/COM を触る。
+//! Each submodule thinly safe-wraps a Win32 / COM API. Every other file in the
+//! crate is `#![forbid(unsafe_code)]` and touches Win32/COM only through here.
 //!
 //! - [`core`] — Window / message pump / instance state
 //! - [`graphics`] — D3D11 + DXGI + D2D device stack
