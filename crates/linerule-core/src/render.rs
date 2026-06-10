@@ -1,9 +1,8 @@
-//! Pure renderer: turns the current overlay state + cursor + monitor bounds
-//! into an [`OverlayFrame`] of fillable layers. No I/O, no platform calls.
+//! Pure renderer: state + cursor + monitor bounds into an [`OverlayFrame`].
+//! No I/O, no platform calls.
 //!
-//! The submodule [`overlay_frame`] carries the data ADT ([`Layer`],
-//! [`Brush`], [`Geometry`], [`OverlayFrame`]). The [`frame`] function in
-//! this file is the only entry point.
+//! The data ADT ([`Layer`], [`Brush`], [`Geometry`], [`OverlayFrame`]) lives in
+//! [`overlay_frame`]; [`frame`] is the only entry point.
 
 pub mod hud_frame;
 pub mod overlay_frame;
@@ -20,18 +19,14 @@ use crate::{
     state::{Mode, State},
 };
 
-// Mode-aware indicator: a slim bar oriented along the active axis (horizontal
-// mode → 18×4 horizontal bar, vertical mode → 4×18 vertical bar) so the user
-// can tell the axis at a glance from the indicator alone.
+// Indicator bar oriented along the active axis: 18x4 horizontal, 4x18 vertical.
 const INDICATOR_LONG: u32 = 18;
 const INDICATOR_SHORT: u32 = 4;
 const INDICATOR_MARGIN: i32 = 12;
 
 /// Build the frame for the current tick.
 ///
-/// `cursor` is the latest cursor position polled from the OS; `monitor` is
-/// the bounding rect of the screen the cursor is on. Both are in logical
-/// pixels.
+/// `cursor` and `monitor` are in logical pixels.
 ///
 /// # Examples
 ///
@@ -44,8 +39,7 @@ const INDICATOR_MARGIN: i32 = 12;
 /// assert!(out.is_empty());
 /// ```
 ///
-/// In an active mode, the frame has the two dim halves plus the indicator
-/// (three layers total when the cursor is in the middle of the screen):
+/// An active mode emits two dim halves plus the indicator:
 ///
 /// ```
 /// use linerule_core::{frame, Mode, Point, ScreenRect, State};
@@ -97,14 +91,10 @@ fn slit_frame(
     OverlayFrame::from_layers(layers)
 }
 
-/// Brush for the before/after surround bands. `Solid` for dim/white-wash, `Blur`
-/// (a pure backdrop blur, no color veil) for the blur effect.
+/// Brush for the surround bands: `Solid` for dim/white-wash, `Blur` for blur.
 ///
-/// The dim / white-wash masks fill at the full perceptual opacity byte. The blur
-/// effect carries no tint at all — just the σ amount; a color veil over the blur
-/// only darkened (or lightened) the surround, which read as a dim wash rather
-/// than "just blur", so it was dropped. Under the `Blur` effect the opacity
-/// hotkeys retarget onto [`OverlayConfig::blur`] (the σ amount) instead.
+/// Blur carries no tint, only the σ amount; under `Blur` the opacity hotkeys
+/// retarget onto [`OverlayConfig::blur`] instead.
 fn surround_brush(config: OverlayConfig) -> Brush {
     if config.effect.is_blur() {
         Brush::Blur {
@@ -335,9 +325,8 @@ mod tests {
     #[test]
     fn opacity_does_not_affect_the_blur_brush() {
         use crate::{config::OverlayConfig, state::SurroundEffect};
-        // Blur carries no tint, so opacity has no effect on it at all — the
-        // surround brush is byte-identical at MIN and MAX opacity. (Under Blur,
-        // the opacity hotkeys retarget onto the σ amount — see the reducer tests.)
+        // Blur carries no tint, so the surround brush is byte-identical at MIN
+        // and MAX opacity.
         let blur_brush_at = |opacity| {
             let s = State {
                 mode: Mode::Horizontal,
@@ -377,7 +366,7 @@ mod tests {
         );
     }
 
-    // ---- Vertical mode (was previously untested) -------------------------
+    // ---- Vertical mode ---------------------------------------------------
 
     #[test]
     fn vertical_mode_emits_three_layers() {
@@ -416,7 +405,7 @@ mod tests {
             ..State::DEFAULT
         };
         let f = frame(s, Point::new(0, 540), monitor());
-        // The left dim band collapses (zero width), leaving the right dim + indicator.
+        // Left dim band collapses to zero width.
         assert!(f.layer_count() <= 3);
     }
 
@@ -443,8 +432,7 @@ mod tests {
 
     #[test]
     fn split_around_negative_center_stays_consistent() {
-        // The center of the slit can move below zero on wrap-around / DPI edge.
-        // We just check internal consistency: (hi - lo) == thickness.
+        // Center can go below zero on DPI/wrap-around edges; (hi - lo) == thickness.
         let (lo, hi) = split_around(-100, 50);
         assert_eq!(hi - lo, 50);
     }

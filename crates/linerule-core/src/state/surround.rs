@@ -19,7 +19,7 @@ use crate::color::Rgba;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SurroundEffect {
-    /// Darken the surround with a translucent black mask (historical default).
+    /// Darken the surround with a translucent black mask.
     #[default]
     DimBlack,
     /// Wash the surround with a translucent white mask — suited to bright

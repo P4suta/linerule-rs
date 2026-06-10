@@ -157,8 +157,14 @@ crate linerule_core
 │   │   ├── struct HudRow: pub
 │   │   ├── struct HudTelemetry: pub
 │   │   ├── enum NotificationClass: pub
+│   │   ├── struct RowCursor: pub(self)
+│   │   │   ├── fn advance: pub(self)
+│   │   │   ├── fn new: pub(self)
+│   │   │   └── fn push: pub(self)
 │   │   ├── fn hud_frame: pub
 │   │   ├── const fn mode_label: pub(self)
+│   │   ├── fn monitor_right: pub(self)
+│   │   ├── const fn monitor_top: pub(self)
 │   │   └── const fn notification_color: pub(self)
 │   ├── fn indicator_layer: pub(self)
 │   ├── mod overlay_frame: pub

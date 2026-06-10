@@ -1,18 +1,12 @@
-//! Pure data mapping from [`ChordSpec`] to the `(modifiers, vk)` integer
-//! pair that `RegisterHotKey` on Win32 expects.
+//! Pure data mapping from [`ChordSpec`] to the `(modifiers, vk)` pair that
+//! Win32 `RegisterHotKey` expects.
 //!
-//! Lives in `linerule-core` (not in `linerule-platform-windows`) because:
-//! - it depends only on `linerule-core` ADTs (no `windows` crate);
-//! - keeping it here lets the Linux CI runner unit-test the mapping without
-//!   `#![cfg(windows)]` gating the whole `platform-windows` crate;
-//! - it is the single source of truth used by both the integration test that
-//!   walks [`HotkeyMap::DEFAULT`](crate::input::hotkey_map::HotkeyMap) and the
-//!   real `RegisterHotKey` call in the platform layer.
+//! Kept in `linerule-core` (no `windows` crate dependency) so it is
+//! unit-testable on non-Windows hosts.
 //!
-//! Constants match the values documented at
+//! Constants match the Win32 docs:
 //! <https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerhotkey>
-//! and the Win32 virtual-key code table at
-//! <https://learn.microsoft.com/windows/win32/inputdev/virtual-key-codes>.
+//! <https://learn.microsoft.com/windows/win32/inputdev/virtual-key-codes>
 
 use crate::input::chord::{ChordSpec, Direction, KeyCode, Modifiers};
 
