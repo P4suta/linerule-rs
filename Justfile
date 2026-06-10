@@ -52,7 +52,6 @@ bootstrap:
     @echo "==> 3/4 lefthook install (pre-commit / commit-msg / pre-push hooks)"
     {{lefthook}} install
     @echo "==> 4/4 bun install (commitlint, used by commit-msg hook)"
-    @just _fix-npm-volume
     {{bun}} install
     @just doctor
     @echo
@@ -309,16 +308,7 @@ crash-latest:
 
 hooks:
     {{lefthook}} install
-    @just _fix-npm-volume
     {{bun}} install
-
-# Docker creates the `npm-cache` named volume (mounted at /workspace/node_modules)
-# owned by root, but the container runs as the `dev` user — so `bun install`
-# can't write into it. chown it (recursively, in case it already holds
-# root-owned files) to `dev`. Host-only and idempotent; safe to re-run. Without
-# this, `just hooks` / `just bootstrap` fail with AccessDenied / EEXIST.
-_fix-npm-volume:
-    @if [ "{{inside}}" != "1" ]; then docker compose exec -u 0:0 dev chown -R dev:dev /workspace/node_modules 2>/dev/null || true; fi
 
 # ----- lefthook delegated recipes (do not run directly) -----
 
