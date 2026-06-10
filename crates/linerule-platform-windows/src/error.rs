@@ -106,6 +106,17 @@ pub fn decode_last_error(code: u32) -> &'static str {
     }
 }
 
+/// Build a [`PlatformError::BadHr`] tagged with `operation` from a windows-rs
+/// error. Used at the COM / `?` boundaries in the renderers and blur graph.
+// Fully-qualified `windows::core::Error` to avoid clashing with thiserror's
+// `Error` derive imported above.
+pub(crate) fn map_hr(operation: &'static str) -> impl Fn(windows::core::Error) -> PlatformError {
+    move |e| PlatformError::BadHr {
+        operation,
+        hr: e.code().0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
