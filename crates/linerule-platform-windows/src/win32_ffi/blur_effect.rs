@@ -249,6 +249,34 @@ pub fn create_backdrop_blur_brush(
         vec![as_source(&saturation_node)?],
     );
 
+    // --- 一時診断: ノイズ各ノードを単体で factory にかけ、E_INVALIDARG の出所を特定する ---
+    // (このブロックは原因特定後に削除する。失敗時 smoke が events.jsonl tail を dump するので
+    //  probe の WARN がそこに出る。)
+    if noise > 0.0 {
+        probe(
+            compositor,
+            &build_turbulence(noise_freq)?,
+            "turbulence_only",
+        );
+        let op = node(
+            "ProbeOpacity",
+            CLSID_D2D1Opacity,
+            vec![single(noise)?],
+            vec![as_source(&build_turbulence(noise_freq)?)?],
+        );
+        probe(compositor, &op, "opacity_over_turbulence");
+        let comp = node(
+            "ProbeComposite",
+            CLSID_D2D1Composite,
+            vec![uint(D2D1_COMPOSITE_MODE_SOURCE_OVER.0 as u32)?],
+            vec![
+                as_source(&build_turbulence(noise_freq)?)?,
+                as_source(&build_turbulence(noise_freq)?)?,
+            ],
+        );
+        probe(compositor, &comp, "composite_two_turbulence");
+    }
+
     // root: ノイズ無効なら BASE(=Contrast)、有効なら NOISE を SOURCE_OVER で重ねる。
     let root = if noise > 0.0 {
         build_noise_composite(&contrast_node, noise, noise_freq)?
@@ -286,17 +314,11 @@ pub fn create_backdrop_blur_brush(
     brush.cast().map_err(map_hr("CompositionEffectBrush::cast"))
 }
 
-/// `base` (背景) の上に procedural ノイズ粒 (前景) を `Composite[SOURCE_OVER]` で重ねた
-/// root ノードを返す。ノイズ枝 = `Turbulence → Saturation(0=グレー化) → Opacity(strength)`。
-fn build_noise_composite(
-    base: &IGraphicsEffect,
-    strength: f32,
-    frequency: f32,
-) -> Result<IGraphicsEffect> {
-    // Turbulence (入力 0 のジェネレータ): 0 Offset(V2) / 1 Size(V2) / 2 BaseFrequency(V2) /
-    // 3 NumOctaves(UINT32) / 4 Seed(UINT32) / 5 Noise(enum) / 6 Stitchable(BOOL)。
-    // Offset/Size は仮想デスクトップの負側も覆うよう大きく取り、空出力を避ける。
-    let turbulence = node(
+/// Turbulence ジェネレータノード (入力 0)。プロパティ: 0 Offset(V2) / 1 Size(V2) /
+/// 2 BaseFrequency(V2) / 3 NumOctaves(UINT32) / 4 Seed(UINT32) / 5 Noise(enum) /
+/// 6 Stitchable(BOOL)。Offset/Size は仮想デスクトップの負側も覆うよう大きく取り空出力を避ける。
+fn build_turbulence(frequency: f32) -> Result<IGraphicsEffect> {
+    Ok(node(
         "LineruleTurbulence",
         CLSID_D2D1Turbulence,
         vec![
@@ -309,7 +331,17 @@ fn build_noise_composite(
             boolean(false)?,
         ],
         vec![],
-    );
+    ))
+}
+
+/// `base` (背景) の上に procedural ノイズ粒 (前景) を `Composite[SOURCE_OVER]` で重ねた
+/// root ノードを返す。ノイズ枝 = `Turbulence → Saturation(0=グレー化) → Opacity(strength)`。
+fn build_noise_composite(
+    base: &IGraphicsEffect,
+    strength: f32,
+    frequency: f32,
+) -> Result<IGraphicsEffect> {
+    let turbulence = build_turbulence(frequency)?;
     // Saturation(0) で RGB ノイズ → 輝度グレー粒に。
     let grey = node(
         "LineruleNoiseGrey",
@@ -331,6 +363,22 @@ fn build_noise_composite(
         vec![uint(D2D1_COMPOSITE_MODE_SOURCE_OVER.0 as u32)?],
         vec![as_source(base)?, as_source(&faded)?],
     ))
+}
+
+/// 一時診断ヘルパ: 単一エフェクトを `CreateEffectFactory` にかけ、結果 (HRESULT) を WARN で
+/// 残す。どのノードが `E_INVALIDARG` を出すか特定するためのもの (原因特定後に削除)。
+fn probe(compositor: &Compositor, effect: &IGraphicsEffect, label: &str) {
+    match compositor.CreateEffectFactory(effect) {
+        Ok(_) => tracing::warn!(probe = label, "blur effect factory probe: OK"),
+        Err(e) => {
+            let hr = e.code().0 as u32;
+            tracing::warn!(
+                probe = label,
+                hr = format!("{hr:#010x}"),
+                "blur effect factory probe: FAIL"
+            );
+        },
+    }
 }
 
 const _: GRAPHICS_EFFECT_PROPERTY_MAPPING = GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT;
