@@ -164,7 +164,8 @@ impl HudTelemetry {
 ///
 /// The panel is anchored top-right (`geometry.margin` from the monitor corner).
 /// Rows, top to bottom: title, status (Mode), body (Thickness, Opacity, Effect),
-/// telemetry (Refresh Hz), hotkey help, then one row per notification.
+/// telemetry (Refresh Hz), hotkey help (filtered to the keys that are
+/// currently actionable), then one row per notification.
 ///
 /// `notifications` must already have expired entries removed; `hud_frame` does
 /// no time checks, only layout.
@@ -172,11 +173,13 @@ impl HudTelemetry {
 /// # Examples
 ///
 /// ```
-/// use linerule_core::{HotkeyMap, HudConfig, HudTelemetry, Point, ScreenRect, State, hud_frame};
+/// use linerule_core::{
+///     HotkeyMap, HudConfig, HudTelemetry, Mode, Point, ScreenRect, State, hud_frame,
+/// };
 ///
 /// let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
 /// let frame = hud_frame(
-///     State::DEFAULT,
+///     State::with_mode(Mode::Horizontal),
 ///     HudConfig::DEFAULT,
 ///     monitor,
 ///     144,
@@ -188,7 +191,7 @@ impl HudTelemetry {
 /// // Top-right anchor: panel right edge is `margin` left of the monitor right.
 /// let expected_right = 1920.0 - HudConfig::DEFAULT.geometry.margin;
 /// assert!((frame.panel_left + frame.panel_width - expected_right).abs() < 0.5);
-/// // 6 baseline + 1 header + 9 hotkey rows = 16 rows (Quit included).
+/// // While on: 6 baseline + 1 header + 9 hotkey rows = 16 rows (Quit included).
 /// assert!(frame.rows.len() >= 16);
 /// ```
 #[must_use]
@@ -208,7 +211,7 @@ pub fn hud_frame(
     tier: HudTier,
 ) -> HudFrame {
     match tier {
-        HudTier::Chip => chip_frame(state, hud, monitor, notifications),
+        HudTier::Chip => chip_frame(state, hud, monitor, notifications, hotkeys),
         HudTier::Full => full_frame(
             state,
             hud,
@@ -315,18 +318,25 @@ fn full_frame(
         hud.colors.foreground,
     );
     cur.advance(hud.padding.row);
-    let hotkey_lines: [(&str, &str); 9] = [
-        ("Mode cycle", hotkeys.cycle_mode),
-        ("Effect cycle", hotkeys.cycle_effect),
-        ("On/Off", hotkeys.toggle_on_off),
-        ("Thicker", hotkeys.thicker),
-        ("Thinner", hotkeys.thinner),
-        ("More opaque", hotkeys.more_opaque),
-        ("Less opaque", hotkeys.less_opaque),
-        ("HUD detail", hotkeys.toggle_hud),
-        ("Quit", hotkeys.quit),
+    // The guide lists only the keys that are currently actionable: while Off
+    // the axis/effect/value keys are rejected by the reducer anyway, so they
+    // are hidden until `ToggleOnOff` brings the overlay back.
+    let on = !matches!(state.mode, Mode::Off);
+    let hotkey_lines: [(&str, &str, bool); 9] = [
+        ("Mode cycle", hotkeys.cycle_mode, on),
+        ("Effect cycle", hotkeys.cycle_effect, on),
+        ("On/Off", hotkeys.toggle_on_off, true),
+        ("Thicker", hotkeys.thicker, on),
+        ("Thinner", hotkeys.thinner, on),
+        ("More opaque", hotkeys.more_opaque, on),
+        ("Less opaque", hotkeys.less_opaque, on),
+        ("HUD detail", hotkeys.toggle_hud, true),
+        ("Quit", hotkeys.quit, true),
     ];
-    for (label, chord) in hotkey_lines {
+    for (label, chord, actionable) in hotkey_lines {
+        if !actionable {
+            continue;
+        }
         cur.push(
             format!("{label:<12} {chord}"),
             hud.fonts.telemetry,
@@ -376,6 +386,7 @@ fn chip_frame(
     hud: HudConfig,
     monitor: ScreenRect<Logical>,
     notifications: &[HudNotification],
+    hotkeys: HotkeyMap,
 ) -> HudFrame {
     let chip = hud.chip;
     let margin = hud.geometry.margin;
@@ -390,7 +401,7 @@ fn chip_frame(
     )]
     let monitor_top = monitor.top() as f32;
 
-    let status = chip_text(state);
+    let status = chip_text(state, hotkeys);
 
     // Width = longest of the status and toast rows (estimated) + horizontal padding.
     let mut text_width = estimate_mono_width(&status, chip.font_size);
@@ -454,36 +465,15 @@ fn estimate_mono_width(text: &str, font_size: f32) -> f32 {
     chars * font_size * MONO_ADVANCE_RATIO
 }
 
-/// Chip status string: `H · 28px · 67%` (`Off` while off). The `%` is the
-/// stored byte as a percentage (0xAA → 67%), not the perceptual value. Under
-/// the Blur effect opacity is inert, so the third segment shows the blur σ
-/// (`H · 28px · blur 9px`) — the value the opacity hotkeys actually adjust.
-fn chip_text(state: State) -> String {
-    let letter = match state.mode {
-        Mode::Off => return "Off".to_string(),
-        Mode::Horizontal => "H",
-        Mode::Vertical => "V",
-    };
-    let intensity = if state.config.effect.is_blur() {
-        format!("blur {}px", state.config.blur.to_std_dev().round())
-    } else {
-        format!("{}%", percent_of_byte(state.config.opacity.get()))
-    };
-    format!(
-        "{letter} · {}px · {intensity}",
-        state.config.thickness.get()
-    )
-}
-
-/// `byte / 255` as a percentage (rounded).
-fn percent_of_byte(byte: u8) -> u32 {
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "0..=255 times 100 is exact in f32; 0..=100 after rounding"
-    )]
-    let pct = (f32::from(byte) * 100.0 / 255.0).round() as u32;
-    pct
+/// Chip status string: nothing but a key hint. Mode, effect, and values are
+/// all visible on screen, so the chip only keeps the path to the full guide
+/// alive — the HUD-detail chord while on (`Ctrl+Alt+K`), the restore chord
+/// while off (`Off · Ctrl+Alt+H`).
+fn chip_text(state: State, hotkeys: HotkeyMap) -> String {
+    match state.mode {
+        Mode::Off => format!("Off · {}", hotkeys.toggle_on_off),
+        Mode::Horizontal | Mode::Vertical => hotkeys.toggle_hud.to_string(),
+    }
 }
 
 /// Sequential row layout: pushes a [`HudRow`] at the running cursor, then the
@@ -603,8 +593,8 @@ mod tests {
     }
 
     #[test]
-    fn default_state_rows_are_present_and_ordered_top_to_bottom() {
-        let f = default_frame(State::DEFAULT, 144, &[]);
+    fn active_state_rows_are_present_and_ordered_top_to_bottom() {
+        let f = default_frame(State::with_mode(Mode::Horizontal), 144, &[]);
         assert!(
             f.rows.len() >= 16,
             "expected at least 16 rows (6 baseline + 1 header + 9 hotkeys), got {}",
@@ -616,6 +606,36 @@ mod tests {
                 "rows should be top-to-bottom: {} then {}",
                 w[0].text,
                 w[1].text
+            );
+        }
+    }
+
+    /// While Off, the guide lists only the actionable keys: On/Off, HUD
+    /// detail, and Quit. The adjustment keys (axis/effect/values) are hidden
+    /// because the reducer rejects them anyway.
+    #[test]
+    fn off_state_guide_hides_inactive_hotkeys() {
+        let f = default_frame(State::DEFAULT, 60, &[]);
+        // 6 baseline + 1 header + 3 actionable hotkeys = 10 rows.
+        assert_eq!(f.rows.len(), 10, "rows: {:?}", f.rows);
+        let texts: Vec<&str> = f.rows.iter().map(|r| r.text.as_str()).collect();
+        for present in ["On/Off", "HUD detail", "Quit"] {
+            assert!(
+                texts.iter().any(|t| t.contains(present)),
+                "{present} must stay visible while Off: {texts:?}"
+            );
+        }
+        for hidden in [
+            "Mode cycle",
+            "Effect cycle",
+            "Thicker",
+            "Thinner",
+            "More opaque",
+            "Less opaque",
+        ] {
+            assert!(
+                !texts.iter().any(|t| t.contains(hidden)),
+                "{hidden} must be hidden while Off: {texts:?}"
             );
         }
     }
@@ -773,7 +793,7 @@ mod tests {
             message: "Device rebuilt".to_string(),
             until_ms: 1_000,
         };
-        let f = default_frame(State::DEFAULT, 60, &[warn, info]);
+        let f = default_frame(State::with_mode(Mode::Horizontal), 60, &[warn, info]);
         // 16 baseline+hotkey rows + 2 notifications.
         assert!(f.rows.len() >= 18, "rows: {:?}", f.rows);
         let n1 = &f.rows[f.rows.len() - 2];
@@ -801,8 +821,8 @@ mod tests {
 
     #[test]
     fn empty_notifications_preserve_default_row_count() {
-        let f = default_frame(State::DEFAULT, 60, &[]);
-        // 6 baseline + 1 hotkey header + 9 hotkey rows = 16.
+        let f = default_frame(State::with_mode(Mode::Horizontal), 60, &[]);
+        // While on: 6 baseline + 1 hotkey header + 9 hotkey rows = 16.
         assert_eq!(f.rows.len(), 16);
     }
 
@@ -823,11 +843,11 @@ mod tests {
     /// Update if `HudConfig::DEFAULT` changes.
     #[test]
     fn row_origin_y_pins_default_layout_arithmetic() {
-        let f = default_frame(State::DEFAULT, 60, &[]);
+        let f = default_frame(State::with_mode(Mode::Horizontal), 60, &[]);
         assert_eq!(
             f.rows.len(),
             16,
-            "6 baseline + 1 header + 9 hotkeys expected"
+            "6 baseline + 1 header + 9 hotkeys expected while on"
         );
 
         // panel_top == monitor_top + margin.
@@ -883,43 +903,37 @@ mod tests {
 
     // ---- chip tier ---------------------------------------------------------
 
-    /// While off the chip is a single `Off` row.
+    /// While off the chip is a single row pointing at the restore key.
     #[test]
-    fn chip_shows_off_label_when_mode_is_off() {
+    fn chip_shows_restore_key_when_mode_is_off() {
         let f = chip(State::DEFAULT, &[]);
         assert_eq!(f.rows.len(), 1);
-        assert_eq!(f.rows[0].text, "Off");
+        assert_eq!(
+            f.rows[0].text,
+            format!("Off · {}", HotkeyMap::DEFAULT.toggle_on_off)
+        );
         assert_eq!(f.rows[0].font, HudFontKey::Mono);
     }
 
-    /// While active the chip uses the `H · 28px · 67%` format (0xAA → 67%).
+    /// While active the chip is nothing but the HUD-detail key hint: mode,
+    /// effect, and values are all visible on screen.
     #[test]
-    fn chip_status_text_format_is_pinned() {
-        let f = chip(State::with_mode(Mode::Horizontal), &[]);
-        assert_eq!(f.rows[0].text, "H · 28px · 67%");
-        let v = chip(State::with_mode(Mode::Vertical), &[]);
-        assert!(
-            v.rows[0].text.starts_with("V · "),
-            "text: {}",
-            v.rows[0].text
-        );
+    fn chip_status_text_is_just_the_detail_key_hint() {
+        for mode in [Mode::Horizontal, Mode::Vertical] {
+            let f = chip(State::with_mode(mode), &[]);
+            assert_eq!(f.rows[0].text, HotkeyMap::DEFAULT.toggle_hud);
+        }
     }
 
-    /// Under the Blur effect the chip's third segment shows the blur σ
-    /// instead of the (inert) opacity percentage.
+    /// The chip ignores effect and value state entirely — it stays the same
+    /// key hint under Blur (no σ, no percentages).
     #[test]
-    fn chip_shows_blur_sigma_under_blur_effect() {
+    fn chip_is_state_value_agnostic() {
         use crate::state::SurroundEffect;
         let mut s = State::with_mode(Mode::Horizontal);
         s.config.effect = SurroundEffect::Blur;
         let f = chip(s, &[]);
-        let expected = format!("H · 28px · blur {}px", s.config.blur.to_std_dev().round());
-        assert_eq!(f.rows[0].text, expected);
-        assert!(
-            !f.rows[0].text.contains('%'),
-            "opacity %% must not appear under Blur: {}",
-            f.rows[0].text
-        );
+        assert_eq!(f.rows[0].text, HotkeyMap::DEFAULT.toggle_hud);
     }
 
     /// The chip anchors top-right on integer px boundaries, far smaller than
@@ -1009,7 +1023,7 @@ mod tests {
             message: "second".to_string(),
             until_ms: i64::MAX,
         };
-        let f = default_frame(State::DEFAULT, 60, &[n1, n2]);
+        let f = default_frame(State::with_mode(Mode::Horizontal), 60, &[n1, n2]);
         assert_eq!(f.rows.len(), 18, "16 baseline+hotkey + 2 notification rows");
         let actual_n1 = f.rows[16].origin_y;
         let actual_n2 = f.rows[17].origin_y;
@@ -1041,7 +1055,7 @@ mod tests {
             quit: "Ctrl+Shift+X",
         };
         let f = hud_frame(
-            State::DEFAULT,
+            State::with_mode(Mode::Horizontal),
             HudConfig::DEFAULT,
             monitor(),
             60,

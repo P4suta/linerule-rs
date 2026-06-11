@@ -45,14 +45,14 @@ fn any_state() -> impl Strategy<Value = State> {
 }
 
 proptest! {
-    /// `CycleMode` applied three times is the identity on the mode field.
+    /// `CycleMode` applied twice is the identity on the mode field: an axis
+    /// toggle while on, a rejected no-op while off.
     #[test]
-    fn cycle_mode_has_period_three(mode in any_mode()) {
+    fn cycle_mode_has_period_two(mode in any_mode()) {
         let s = State { mode, ..State::DEFAULT };
         let (a, _) = reduce::apply(s, OverlayAction::CycleMode);
         let (b, _) = reduce::apply(a, OverlayAction::CycleMode);
-        let (c, _) = reduce::apply(b, OverlayAction::CycleMode);
-        prop_assert_eq!(c.mode, mode);
+        prop_assert_eq!(b.mode, mode);
     }
 
     /// `ToggleOnOff` applied twice is the identity on the *full* state.
@@ -85,19 +85,20 @@ proptest! {
         prop_assert_eq!(d.rejected, Some(RejectReason::AdjustWhileOff));
     }
 
-    /// All three adjustment actions are rejected while `Off`, for any
-    /// Off-state `last_active`.
+    /// Every adjustment action (bumps, effect cycle, axis flip) is rejected
+    /// while `Off`, for any Off-state `last_active`.
     #[test]
     fn off_adjustments_are_rejected(
         last in any_active_mode(),
         delta in -1024_i32..1024,
-        which in 0_u8..3,
+        which in 0_u8..4,
     ) {
         let s = State { mode: Mode::Off, last_active: last, ..State::DEFAULT };
         let action = match which {
             0 => OverlayAction::BumpThickness(delta),
             1 => OverlayAction::BumpOpacity(delta),
-            _ => OverlayAction::CycleEffect,
+            2 => OverlayAction::CycleEffect,
+            _ => OverlayAction::CycleMode,
         };
         let (next, d) = reduce::apply(s, action);
         prop_assert_eq!(next, s);
@@ -141,21 +142,15 @@ proptest! {
     /// Cycling to `Off` then toggling restores the mode that was active just
     /// before `Off` — the "last active" semantics, end to end.
     #[test]
-    fn cycle_to_off_then_toggle_restores_last_active(start in any_active_mode()) {
-        let mut s = State::with_mode(Mode::from(start));
-        // Cycle until we land on Off, remembering the last active mode seen.
-        let mut last_seen = start;
-        for _ in 0..3 {
-            if matches!(s.mode, Mode::Off) {
-                break;
-            }
-            last_seen = s.mode.active().expect("active before cycling");
-            let (next, _) = reduce::apply(s, OverlayAction::CycleMode);
-            s = next;
-        }
-        prop_assert_eq!(s.mode, Mode::Off);
-        let (restored, _) = reduce::apply(s, OverlayAction::ToggleOnOff);
-        prop_assert_eq!(restored.mode, Mode::from(last_seen));
+    fn flip_then_toggle_restores_the_flipped_axis(start in any_active_mode()) {
+        let s = State::with_mode(Mode::from(start));
+        // Flip the axis, toggle off, toggle back on: the restored mode must be
+        // the flipped axis (last_active follows the flip).
+        let (flipped, _) = reduce::apply(s, OverlayAction::CycleMode);
+        let (off, _) = reduce::apply(flipped, OverlayAction::ToggleOnOff);
+        prop_assert_eq!(off.mode, Mode::Off);
+        let (restored, _) = reduce::apply(off, OverlayAction::ToggleOnOff);
+        prop_assert_eq!(restored.mode, flipped.mode);
     }
 
     /// Opacity saturating arithmetic is monotonic and stays in range.

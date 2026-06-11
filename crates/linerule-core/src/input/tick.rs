@@ -482,9 +482,9 @@ mod tests {
     }
 
     #[test]
-    fn cycle_mode_emits_log_and_draws_overlay() {
+    fn toggle_on_emits_log_and_draws_overlay() {
         let mut input = input(0);
-        input.drained_hotkeys.push(OverlayAction::CycleMode);
+        input.drained_hotkeys.push(OverlayAction::ToggleOnOff);
         input.polled_cursor = Some(Point::new(100, 100));
         let (next, fx) = step(world(), &input, TELEMETRY, ANIM);
         assert!(matches!(fx[0], TickEffect::LogStateChanged { .. }));
@@ -620,7 +620,7 @@ mod tests {
         let cursor = Some(Point::new(100, 100));
         let mut on = input(0);
         on.polled_cursor = cursor;
-        on.drained_hotkeys.push(OverlayAction::CycleMode);
+        on.drained_hotkeys.push(OverlayAction::ToggleOnOff);
         let (w1, fx1) = step(world(), &on, TELEMETRY, ANIM);
         let s1 = fx1
             .iter()
@@ -699,7 +699,7 @@ mod tests {
         let cursor = Some(Point::new(100, 100));
         let mut on = input(0);
         on.polled_cursor = cursor;
-        on.drained_hotkeys.push(OverlayAction::CycleMode);
+        on.drained_hotkeys.push(OverlayAction::ToggleOnOff);
         let (w1, _) = step(world(), &on, TELEMETRY, ANIM);
         let mut later = input(10_000);
         later.polled_cursor = cursor;

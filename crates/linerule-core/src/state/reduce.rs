@@ -14,12 +14,14 @@ use crate::{
 ///
 /// # Examples
 ///
-/// `CycleMode` advances through Off → Horizontal → Vertical → Off:
+/// `CycleMode` flips the on-screen axis (`Horizontal ⇄ Vertical`); turning
+/// the overlay on or off is `ToggleOnOff`'s job alone:
 ///
 /// ```
 /// use linerule_core::{Mode, OverlayAction, State, state::reduce};
-/// let (next, delta) = reduce::apply(State::DEFAULT, OverlayAction::CycleMode);
-/// assert_eq!(next.mode, Mode::Horizontal);
+/// let on = State::with_mode(Mode::Horizontal);
+/// let (next, delta) = reduce::apply(on, OverlayAction::CycleMode);
+/// assert_eq!(next.mode, Mode::Vertical);
 /// assert!(delta.is_any());
 /// ```
 ///
@@ -46,20 +48,25 @@ use crate::{
 pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
     use OverlayAction as A;
     match action {
-        A::CycleMode => {
-            let mode = state.mode.cycle();
-            // Cycling into an active mode records it as the ToggleOnOff
-            // restore target; cycling to Off keeps the previous one.
-            let last_active = mode.active().unwrap_or(state.last_active);
-            (
-                State {
-                    mode,
-                    last_active,
-                    ..state
-                },
-                StateDelta::mode(mode),
-            )
-        },
+        // Flips the on-screen axis; deriving from `state.mode` (not
+        // `last_active`) also self-heals a state that violated the
+        // mode/last_active invariant. While Off the flip is rejected like the
+        // other adjustments — nothing visible would change.
+        A::CycleMode => state.mode.active().map_or_else(
+            || (state, StateDelta::rejected(RejectReason::AdjustWhileOff)),
+            |axis| {
+                let last_active = axis.toggle();
+                let mode = Mode::from(last_active);
+                (
+                    State {
+                        mode,
+                        last_active,
+                        ..state
+                    },
+                    StateDelta::mode(mode),
+                )
+            },
+        ),
         // Goes through `bump_config`, so cycling while `Off` is rejected with
         // HUD feedback instead of invisibly changing the surround.
         A::CycleEffect => bump_config(state, |c| OverlayConfig {
@@ -175,33 +182,34 @@ mod tests {
     use crate::state::ActiveMode;
 
     #[test]
-    fn cycle_mode_walks_the_three_state_loop() {
-        let s0 = State::DEFAULT;
-        let (s1, _) = apply(s0, OverlayAction::CycleMode);
-        let (s2, _) = apply(s1, OverlayAction::CycleMode);
-        let (s3, _) = apply(s2, OverlayAction::CycleMode);
-        assert_eq!(
-            [s1.mode, s2.mode, s3.mode],
-            [Mode::Horizontal, Mode::Vertical, Mode::Off]
-        );
+    fn cycle_mode_toggles_between_the_two_axes() {
+        let s0 = State::with_mode(Mode::Horizontal);
+        let (s1, d1) = apply(s0, OverlayAction::CycleMode);
+        assert_eq!(s1.mode, Mode::Vertical);
+        assert_eq!(d1.mode, Some(Mode::Vertical));
+        let (s2, d2) = apply(s1, OverlayAction::CycleMode);
+        assert_eq!(s2.mode, Mode::Horizontal);
+        assert_eq!(d2.mode, Some(Mode::Horizontal));
     }
 
     #[test]
-    fn cycle_into_active_updates_last_active() {
-        let s0 = State::DEFAULT;
+    fn cycle_mode_updates_last_active_with_the_axis() {
+        let s0 = State::with_mode(Mode::Horizontal);
         let (s1, _) = apply(s0, OverlayAction::CycleMode);
-        assert_eq!(s1.last_active, ActiveMode::Horizontal);
+        assert_eq!(s1.last_active, ActiveMode::Vertical);
         let (s2, _) = apply(s1, OverlayAction::CycleMode);
-        assert_eq!(s2.last_active, ActiveMode::Vertical);
+        assert_eq!(s2.last_active, ActiveMode::Horizontal);
     }
 
+    /// Mode never reaches `Off` via `CycleMode`; while Off the flip is
+    /// rejected with HUD feedback (turning on is `ToggleOnOff`'s job).
     #[test]
-    fn cycle_to_off_preserves_last_active() {
-        let s = State::with_mode(Mode::Vertical);
-        let (off, d) = apply(s, OverlayAction::CycleMode);
-        assert_eq!(off.mode, Mode::Off);
-        assert_eq!(off.last_active, ActiveMode::Vertical);
-        assert_eq!(d.mode, Some(Mode::Off));
+    fn cycle_mode_is_rejected_when_mode_is_off() {
+        let s = State::DEFAULT;
+        let (next, d) = apply(s, OverlayAction::CycleMode);
+        assert_eq!(next, s);
+        assert!(!d.is_any());
+        assert_eq!(d.rejected, Some(RejectReason::AdjustWhileOff));
     }
 
     #[test]

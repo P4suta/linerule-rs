@@ -41,8 +41,8 @@ fn bench_tick(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("one_cycle_mode", |b| {
-        let input = make_input(vec![OverlayAction::CycleMode]);
+    group.bench_function("one_toggle_on_off", |b| {
+        let input = make_input(vec![OverlayAction::ToggleOnOff]);
         b.iter(|| {
             step(
                 black_box(world),
@@ -55,7 +55,7 @@ fn bench_tick(c: &mut Criterion) {
 
     group.bench_function("three_actions_chain", |b| {
         let input = make_input(vec![
-            OverlayAction::CycleMode,
+            OverlayAction::ToggleOnOff,
             OverlayAction::BumpThickness(8),
             OverlayAction::BumpOpacity(-8),
         ]);
