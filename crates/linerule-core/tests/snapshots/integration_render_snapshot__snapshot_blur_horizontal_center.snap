@@ -20,6 +20,7 @@ OverlayFrame {
                 amount: BlurAmount(
                     111,
                 ),
+                opacity: 255,
             },
         },
         Layer {
@@ -38,6 +39,7 @@ OverlayFrame {
                 amount: BlurAmount(
                     111,
                 ),
+                opacity: 255,
             },
         },
     ],

@@ -102,7 +102,7 @@ impl WinrtCompositionRenderer {
             let Geometry::Rect(rect) = layer.geometry;
             let pooled = &mut self.layers[i];
             if pooled.last_brush != Some(layer.brush) {
-                apply_brush_color(&pooled.kind, layer.brush)?;
+                apply_brush_color(&pooled.visual, &pooled.kind, layer.brush)?;
                 pooled.last_brush = Some(layer.brush);
             }
             if pooled.last_rect != Some(rect) {
@@ -183,13 +183,25 @@ impl WinrtCompositionRenderer {
     }
 }
 
-fn apply_brush_color(kind: &SpriteKind, brush: Brush) -> Result<()> {
+fn apply_brush_color(visual: &SpriteVisual, kind: &SpriteKind, brush: Brush) -> Result<()> {
     match (kind, brush) {
+        // Solid sprites bake all alpha (opacity × master envelope) into the
+        // brush color, so the visual's own opacity is never touched here.
         (SpriteKind::Solid(color_brush), Brush::Solid(c)) => color_brush
             .SetColor(rgba_to_color(c))
             .map_err(map_hr("CompositionColorBrush::SetColor")),
-        // Blur sprites have no color; sigma changes are handled in
-        // rebuild_pool. Other combinations are unreachable, so no-op.
+        // Blur sprites have no color and sigma changes are handled in
+        // rebuild_pool; only the master-envelope opacity is applied here, at
+        // the visual level, so show/hide fades never rebuild the pool. The
+        // perceptual curve matches the Solid path's envelope handling
+        // (`composite_alpha` in linerule-core).
+        (SpriteKind::Blur { .. }, Brush::Blur { opacity, .. }) => visual
+            .SetOpacity(linerule_core::color::perceptual::smooth(
+                f32::from(opacity) / 255.0,
+            ))
+            .map_err(map_hr("SpriteVisual::SetOpacity (blur)")),
+        // Other combinations are unreachable (the pool signature matches the
+        // frame), so no-op.
         _ => Ok(()),
     }
 }

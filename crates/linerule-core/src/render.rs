@@ -150,6 +150,7 @@ fn surround_brush(config: OverlayConfig, sample: OverlaySample) -> Brush {
     if config.effect.is_blur() {
         Brush::Blur {
             amount: config.blur,
+            opacity: sample.master,
         }
     } else {
         let base = mix_rgb(
@@ -398,7 +399,7 @@ mod tests {
             blur: amount,
             ..OverlayConfig::DEFAULT
         };
-        let Brush::Blur { amount: got } =
+        let Brush::Blur { amount: got, .. } =
             settled_frame(Mode::Horizontal, config, Point::new(960, 540)).layers()[0].brush
         else {
             panic!("blur surround must be Brush::Blur");
@@ -407,6 +408,35 @@ mod tests {
             got, amount,
             "surround_brush must thread config.blur into the brush"
         );
+    }
+
+    /// The master envelope reaches the blur brush as its visual-level opacity
+    /// (settled = 255, mid-fade = the sampled byte), so show/hide fades work
+    /// under the Blur effect without rebuilding the sprite pool.
+    #[test]
+    fn blur_brush_carries_the_master_envelope_as_opacity() {
+        let config = OverlayConfig {
+            effect: SurroundEffect::Blur,
+            ..OverlayConfig::DEFAULT
+        };
+        let mut sample = OverlaySample::settled(config);
+        sample.master = 0x40;
+        let f = frame(
+            Mode::Horizontal,
+            config,
+            Point::new(960, 540),
+            monitor(),
+            sample,
+        );
+        let Brush::Blur { opacity, .. } = f.layers()[0].brush else {
+            panic!("blur surround must be Brush::Blur");
+        };
+        assert_eq!(opacity, 0x40, "sample.master must reach Brush::Blur");
+        let settled = settled_frame(Mode::Horizontal, config, Point::new(960, 540));
+        let Brush::Blur { opacity, .. } = settled.layers()[0].brush else {
+            panic!("blur surround must be Brush::Blur");
+        };
+        assert_eq!(opacity, u8::MAX, "settled blur is fully shown");
     }
 
     // ---- Vertical mode ---------------------------------------------------
