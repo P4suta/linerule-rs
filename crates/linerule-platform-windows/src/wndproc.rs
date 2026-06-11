@@ -515,12 +515,12 @@ mod tests {
     }
 
     proptest! {
-        /// The result always lies in `[0, i32::MAX]`.
+        /// The result is never negative (the `i32::MAX` upper bound holds by
+        /// type).
         #[test]
         fn wparam_to_id_stays_in_i32_positive_range(raw in any::<usize>()) {
             let id = wparam_as_hotkey_id(WPARAM(raw));
             prop_assert!(id >= 0);
-            prop_assert!(id <= i32::MAX);
         }
 
         /// Values up to `i32::MAX` are preserved exactly.

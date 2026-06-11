@@ -141,8 +141,8 @@ mod tests {
         assert_eq!((ind.r, ind.g, ind.b), (0xFF, 0xFF, 0xFF));
     }
 
-    /// Pin the `mix_target` mapping: DimBlack = 0 / WhiteWash = 255 / Blur = 0
-    /// (no color veil under blur).
+    /// Pin the `mix_target` mapping: `DimBlack` = 0 / `WhiteWash` = 255 /
+    /// `Blur` = 0 (no color veil under blur).
     #[test]
     fn mix_target_mapping_is_pinned() {
         assert_eq!(SurroundEffect::DimBlack.mix_target(), 0);

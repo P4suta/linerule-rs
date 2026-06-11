@@ -46,7 +46,9 @@ pub fn compute_opacity(
 }
 
 /// Multiplies the distance-fade result ([`compute_opacity`]) by the HUD fade
-/// envelope. The envelope byte goes through the perceptual curve
+/// envelope.
+///
+/// The envelope byte goes through the perceptual curve
 /// ([`perceptual::smooth`]) so the ramp-up looks visually natural.
 /// `envelope == 255` is the identity (steady-state opacity unchanged).
 #[must_use]
