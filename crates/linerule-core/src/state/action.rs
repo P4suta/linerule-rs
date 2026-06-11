@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverlayAction {
-    /// Advance `Mode` through `Off → Horizontal → Vertical → Off`.
+    /// Flip the on-screen axis (`Horizontal ⇄ Vertical`). Rejected while
+    /// `Mode::Off` — turning the overlay on is `ToggleOnOff`'s job alone.
     CycleMode,
     /// Advance `SurroundEffect` through `DimBlack → WhiteWash → Blur →
     /// DimBlack`. Rejected while `Mode::Off` (like the bump actions) — the

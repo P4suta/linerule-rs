@@ -22,7 +22,7 @@ const fn tick(actions: Vec<OverlayAction>, now_ms: i64) -> TickInput {
 }
 
 #[test]
-fn three_cycle_modes_in_one_tick_return_to_off() {
+fn cycle_modes_while_off_are_rejected_and_stay_off() {
     let world = TickWorld::INITIAL;
     let input = tick(
         vec![
@@ -32,14 +32,20 @@ fn three_cycle_modes_in_one_tick_return_to_off() {
         ],
         1_000,
     );
-    let (next, _) = step(world, &input, REFRESH, ANIM);
+    let (next, effects) = step(world, &input, REFRESH, ANIM);
     assert_eq!(next.state.mode, Mode::Off);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, TickEffect::NotifyRejected { .. })),
+        "axis flip while Off must surface a rejection toast"
+    );
 }
 
 #[test]
-fn cycle_mode_in_one_tick_emits_log_and_draw() {
+fn toggle_on_in_one_tick_emits_log_and_draw() {
     let world = TickWorld::INITIAL;
-    let input = tick(vec![OverlayAction::CycleMode], 1_000);
+    let input = tick(vec![OverlayAction::ToggleOnOff], 1_000);
     let (_next, effects) = step(world, &input, REFRESH, ANIM);
     let has_log = effects
         .iter()
@@ -88,7 +94,11 @@ fn empty_tick_in_off_mode_emits_clear_overlay() {
 fn toggle_on_off_after_cycle_yields_clear_overlay() {
     let world = TickWorld::INITIAL;
     let input = tick(
-        vec![OverlayAction::CycleMode, OverlayAction::ToggleOnOff],
+        vec![
+            OverlayAction::ToggleOnOff, // Off → Horizontal
+            OverlayAction::CycleMode,   // Horizontal → Vertical
+            OverlayAction::ToggleOnOff, // Vertical → Off
+        ],
         1_000,
     );
     let (next, effects) = step(world, &input, REFRESH, ANIM);
@@ -145,10 +155,10 @@ fn hud_refresh_fires_on_state_change_even_within_interval() {
     let world = TickWorld::INITIAL;
     // First tick: initial refresh.
     let (after_first, _) = step(world, &tick(vec![], 1_000), REFRESH, ANIM);
-    // Second tick: CycleMode changes state, within interval.
+    // Second tick: ToggleOnOff changes state, within interval.
     let (_, effects) = step(
         after_first,
-        &tick(vec![OverlayAction::CycleMode], 1_001),
+        &tick(vec![OverlayAction::ToggleOnOff], 1_001),
         REFRESH,
         ANIM,
     );

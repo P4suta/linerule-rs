@@ -169,7 +169,7 @@ fn run_overlay(
         duration_ms = duration_ms.unwrap_or(0),
         initial_mode = ?initial_mode,
         initial_effect = ?initial_effect,
-        "overlay running; press Ctrl+Alt+R to cycle modes, Ctrl+Alt+E to cycle effects, Ctrl+Alt+Q to quit"
+        "overlay running; press Ctrl+Alt+H to show, Ctrl+Alt+R to flip the axis, Ctrl+Alt+E to cycle effects, Ctrl+Alt+Q to quit"
     );
     run_message_pump()?;
     Ok(())

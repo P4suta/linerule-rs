@@ -23,18 +23,32 @@ const fn monitor() -> ScreenRect<linerule_core::Logical> {
 }
 
 #[test]
-fn cycle_mode_three_times_returns_to_off() {
+fn cycle_mode_while_off_is_rejected_and_stays_off() {
     let s = run(&[
         OverlayAction::CycleMode,
         OverlayAction::CycleMode,
         OverlayAction::CycleMode,
     ]);
-    assert_eq!(s.mode, Mode::Off);
+    assert_eq!(
+        s.mode,
+        Mode::Off,
+        "CycleMode must never turn the overlay on"
+    );
 }
 
 #[test]
-fn cycle_mode_then_frame_has_layers() {
-    let s = run(&[OverlayAction::CycleMode]);
+fn cycle_mode_twice_while_on_is_the_identity() {
+    let s = run(&[
+        OverlayAction::ToggleOnOff, // Off → Horizontal
+        OverlayAction::CycleMode,   // Horizontal → Vertical
+        OverlayAction::CycleMode,   // Vertical → Horizontal
+    ]);
+    assert_eq!(s.mode, Mode::Horizontal);
+}
+
+#[test]
+fn toggle_on_then_frame_has_layers() {
+    let s = run(&[OverlayAction::ToggleOnOff]);
     assert_eq!(s.mode, Mode::Horizontal);
     let f = frame(
         s.mode,
@@ -48,7 +62,11 @@ fn cycle_mode_then_frame_has_layers() {
 
 #[test]
 fn toggle_on_off_after_cycle_turns_off_and_frame_is_empty() {
-    let s = run(&[OverlayAction::CycleMode, OverlayAction::ToggleOnOff]);
+    let s = run(&[
+        OverlayAction::ToggleOnOff, // Off → Horizontal
+        OverlayAction::CycleMode,   // Horizontal → Vertical
+        OverlayAction::ToggleOnOff, // Vertical → Off
+    ]);
     assert_eq!(s.mode, Mode::Off);
     let f = frame(
         s.mode,
@@ -63,7 +81,7 @@ fn toggle_on_off_after_cycle_turns_off_and_frame_is_empty() {
 #[test]
 fn toggle_on_off_twice_restores_the_active_mode() {
     let s = run(&[
-        OverlayAction::CycleMode,   // Off → Horizontal
+        OverlayAction::ToggleOnOff, // Off → Horizontal
         OverlayAction::CycleMode,   // Horizontal → Vertical
         OverlayAction::ToggleOnOff, // Vertical → Off (remembers Vertical)
         OverlayAction::ToggleOnOff, // Off → Vertical
@@ -94,9 +112,9 @@ fn bump_thickness_accumulates_with_repeated_application() {
 #[test]
 fn bump_then_undo_returns_to_starting_thickness() {
     let start = State::with_mode(Mode::Horizontal);
-    // CycleMode first: bumps are rejected while Off, so enter an active mode.
+    // ToggleOnOff first: bumps are rejected while Off, so enter an active mode.
     let s = run(&[
-        OverlayAction::CycleMode,
+        OverlayAction::ToggleOnOff,
         OverlayAction::BumpThickness(8),
         OverlayAction::BumpThickness(-8),
     ]);
