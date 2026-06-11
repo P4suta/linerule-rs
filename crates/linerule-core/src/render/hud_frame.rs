@@ -224,7 +224,9 @@ pub fn hud_frame(
 /// Layout for the full panel (with the hotkey guide).
 #[allow(
     clippy::too_many_arguments,
-    reason = "same flat-input rationale as `hud_frame`"
+    clippy::too_many_lines,
+    reason = "row construction is a sequential layout walk; splitting it would \
+              thread the `y` cursor through helpers and read worse"
 )]
 fn full_frame(
     state: State,
@@ -360,7 +362,7 @@ fn full_frame(
 }
 
 /// Average monospace advance width (em ratio), used to estimate chip width.
-/// Lets core finish layout without DWrite measurements — Cascadia Mono's
+/// Lets core finish layout without `DWrite` measurements — Cascadia Mono's
 /// advance is roughly 0.6em; we err on the wide side.
 const MONO_ADVANCE_RATIO: f32 = 0.62;
 
@@ -822,7 +824,11 @@ mod tests {
     #[test]
     fn row_origin_y_pins_default_layout_arithmetic() {
         let f = default_frame(State::DEFAULT, 60, &[]);
-        assert_eq!(f.rows.len(), 16, "6 baseline + 1 header + 9 hotkeys expected");
+        assert_eq!(
+            f.rows.len(),
+            16,
+            "6 baseline + 1 header + 9 hotkeys expected"
+        );
 
         // panel_top == monitor_top + margin.
         assert!(

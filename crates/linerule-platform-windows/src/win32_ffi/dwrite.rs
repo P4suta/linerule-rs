@@ -116,6 +116,11 @@ pub struct HudDrawRule {
 ///
 /// # Errors
 /// When brush creation fails.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one draw call per HUD frame; the args mirror the HudFrame fields \
+              and a grouping struct would just restate them"
+)]
 pub fn draw_hud_rows(
     dc: &ID2D1DeviceContext,
     offset: windows::Win32::Foundation::POINT,

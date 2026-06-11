@@ -36,7 +36,7 @@ pub struct OverlayAnim {
     pub thickness: Transition<u16>,
     /// Mask opacity byte (pre-perceptual).
     pub mask_alpha: Transition<u8>,
-    /// Style crossfade (`0` = DimBlack, `255` = WhiteWash).
+    /// Style crossfade (`0` = `DimBlack`, `255` = `WhiteWash`).
     pub style_mix: Transition<u8>,
 }
 
@@ -69,10 +69,11 @@ impl OverlayAnim {
     }
 }
 
-/// HUD presentation view-state. Lives in `TickWorld` rather than `State`:
-/// it is irrelevant to the reducer and `render::frame`, and carries
-/// time-coupled display state (`boot_at_ms`) — same family as
-/// `last_hud_refresh_at_ms`.
+/// HUD presentation view-state.
+///
+/// Lives in `TickWorld` rather than `State`: it is irrelevant to the reducer
+/// and `render::frame`, and carries time-coupled display state (`boot_at_ms`)
+/// — same family as `last_hud_refresh_at_ms`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct HudView {
     /// Current presentation tier (chip / full).
