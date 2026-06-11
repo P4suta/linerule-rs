@@ -11,8 +11,8 @@ use serde::Serialize;
 pub struct HotkeyMap {
     /// Chord that triggers `OverlayAction::CycleMode`.
     pub cycle_mode: &'static str,
-    /// Chord that triggers `OverlayAction::ToggleVisible`.
-    pub toggle_visible: &'static str,
+    /// Chord that triggers `OverlayAction::ToggleOnOff`.
+    pub toggle_on_off: &'static str,
     /// Chord that bumps thickness up.
     pub thicker: &'static str,
     /// Chord that bumps thickness down.
@@ -21,6 +21,10 @@ pub struct HotkeyMap {
     pub more_opaque: &'static str,
     /// Chord that bumps opacity down.
     pub less_opaque: &'static str,
+    /// Chord that triggers `OverlayAction::CycleStyle` (surround style cycle).
+    pub style_cycle: &'static str,
+    /// Chord that triggers `OverlayAction::ToggleHudDetail` (chip ⇄ full HUD).
+    pub toggle_hud: &'static str,
     /// Chord that triggers `OverlayAction::Quit`.
     pub quit: &'static str,
 }
@@ -36,11 +40,14 @@ impl HotkeyMap {
     /// Arrow keys (`VK_UP/DOWN/LEFT/RIGHT`) are layout-independent.
     pub const DEFAULT: Self = Self {
         cycle_mode: "Ctrl+Alt+R",
-        toggle_visible: "Ctrl+Alt+H",
+        toggle_on_off: "Ctrl+Alt+H",
         thicker: "Ctrl+Alt+Up",
         thinner: "Ctrl+Alt+Down",
         more_opaque: "Ctrl+Alt+Right",
         less_opaque: "Ctrl+Alt+Left",
+        style_cycle: "Ctrl+Alt+S",
+        // 英字キー固定: OEM キーは IME / layout で VK が化ける (struct doc 参照)。
+        toggle_hud: "Ctrl+Alt+K",
         quit: "Ctrl+Alt+Q",
     };
 }

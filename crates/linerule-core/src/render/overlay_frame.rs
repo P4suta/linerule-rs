@@ -14,6 +14,23 @@ use crate::{
 pub enum Brush {
     /// Fill the shape with a single sRGB color.
     Solid(Rgba),
+    /// Reserved: blur the content *behind* the shape, then overlay `tint`.
+    ///
+    /// The renderer does not emit this variant yet — the cheap surround styles
+    /// (`Dim` / `Bright`) are expressed as [`Brush::Solid`]. It exists so the
+    /// follow-up Gaussian-blur surround (screen capture → D2D
+    /// `CLSID_D2D1GaussianBlur` → tinted overlay) is a render-only change with
+    /// the ADT already in place. The platform layer falls back to filling with
+    /// `tint` until that path lands.
+    ///
+    /// `radius_px` is an integer (logical pixels) so `Brush` keeps deriving
+    /// `Eq`/`Hash` (an `f32` radius would forfeit both).
+    Blur {
+        /// Gaussian blur radius in logical pixels.
+        radius_px: u16,
+        /// Color overlaid on top of the blurred content (e.g. a faint dim).
+        tint: Rgba,
+    },
 }
 
 /// Shape of a layer. Currently axis-aligned rectangles in logical space; new

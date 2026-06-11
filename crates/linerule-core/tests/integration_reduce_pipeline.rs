@@ -4,7 +4,9 @@
 //! multi-step action sequences. This is the pure-stack equivalent of
 //! "press Ctrl+Alt+R three times in a row" without the OS layer.
 
-use linerule_core::{Mode, OverlayAction, Point, ScreenRect, State, frame, state::reduce};
+use linerule_core::{
+    Mode, OverlayAction, OverlaySample, Point, ScreenRect, State, frame, state::reduce,
+};
 
 fn run(actions: &[OverlayAction]) -> State {
     let mut s = State::DEFAULT;
@@ -33,17 +35,43 @@ fn cycle_mode_three_times_returns_to_off() {
 fn cycle_mode_then_frame_has_layers() {
     let s = run(&[OverlayAction::CycleMode]);
     assert_eq!(s.mode, Mode::Horizontal);
-    let f = frame(s, Point::new(960, 540), monitor());
+    let f = frame(
+        s.mode,
+        s.config,
+        Point::new(960, 540),
+        monitor(),
+        OverlaySample::settled(s.config),
+    );
     assert!(!f.is_empty(), "Horizontal mode should produce layers");
 }
 
 #[test]
-fn toggle_visible_then_frame_is_empty_even_in_active_mode() {
-    let s = run(&[OverlayAction::CycleMode, OverlayAction::ToggleVisible]);
-    assert_eq!(s.mode, Mode::Horizontal);
-    assert!(!s.visible);
-    let f = frame(s, Point::new(960, 540), monitor());
-    assert!(f.is_empty(), "invisible state must produce an empty frame");
+fn toggle_on_off_after_cycle_turns_off_and_frame_is_empty() {
+    let s = run(&[OverlayAction::CycleMode, OverlayAction::ToggleOnOff]);
+    assert_eq!(s.mode, Mode::Off);
+    let f = frame(
+        s.mode,
+        s.config,
+        Point::new(960, 540),
+        monitor(),
+        OverlaySample::settled(s.config),
+    );
+    assert!(f.is_empty(), "Off must produce an empty frame");
+}
+
+#[test]
+fn toggle_on_off_twice_restores_the_active_mode() {
+    let s = run(&[
+        OverlayAction::CycleMode,   // Off → Horizontal
+        OverlayAction::CycleMode,   // Horizontal → Vertical
+        OverlayAction::ToggleOnOff, // Vertical → Off (remembers Vertical)
+        OverlayAction::ToggleOnOff, // Off → Vertical
+    ]);
+    assert_eq!(
+        s.mode,
+        Mode::Vertical,
+        "restore must target the last active mode"
+    );
 }
 
 #[test]
@@ -64,11 +92,10 @@ fn bump_thickness_accumulates_with_repeated_application() {
 
 #[test]
 fn bump_then_undo_returns_to_starting_thickness() {
-    let start = State {
-        mode: Mode::Horizontal,
-        ..State::DEFAULT
-    };
+    let start = State::with_mode(Mode::Horizontal);
+    // CycleMode first: bumps are rejected while Off, so enter an active mode.
     let s = run(&[
+        OverlayAction::CycleMode,
         OverlayAction::BumpThickness(8),
         OverlayAction::BumpThickness(-8),
     ]);

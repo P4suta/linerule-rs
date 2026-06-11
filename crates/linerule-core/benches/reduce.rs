@@ -19,11 +19,11 @@ fn bench_reduce(c: &mut Criterion) {
             )
         });
     });
-    group.bench_function("toggle_visible", |b| {
+    group.bench_function("toggle_on_off", |b| {
         b.iter(|| {
             reduce::apply(
                 black_box(State::DEFAULT),
-                black_box(OverlayAction::ToggleVisible),
+                black_box(OverlayAction::ToggleOnOff),
             )
         });
     });

@@ -12,7 +12,9 @@
 
 use linerule_core::Rgba;
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
-use windows::Win32::Graphics::Direct2D::{D2D1_DRAW_TEXT_OPTIONS_NONE, ID2D1SolidColorBrush};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ROUNDED_RECT, ID2D1SolidColorBrush,
+};
 use windows::Win32::Graphics::DirectComposition::IDCompositionSurface;
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -96,24 +98,40 @@ pub struct HudDrawRow<'a> {
     pub color: Rgba,
 }
 
-/// `IDCompositionSurface` の中身を「背景クリア + 複数行テキスト描画」で更新する。
+/// テキスト以外の塗り矩形 1 本 (divider 等) の描画指示。
+pub struct HudDrawRule {
+    /// surface-local の塗り矩形（logical px / surface 原点起点）。
+    pub rect: D2D_RECT_F,
+    /// 塗り色（straight alpha）。
+    pub color: Rgba,
+}
+
+/// `IDCompositionSurface` の中身を「透明クリア + 角丸パネル塗り + divider 塗り +
+/// 複数行テキスト描画」で更新する。
 ///
-/// `BeginDraw (DComp) → Clear → DrawText× → EndDraw (DComp)` の標準シーケンスを
-/// 1 関数に閉じ込め、呼び出し側を `#![forbid(unsafe_code)]` で書けるようにする。
-/// DComp surface tile を render target に bind する責務と D2D drawing session の
-/// 開始/終了は `begin_dcomp_draw_d2d` / `end_dcomp_draw` 側で完結するため、本関数
-/// では D2D context の `BeginDraw` / `EndDraw` を呼ばない (ADR-0006 + MS Docs
+/// `BeginDraw (DComp) → Clear → FillRoundedRectangle → FillRectangle× →
+/// DrawText× → EndDraw (DComp)` の標準シーケンスを 1 関数に閉じ込め、呼び出し側を
+/// `#![forbid(unsafe_code)]` で書けるようにする。DComp surface tile を render
+/// target に bind する責務と D2D drawing session の開始/終了は
+/// `begin_dcomp_draw_d2d` / `end_dcomp_draw` 側で完結するため、本関数では D2D
+/// context の `BeginDraw` / `EndDraw` を呼ばない (ADR-0006 + MS Docs
 /// `IDCompositionSurface::BeginDraw`、graphics::fill_surface 参照)。
 ///
-/// `opacity` (0.0–1.0) は背景・各行色の alpha に乗算する形で適用される。dcomp の
-/// visual 単位 opacity を使わない理由は `graphics.rs` のコメント参照。
+/// 背景は surface 全面の `Clear` ではなく `panel` 矩形への角丸塗りで描く。
+/// 角丸の外側は透明のまま残り、下の overlay が透ける (Fluent 風)。
+///
+/// `opacity` (0.0–1.0) は背景・divider・各行色の alpha に乗算する形で適用される。
+/// dcomp の visual 単位 opacity を使わない理由は `graphics.rs` のコメント参照。
 ///
 /// # Errors
 /// 各 COM 呼び出しが失敗したとき。
 pub fn draw_hud_to_surface(
     surface: &IDCompositionSurface,
     background: Rgba,
+    panel: D2D_RECT_F,
+    corner_radius: f32,
     opacity: f32,
+    rules: &[HudDrawRule],
     rows: &[HudDrawRow<'_>],
 ) -> Result<()> {
     let opacity = opacity.clamp(0.0, 1.0);
@@ -122,6 +140,12 @@ pub fn draw_hud_to_surface(
         "IDCompositionSurface::BeginDraw (HUD)",
     )?;
 
+    let transparent = D2D1_COLOR_F {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 0.0,
+    };
     let bg = color_to_premultiplied_f(scale_alpha(background, opacity));
     // SAFETY: dc / surface valid。DComp::BeginDraw が D2D drawing session を既に
     // 開いているので、context に描画コマンドだけを発行する。surface.EndDraw で
@@ -139,7 +163,33 @@ pub fn draw_hud_to_surface(
             M31: offset.x as f32,
             M32: offset.y as f32,
         });
-        dc.Clear(Some(&bg));
+        dc.Clear(Some(&transparent));
+
+        let bg_brush: ID2D1SolidColorBrush =
+            dc.CreateSolidColorBrush(&bg, None)
+                .map_err(|e| PlatformError::BadHr {
+                    operation: "ID2D1DeviceContext::CreateSolidColorBrush (HUD bg)",
+                    hr: e.code().0,
+                })?;
+        dc.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: panel,
+                radiusX: corner_radius,
+                radiusY: corner_radius,
+            },
+            &bg_brush,
+        );
+
+        for rule in rules {
+            let rule_color = color_to_premultiplied_f(scale_alpha(rule.color, opacity));
+            let brush: ID2D1SolidColorBrush =
+                dc.CreateSolidColorBrush(&rule_color, None)
+                    .map_err(|e| PlatformError::BadHr {
+                        operation: "ID2D1DeviceContext::CreateSolidColorBrush (HUD rule)",
+                        hr: e.code().0,
+                    })?;
+            dc.FillRectangle(&rule.rect, &brush);
+        }
 
         for row in rows {
             let brush_color = color_to_premultiplied_f(scale_alpha(row.color, opacity));

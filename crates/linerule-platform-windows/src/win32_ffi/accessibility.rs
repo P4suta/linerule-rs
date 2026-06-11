@@ -29,6 +29,7 @@ use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWi
 use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_SYSTEM_FOREGROUND, HWND_TOPMOST, PostMessageW, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    WS_EX_TOPMOST,
 };
 
 use crate::error::{PlatformError, Result};
@@ -85,9 +86,25 @@ pub fn unhook_win_event(hook: HWINEVENTHOOK) -> Result<()> {
     Ok(())
 }
 
+/// `GWL_EXSTYLE` の `WS_EX_TOPMOST` bit が立っているか。OS は window が
+/// topmost バンドに居る間この bit を維持するので、「再 assert が必要か」の
+/// 判定に使える。
+#[must_use]
+pub fn is_topmost(hwnd: HWND) -> bool {
+    let bits = u32::try_from(crate::win32_ffi::get_ex_style(hwnd)).unwrap_or(u32::MAX);
+    bits & WS_EX_TOPMOST.0 != 0
+}
+
 /// `SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)`。
 /// overlay の z-order を最前面に戻す。focus は奪わない。位置/サイズは不変。
+///
+/// 既に `WS_EX_TOPMOST` が立っている (= topmost バンド在籍中の) window へは
+/// no-op で early return する。前景変化のたびに無条件で `SetWindowPos` を呼ぶ
+/// と DWM の z-order churn で一瞬のチラつきが出るため、必要なときだけ呼ぶ。
 pub fn reassert_topmost(hwnd: HWND) -> Result<()> {
+    if is_topmost(hwnd) {
+        return Ok(());
+    }
     let flags: SET_WINDOW_POS_FLAGS = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
     // SAFETY: hwnd は OverlayWindow 由来の valid HWND。HWND_TOPMOST は WinAPI 定数。
     unsafe { SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags) }.map_err(|e| {

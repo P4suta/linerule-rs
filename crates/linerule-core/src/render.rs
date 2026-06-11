@@ -9,61 +9,105 @@ pub mod hud_frame;
 pub mod overlay_frame;
 
 pub use hud_frame::{
-    HudFontKey, HudFrame, HudNotification, HudRow, HudTelemetry, NotificationClass, hud_frame,
+    HudFontKey, HudFrame, HudNotification, HudRow, HudRule, HudTelemetry, HudTier,
+    NotificationClass, hud_frame,
 };
 pub use overlay_frame::{Brush, Geometry, Layer, OverlayFrame};
+// `OverlaySample` is defined below in this file (the renderer owns the
+// contract for its interpolated inputs).
+
+use serde::Serialize;
 
 use crate::{
-    color::{Opacity, Rgba},
+    anim::Lerp,
+    color::{Rgba, perceptual},
     config::OverlayConfig,
     geometry::{Logical, Point, ScreenRect},
-    state::{Mode, State},
+    state::Mode,
 };
 
-// Mode-aware indicator: a slim bar oriented along the active axis (horizontal
-// mode → 18×4 horizontal bar, vertical mode → 4×18 vertical bar). Matches the
-// C# implementation's `IndicatorLong` / `IndicatorShort` convention so the
-// user can tell the axis at a glance from the indicator alone.
-const INDICATOR_LONG: u32 = 18;
-const INDICATOR_SHORT: u32 = 4;
-const INDICATOR_MARGIN: i32 = 12;
+// 旧 C# 版から引き継いだ 18×4px のモードインジケータは廃止した。HUD の常駐
+// チップ (`crate::render::hud_frame::HudTier::Chip`) が同じ右上でモード文字 +
+// 数値を示す上位互換のため (同じ角に 2 つのモード表示はノイズ)。
+
+/// Per-tick interpolated render inputs, produced by the tick pipeline's
+/// transition channels (`crate::input::tick`). Integers only so the carrying
+/// `TickEffect` stays `Eq + Hash`.
+///
+/// At steady state (`OverlaySample::settled`) the output of [`frame`] is
+/// byte-identical to rendering straight from the config — transitions never
+/// change where a settled frame lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct OverlaySample {
+    /// Master envelope `0..=255`: show/hide / mode-switch fade. `255` = fully
+    /// shown. Applied perceptually ([`perceptual::smooth`]) to all alpha.
+    pub master: u8,
+    /// Current slit thickness in logical px (glides during bumps).
+    pub thickness_px: u16,
+    /// Current mask opacity byte (pre-perceptual, same domain as
+    /// [`crate::color::Opacity::get`]).
+    pub mask_alpha: u8,
+    /// Style crossfade `0..=255`: `0` = Dim mask color, `255` = Bright.
+    pub style_mix: u8,
+}
+
+impl OverlaySample {
+    /// Sample with every channel settled at the config's values — renders
+    /// byte-identically to the pre-transition pipeline.
+    #[must_use]
+    pub const fn settled(config: OverlayConfig) -> Self {
+        Self {
+            master: u8::MAX,
+            thickness_px: config.thickness.get(),
+            mask_alpha: config.opacity.get(),
+            style_mix: config.surround_style.mix_target(),
+        }
+    }
+}
 
 /// Build the frame for the current tick.
 ///
 /// `cursor` is the latest cursor position polled from the OS; `monitor` is
 /// the bounding rect of the screen the cursor is on. Both are in logical
-/// pixels.
+/// pixels. Takes `mode` + `config` (mirroring the `DrawOverlay` effect
+/// payload) instead of a full `State` so the platform layer never has to
+/// fabricate one. `sample` carries the interpolated per-tick values
+/// (thickness / alpha / style crossfade / master envelope).
 ///
 /// # Examples
 ///
 /// `Mode::Off` (the default) renders nothing:
 ///
 /// ```
-/// use linerule_core::{frame, Point, ScreenRect, State};
+/// use linerule_core::{frame, Mode, OverlayConfig, OverlaySample, Point, ScreenRect};
 /// let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
-/// let out = frame(State::DEFAULT, Point::new(0, 0), monitor);
+/// let sample = OverlaySample::settled(OverlayConfig::DEFAULT);
+/// let out = frame(Mode::Off, OverlayConfig::DEFAULT, Point::new(0, 0), monitor, sample);
 /// assert!(out.is_empty());
 /// ```
 ///
-/// In an active mode, the frame has the two dim halves plus the indicator
-/// (three layers total when the cursor is in the middle of the screen):
+/// In an active mode, the frame has the two dim halves (two layers total
+/// when the cursor is in the middle of the screen):
 ///
 /// ```
-/// use linerule_core::{frame, Mode, Point, ScreenRect, State};
+/// use linerule_core::{frame, Mode, OverlayConfig, OverlaySample, Point, ScreenRect};
 /// let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
-/// let state = State { mode: Mode::Horizontal, ..State::DEFAULT };
-/// let out = frame(state, Point::new(960, 540), monitor);
-/// assert_eq!(out.layer_count(), 3);
+/// let sample = OverlaySample::settled(OverlayConfig::DEFAULT);
+/// let out = frame(Mode::Horizontal, OverlayConfig::DEFAULT, Point::new(960, 540), monitor, sample);
+/// assert_eq!(out.layer_count(), 2);
 /// ```
 #[must_use]
-pub fn frame(state: State, cursor: Point<Logical>, monitor: ScreenRect<Logical>) -> OverlayFrame {
-    if !state.visible {
-        return OverlayFrame::EMPTY;
-    }
-    match state.mode {
+pub fn frame(
+    mode: Mode,
+    config: OverlayConfig,
+    cursor: Point<Logical>,
+    monitor: ScreenRect<Logical>,
+    sample: OverlaySample,
+) -> OverlayFrame {
+    match mode {
         Mode::Off => OverlayFrame::EMPTY,
-        Mode::Horizontal => slit_frame(Axis::Horizontal, cursor, monitor, state.config),
-        Mode::Vertical => slit_frame(Axis::Vertical, cursor, monitor, state.config),
+        Mode::Horizontal => slit_frame(Axis::Horizontal, cursor, monitor, config, sample),
+        Mode::Vertical => slit_frame(Axis::Vertical, cursor, monitor, config, sample),
     }
 }
 
@@ -78,26 +122,59 @@ fn slit_frame(
     cursor: Point<Logical>,
     monitor: ScreenRect<Logical>,
     config: OverlayConfig,
+    sample: OverlaySample,
 ) -> OverlayFrame {
-    let mask = mask_color(config);
-    let thickness = i32::from(config.thickness.get());
+    let mask = mask_color(config, sample);
+    let thickness = i32::from(sample.thickness_px);
     let (before, after) = split_around(axis_value(axis, cursor), thickness);
 
-    let mut layers = Vec::with_capacity(3);
+    let mut layers = Vec::with_capacity(2);
     if let Some(layer) = dim_half(axis, monitor, DimSide::Before, before, mask) {
         layers.push(layer);
     }
     if let Some(layer) = dim_half(axis, monitor, DimSide::After, after, mask) {
         layers.push(layer);
     }
-    layers.push(indicator_layer(axis, monitor));
     OverlayFrame::from_layers(layers)
 }
 
-fn mask_color(config: OverlayConfig) -> Rgba {
-    config
-        .mask_color
-        .with_alpha(config.opacity.to_perceptual_byte())
+fn mask_color(config: OverlayConfig, sample: OverlaySample) -> Rgba {
+    // `style_mix` crossfades the *base* RGB between the configured dark mask
+    // (Dim, also the Blur fallback) and the bright wash; the alpha comes from
+    // the interpolated opacity byte, scaled by the master envelope.
+    let base = mix_rgb(config.mask_color, Rgba::BRIGHT_MASK, sample.style_mix);
+    base.with_alpha(composite_alpha(sample.mask_alpha, sample.master))
+}
+
+/// Per-channel RGB crossfade by `mix ∈ 0..=255` (alpha is set by the caller).
+fn mix_rgb(from: Rgba, to: Rgba, mix: u8) -> Rgba {
+    let t = f32::from(mix) / 255.0;
+    Rgba::new(
+        u8::lerp(from.r, to.r, t),
+        u8::lerp(from.g, to.g, t),
+        u8::lerp(from.b, to.b, t),
+        0,
+    )
+}
+
+/// Perceptual alpha composition: the stored opacity byte goes through the
+/// CIE L\* curve (exactly like [`crate::color::Opacity::to_perceptual_byte`])
+/// and the master envelope is applied on top through the gamma curve. At
+/// `master == 255` the envelope factor is exactly `1.0`, so the result is
+/// byte-identical to `to_perceptual_byte()` — settled frames don't drift.
+fn composite_alpha(mask_alpha: u8, master: u8) -> u8 {
+    let linear = f32::from(mask_alpha) / 255.0;
+    let envelope = perceptual::smooth(f32::from(master) / 255.0);
+    let scaled = (perceptual::l_star(linear) * envelope * 255.0)
+        .clamp(0.0, 255.0)
+        .round();
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "scaled is finite and clamped to [0, 255]"
+    )]
+    let byte = scaled as u8;
+    byte
 }
 
 pub(crate) const fn axis_value(axis: Axis, cursor: Point<Logical>) -> i32 {
@@ -158,64 +235,49 @@ pub(crate) fn band(left: i32, top: i32, right: i32, bottom: i32) -> Option<Scree
     Some(ScreenRect::new(Point::new(left, top), width, height))
 }
 
-fn indicator_layer(axis: Axis, monitor: ScreenRect<Logical>) -> Layer {
-    let (width, height) = match axis {
-        Axis::Horizontal => (INDICATOR_LONG, INDICATOR_SHORT),
-        Axis::Vertical => (INDICATOR_SHORT, INDICATOR_LONG),
-    };
-    let w_i32 = i32::try_from(width).unwrap_or(i32::MAX);
-    let x = monitor.right() - INDICATOR_MARGIN - w_i32;
-    let y = monitor.top() + INDICATOR_MARGIN;
-    let alpha = Opacity::INDICATOR_DEFAULT.to_perceptual_byte();
-    Layer::solid_rect(
-        ScreenRect::new(Point::new(x, y), width, height),
-        Rgba::WHITE.with_alpha(alpha),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SurroundStyle;
 
     fn monitor() -> ScreenRect<Logical> {
         ScreenRect::new(Point::new(0, 0), 1920, 1080)
     }
 
+    /// 定常状態 (`OverlaySample::settled`) で `frame` を呼ぶ test helper。
+    fn settled_frame(mode: Mode, config: OverlayConfig, cursor: Point<Logical>) -> OverlayFrame {
+        frame(
+            mode,
+            config,
+            cursor,
+            monitor(),
+            OverlaySample::settled(config),
+        )
+    }
+
     #[test]
     fn off_mode_emits_empty_frame() {
-        let s = State::DEFAULT;
-        let f = frame(s, Point::new(0, 0), monitor());
+        let f = settled_frame(Mode::Off, OverlayConfig::DEFAULT, Point::new(0, 0));
         assert!(f.is_empty());
     }
 
     #[test]
-    fn hidden_state_emits_empty_frame() {
-        let s = State {
-            mode: Mode::Horizontal,
-            visible: false,
-            ..State::DEFAULT
-        };
-        let f = frame(s, Point::new(960, 540), monitor());
-        assert!(f.is_empty());
-    }
-
-    #[test]
-    fn horizontal_mode_emits_three_layers() {
-        let s = State {
-            mode: Mode::Horizontal,
-            ..State::DEFAULT
-        };
-        let f = frame(s, Point::new(960, 540), monitor());
-        assert_eq!(f.layer_count(), 3);
+    fn horizontal_mode_emits_two_dim_layers() {
+        let f = settled_frame(
+            Mode::Horizontal,
+            OverlayConfig::DEFAULT,
+            Point::new(960, 540),
+        );
+        assert_eq!(f.layer_count(), 2);
     }
 
     #[test]
     fn horizontal_layers_cover_full_width() {
-        let s = State {
-            mode: Mode::Horizontal,
-            ..State::DEFAULT
-        };
-        let f = frame(s, Point::new(960, 540), monitor());
+        let f = settled_frame(
+            Mode::Horizontal,
+            OverlayConfig::DEFAULT,
+            Point::new(960, 540),
+        );
         let bands = f
             .layers()
             .iter()
@@ -231,51 +293,61 @@ mod tests {
 
     #[test]
     fn dim_half_at_top_edge_is_dropped() {
-        let s = State {
-            mode: Mode::Horizontal,
-            ..State::DEFAULT
+        let f = settled_frame(Mode::Horizontal, OverlayConfig::DEFAULT, Point::new(960, 0));
+        assert!(f.layer_count() <= 2);
+    }
+
+    // ---- surround style (Dim / Bright) -----------------------------------
+
+    fn surround_brush(mode: Mode, style: SurroundStyle) -> Rgba {
+        let config = OverlayConfig {
+            surround_style: style,
+            ..OverlayConfig::DEFAULT
         };
-        let f = frame(s, Point::new(960, 0), monitor());
-        assert!(f.layer_count() <= 3);
+        let f = settled_frame(mode, config, Point::new(960, 540));
+        // The first layer is a dim/bright surround half (cursor centered ⇒
+        // two halves).
+        match f.layers()[0].brush {
+            Brush::Solid(c) => c,
+            Brush::Blur { .. } => panic!("surround must be a solid brush in cheap styles"),
+        }
     }
 
     #[test]
-    fn indicator_uses_white_with_perceptual_alpha() {
-        let s = State {
-            mode: Mode::Horizontal,
-            ..State::DEFAULT
-        };
-        let f = frame(s, Point::new(960, 540), monitor());
-        let indicator = f.layers().last().expect("non-empty");
-        match indicator.brush {
-            Brush::Solid(c) => {
-                assert_eq!(c.r, 0xFF);
-                assert_eq!(c.g, 0xFF);
-                assert_eq!(c.b, 0xFF);
-                assert!(c.a > 0);
-            },
-        }
+    fn dim_style_keeps_the_dark_mask_color() {
+        let c = surround_brush(Mode::Horizontal, SurroundStyle::Dim);
+        assert_eq!((c.r, c.g, c.b), (0x00, 0x00, 0x00));
+        assert!(c.a > 0);
+    }
+
+    #[test]
+    fn bright_style_washes_the_surround_white() {
+        let c = surround_brush(Mode::Horizontal, SurroundStyle::Bright);
+        assert_eq!((c.r, c.g, c.b), (0xFF, 0xFF, 0xFF));
+        assert!(c.a > 0, "bright surround keeps the opacity-derived alpha");
+    }
+
+    #[test]
+    fn dim_and_bright_surrounds_differ() {
+        let dim = surround_brush(Mode::Horizontal, SurroundStyle::Dim);
+        let bright = surround_brush(Mode::Horizontal, SurroundStyle::Bright);
+        assert_ne!(
+            dim, bright,
+            "the surround fill must visibly change between styles"
+        );
     }
 
     // ---- Vertical mode (was previously untested) -------------------------
 
     #[test]
-    fn vertical_mode_emits_three_layers() {
-        let s = State {
-            mode: Mode::Vertical,
-            ..State::DEFAULT
-        };
-        let f = frame(s, Point::new(960, 540), monitor());
-        assert_eq!(f.layer_count(), 3);
+    fn vertical_mode_emits_two_dim_layers() {
+        let f = settled_frame(Mode::Vertical, OverlayConfig::DEFAULT, Point::new(960, 540));
+        assert_eq!(f.layer_count(), 2);
     }
 
     #[test]
     fn vertical_layers_cover_full_height() {
-        let s = State {
-            mode: Mode::Vertical,
-            ..State::DEFAULT
-        };
-        let f = frame(s, Point::new(960, 540), monitor());
+        let f = settled_frame(Mode::Vertical, OverlayConfig::DEFAULT, Point::new(960, 540));
         let bands = f
             .layers()
             .iter()
@@ -291,13 +363,9 @@ mod tests {
 
     #[test]
     fn vertical_dim_at_left_edge_is_dropped() {
-        let s = State {
-            mode: Mode::Vertical,
-            ..State::DEFAULT
-        };
-        let f = frame(s, Point::new(0, 540), monitor());
-        // The left dim band collapses (zero width), leaving the right dim + indicator.
-        assert!(f.layer_count() <= 3);
+        let f = settled_frame(Mode::Vertical, OverlayConfig::DEFAULT, Point::new(0, 540));
+        // The left dim band collapses (zero width), leaving the right dim.
+        assert!(f.layer_count() <= 2);
     }
 
     // ---- axis_value / split_around / band helpers ------------------------
@@ -354,40 +422,100 @@ mod tests {
         assert_eq!(r.height, 50);
     }
 
-    // ---- mode-aware indicator shape (cs parity) --------------------------
+    // ---- OverlaySample (transition channels) ------------------------------
 
-    fn indicator_rect_for(mode: Mode) -> ScreenRect<Logical> {
-        let s = State {
-            mode,
-            ..State::DEFAULT
-        };
-        let f = frame(s, Point::new(960, 540), monitor());
-        let last = f.layers().last().expect("indicator layer present");
-        match last.geometry {
-            Geometry::Rect(r) => r,
+    /// 定常サンプル (`master = 255`) の mask alpha は従来の
+    /// `Opacity::to_perceptual_byte()` と **バイト一致** する。トランジション
+    /// 導入で settled frame の見た目が 1 bit でもドリフトしたら即検知する。
+    #[test]
+    fn settled_sample_alpha_is_byte_identical_to_perceptual_byte() {
+        for byte in [1_u8, 0x40, 0x80, 0xAA, 0xFF] {
+            let expected = crate::color::Opacity::try_new(byte)
+                .expect("non-zero")
+                .to_perceptual_byte();
+            assert_eq!(
+                composite_alpha(byte, u8::MAX),
+                expected,
+                "composite_alpha({byte:#04x}, 255) must equal to_perceptual_byte()"
+            );
         }
     }
 
+    /// thickness は config ではなく sample から取られる (グライド中の中間値が
+    /// そのままスリット幅になる)。
     #[test]
-    fn indicator_in_horizontal_mode_is_18x4() {
-        let r = indicator_rect_for(Mode::Horizontal);
-        assert_eq!(r.width, INDICATOR_LONG);
-        assert_eq!(r.height, INDICATOR_SHORT);
+    fn sample_thickness_overrides_config() {
+        let config = OverlayConfig::DEFAULT; // thickness = 28
+        let sample = OverlaySample {
+            thickness_px: 100,
+            ..OverlaySample::settled(config)
+        };
+        let f = frame(
+            Mode::Horizontal,
+            config,
+            Point::new(960, 540),
+            monitor(),
+            sample,
+        );
+        let bands: Vec<_> = f
+            .layers()
+            .iter()
+            .map(|l| match l.geometry {
+                Geometry::Rect(r) => r,
+            })
+            .collect();
+        // 上下バンドの隙間 (スリット) = sample.thickness_px
+        let gap = bands[1].top() - bands[0].bottom();
+        assert_eq!(gap, 100, "slit width must come from the sample");
     }
 
+    /// `style_mix` 中間値では surround が Dim と Bright の間の色になる。
     #[test]
-    fn indicator_in_vertical_mode_is_4x18() {
-        let r = indicator_rect_for(Mode::Vertical);
-        assert_eq!(r.width, INDICATOR_SHORT);
-        assert_eq!(r.height, INDICATOR_LONG);
+    fn midway_style_mix_blends_between_dim_and_bright() {
+        let config = OverlayConfig::DEFAULT; // mask_color = black
+        let sample = OverlaySample {
+            style_mix: 128,
+            ..OverlaySample::settled(config)
+        };
+        let f = frame(
+            Mode::Horizontal,
+            config,
+            Point::new(960, 540),
+            monitor(),
+            sample,
+        );
+        let c = match f.layers()[0].brush {
+            Brush::Solid(c) => c,
+            Brush::Blur { .. } => panic!("surround must be solid"),
+        };
+        assert!(
+            c.r > 0x40 && c.r < 0xC0,
+            "midway mix should be grey-ish, got r={:#04x}",
+            c.r
+        );
+        assert_eq!((c.r, c.g), (c.g, c.b), "blend stays achromatic");
     }
 
+    /// `master = 0` (フェード完全アウト) では全レイヤの alpha が 0。
     #[test]
-    fn indicator_anchored_top_right_with_margin() {
-        let m = monitor();
-        let r = indicator_rect_for(Mode::Horizontal);
-        let w_i32 = i32::try_from(r.width).unwrap();
-        assert_eq!(r.left(), m.right() - INDICATOR_MARGIN - w_i32);
-        assert_eq!(r.top(), m.top() + INDICATOR_MARGIN);
+    fn master_zero_yields_fully_transparent_layers() {
+        let config = OverlayConfig::DEFAULT;
+        let sample = OverlaySample {
+            master: 0,
+            ..OverlaySample::settled(config)
+        };
+        let f = frame(
+            Mode::Horizontal,
+            config,
+            Point::new(960, 540),
+            monitor(),
+            sample,
+        );
+        for layer in f.layers() {
+            match layer.brush {
+                Brush::Solid(c) => assert_eq!(c.a, 0, "master=0 must zero all alpha"),
+                Brush::Blur { .. } => panic!("solid brushes only"),
+            }
+        }
     }
 }

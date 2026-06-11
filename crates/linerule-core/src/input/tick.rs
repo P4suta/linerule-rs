@@ -11,9 +11,11 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::{
-    config::OverlayConfig,
+    anim::Transition,
+    config::{AnimConfig, OverlayConfig},
     geometry::{Logical, Point},
-    state::{Mode, OverlayAction, State, reduce},
+    render::{HudTier, OverlaySample},
+    state::{Mode, OverlayAction, RejectReason, State, reduce},
 };
 
 /// Per-tick input from the platform.
@@ -25,6 +27,72 @@ pub struct TickInput {
     pub polled_cursor: Option<Point<Logical>>,
     /// Hotkey actions drained from the platform channel this tick.
     pub drained_hotkeys: Vec<OverlayAction>,
+}
+
+/// Transition channels driving the overlay's visual glides. Lives inside
+/// [`TickWorld`]; endpoints are integers so the world stays `Eq + Hash`
+/// (see [`crate::anim`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct OverlayAnim {
+    /// Show/hide + mode-switch envelope (`0` = gone, `255` = fully shown).
+    pub master: Transition<u8>,
+    /// Slit thickness in logical px.
+    pub thickness: Transition<u16>,
+    /// Mask opacity byte (pre-perceptual).
+    pub mask_alpha: Transition<u8>,
+    /// Style crossfade (`0` = Dim, `255` = Bright).
+    pub style_mix: Transition<u8>,
+}
+
+impl OverlayAnim {
+    /// Every channel settled at the given state's values (no motion).
+    #[must_use]
+    pub const fn settled_for(state: State) -> Self {
+        let master = match state.mode {
+            Mode::Off => 0,
+            Mode::Horizontal | Mode::Vertical => u8::MAX,
+        };
+        Self {
+            master: Transition::settled(master),
+            thickness: Transition::settled(state.config.thickness.get()),
+            mask_alpha: Transition::settled(state.config.opacity.get()),
+            style_mix: Transition::settled(state.config.surround_style.mix_target()),
+        }
+    }
+
+    /// 現時刻のサンプル束。`DrawOverlay` effect に載せる値。
+    #[must_use]
+    pub fn sample(self, now_ms: i64) -> OverlaySample {
+        OverlaySample {
+            master: self.master.sample(now_ms),
+            thickness_px: self.thickness.sample(now_ms),
+            mask_alpha: self.mask_alpha.sample(now_ms),
+            style_mix: self.style_mix.sample(now_ms),
+        }
+    }
+}
+
+/// HUD の表示形態 view-state。`State` ではなく `TickWorld` に置く: reducer や
+/// `render::frame` には無関係で、時間と結合した表示状態 (`boot_at_ms`) を
+/// 持つため (`last_hud_refresh_at_ms` と同類)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct HudView {
+    /// 現在の表示形態 (チップ / フル)。
+    pub tier: HudTier,
+    /// ユーザーが一度でも `ToggleHudDetail` を押したか。`true` になった後は
+    /// 起動時の自動降格 (Full → Chip) を発火させない。
+    pub user_touched: bool,
+    /// 最初の tick の時刻 (起動時フル表示の起点)。`i64::MIN` は未設定 sentinel。
+    pub boot_at_ms: i64,
+}
+
+impl HudView {
+    /// 起動直後: フル表示 (ホットキーガイドの教示期間)、boot 時刻は未設定。
+    pub const INITIAL: Self = Self {
+        tier: HudTier::Full,
+        user_touched: false,
+        boot_at_ms: i64::MIN,
+    };
 }
 
 /// Tick pipeline's persistent state.
@@ -41,17 +109,30 @@ pub struct TickWorld {
     pub frame_seq: u64,
     /// Last timestamp at which the HUD was refreshed.
     pub last_hud_refresh_at_ms: i64,
+    /// Overlay transition channels (show/hide fade, value glides).
+    pub anim: OverlayAnim,
+    /// HUD 表示形態 (チップ / フル) の view-state。
+    pub hud_view: HudView,
+    /// HUD のフェードエンベロープ (`0` = 不可視, `255` = フル)。起動時と
+    /// チップ ⇄ フル切替時に 0 → 255 へ立ち上がる。platform 側で
+    /// `SetOpacity2` (visual 層) に乗算されるため、フェード中もサーフェス
+    /// 再描画は走らない。
+    pub hud_envelope: Transition<u8>,
 }
 
 impl TickWorld {
     /// Initial state. `last_hud_refresh_at_ms = i64::MIN` so that the very
     /// first tick is treated as "interval has elapsed" and refreshes the HUD
-    /// regardless of the clock origin.
+    /// regardless of the clock origin. The HUD envelope starts at `0` and
+    /// fades in on the first tick.
     pub const INITIAL: Self = Self {
         state: State::DEFAULT,
         last_cursor: None,
         frame_seq: 0,
         last_hud_refresh_at_ms: i64::MIN,
+        anim: OverlayAnim::settled_for(State::DEFAULT),
+        hud_view: HudView::INITIAL,
+        hud_envelope: Transition::settled(0),
     };
 
     /// Initial state with a caller-supplied [`State`]. Useful for booting
@@ -65,6 +146,9 @@ impl TickWorld {
             last_cursor: None,
             frame_seq: 0,
             last_hud_refresh_at_ms: i64::MIN,
+            anim: OverlayAnim::settled_for(state),
+            hud_view: HudView::INITIAL,
+            hud_envelope: Transition::settled(0),
         }
     }
 }
@@ -84,23 +168,36 @@ pub enum TickEffect {
     Quit,
     /// Draw or update the overlay at the given cursor position.
     DrawOverlay {
-        /// Active overlay mode.
+        /// Axis to render. While fading out after `→ Off` this is the
+        /// `last_active` axis (the state's mode is already `Off`).
         mode: Mode,
         /// Cursor position for slit anchoring.
         cursor: Point<Logical>,
         /// Current overlay config.
         config: OverlayConfig,
+        /// Interpolated per-tick render values (transition channels).
+        sample: OverlaySample,
     },
-    /// Hide the overlay (mode off, not visible, or no cursor yet).
+    /// Hide the overlay (mode off with fade completed, or no cursor yet).
     ClearOverlay,
-    /// Refresh the full HUD with the supplied state snapshot.
-    RefreshHud(State),
-    /// Update HUD opacity for the current cursor distance.
+    /// Refresh the HUD with the supplied state snapshot, in the given
+    /// presentation tier (chip / full).
+    RefreshHud {
+        /// State snapshot to lay out.
+        state: State,
+        /// Presentation tier (chip / full).
+        tier: HudTier,
+    },
+    /// Update HUD opacity for the current cursor distance and fade envelope.
     SetHudOpacity {
-        /// Current state (for `visible` / `mode` checks).
+        /// Current state (for `mode` / slit-geometry checks).
         state: State,
         /// Cursor position used for the distance calculation.
         cursor: Point<Logical>,
+        /// HUD fade envelope sample (`0` = 不可視, `255` = フル)。platform は
+        /// 距離フェードに知覚カーブ越しで乗算する
+        /// ([`crate::input::hud_fade::apply_envelope`])。
+        envelope: u8,
     },
     /// Log a `LogStateChanged` event after a successful reduce.
     LogStateChanged {
@@ -108,8 +205,14 @@ pub enum TickEffect {
         action: OverlayAction,
         /// New mode.
         mode: Mode,
-        /// New visibility.
-        visible: bool,
+    },
+    /// Surface a rejected action to the user. The platform layer formats the
+    /// reason (with the actual configured hotkey strings) and toasts it on
+    /// the HUD. Always followed by a forced `RefreshHud` in the same tick so
+    /// the toast appears immediately.
+    NotifyRejected {
+        /// Why the reducer refused the action.
+        reason: RejectReason,
     },
 }
 
@@ -119,65 +222,119 @@ pub fn step(
     world: TickWorld,
     input: &TickInput,
     telemetry_refresh: Duration,
+    anim_config: AnimConfig,
 ) -> (TickWorld, Vec<TickEffect>) {
     let mut effects = Vec::with_capacity(4);
 
     let prev_state = world.state;
     let mut state = world.state;
 
+    let now = input.now_ms;
+    let mut hud_view = world.hud_view;
+    let mut hud_envelope = world.hud_envelope;
+    if hud_view.boot_at_ms == i64::MIN {
+        // 最初の tick: 起動時フル表示 (教示期間) の起点を確定し、HUD を
+        // 0 → 255 でフェードインさせる。
+        hud_view.boot_at_ms = now;
+        hud_envelope = hud_envelope.retarget(now, u8::MAX, anim_config.hud_swap_ms);
+    }
+
     let mut quit_requested = false;
+    let mut rejected_this_tick = false;
     for action in &input.drained_hotkeys {
         if matches!(action, OverlayAction::Quit) {
             quit_requested = true;
         }
+        if matches!(action, OverlayAction::ToggleHudDetail) {
+            // View-layer action: reducer は no-op、tier はここで反転する。
+            // 一度でも触られたら起動時の自動降格は以後発火しない。
+            hud_view.tier = hud_view.tier.toggle();
+            hud_view.user_touched = true;
+        }
         let (next, delta) = reduce::apply(state, *action);
+        if let Some(reason) = delta.rejected {
+            rejected_this_tick = true;
+            effects.push(TickEffect::NotifyRejected { reason });
+        }
         if delta.is_any() {
             effects.push(TickEffect::LogStateChanged {
                 action: *action,
                 mode: next.mode,
-                visible: next.visible,
             });
         }
         state = next;
+    }
+
+    // 起動時フル表示は教示期間 (startup_full_hud_ms) が過ぎたらチップへ自動
+    // 降格する。ユーザーが明示トグルした後は本人の選択を尊重して触らない。
+    if !hud_view.user_touched
+        && matches!(hud_view.tier, HudTier::Full)
+        && now.saturating_sub(hud_view.boot_at_ms) >= i64::from(anim_config.startup_full_hud_ms)
+    {
+        hud_view.tier = HudTier::Chip;
     }
 
     if quit_requested {
         effects.push(TickEffect::Quit);
     }
 
+    let anim = retarget_channels(world.anim, prev_state, state, now, anim_config);
+
+    let state_changed = state != prev_state;
+    let tier_changed = hud_view.tier != world.hud_view.tier;
+    if tier_changed {
+        // チップ ⇄ フルの切替: 内容とサイズは即時に差し替わり (RefreshHud)、
+        // 新しい見た目が 0 → 255 でフェードインする。サイズの異なるパネルを
+        // クロスフェードさせるより、短い立ち上がりの方が騒がしくない。
+        hud_envelope = Transition {
+            from: 0,
+            to: u8::MAX,
+            start_ms: now,
+            duration_ms: anim_config.hud_swap_ms,
+        };
+    }
+
     let cursor_moved = input.polled_cursor != world.last_cursor;
     let next_cursor = input.polled_cursor;
 
-    match (state.visible, state.mode, next_cursor) {
-        (true, Mode::Horizontal | Mode::Vertical, Some(cursor)) => {
-            effects.push(TickEffect::DrawOverlay {
-                mode: state.mode,
-                cursor,
-                config: state.config,
-            });
-        },
-        _ => effects.push(TickEffect::ClearOverlay),
-    }
+    effects.push(draw_or_clear(state, anim, next_cursor, now));
 
-    if cursor_moved && let Some(cursor) = next_cursor {
-        effects.push(TickEffect::SetHudOpacity { state, cursor });
+    // エンベロープが動いている間は cursor 不動でも毎 tick 不透明度を流す
+    // (visual 層の SetOpacity2 のみ更新されるので再描画コストはゼロ)。
+    if let Some(cursor) = next_cursor
+        && (cursor_moved || hud_envelope.is_live(now) || tier_changed)
+    {
+        effects.push(TickEffect::SetHudOpacity {
+            state,
+            cursor,
+            envelope: hud_envelope.sample(now),
+        });
     }
-
-    let state_changed = state != prev_state;
     let interval_ms = i64::try_from(telemetry_refresh.as_millis()).unwrap_or(i64::MAX);
     let interval_elapsed = input.now_ms.saturating_sub(world.last_hud_refresh_at_ms) >= interval_ms;
-    let next_last_hud_refresh = if state_changed || interval_elapsed {
-        effects.push(TickEffect::RefreshHud(state));
-        input.now_ms
-    } else {
-        world.last_hud_refresh_at_ms
-    };
+    // `rejected_this_tick` forces a refresh so the NotifyRejected toast shows
+    // this tick instead of waiting out the telemetry interval. Effect order
+    // matters: NotifyRejected was already pushed above, so the platform sees
+    // it before this RefreshHud.
+    let next_last_hud_refresh =
+        if state_changed || tier_changed || interval_elapsed || rejected_this_tick {
+            effects.push(TickEffect::RefreshHud {
+                state,
+                tier: hud_view.tier,
+            });
+            input.now_ms
+        } else {
+            world.last_hud_refresh_at_ms
+        };
 
     let next_world = TickWorld {
         state,
         last_cursor: next_cursor,
         frame_seq: world.frame_seq.wrapping_add(1),
         last_hud_refresh_at_ms: next_last_hud_refresh,
+        anim,
+        hud_view,
+        hud_envelope,
     };
 
     // Debug build 限定の invariant check。`frame_seq` は `wrapping_add(1)` で常に
@@ -200,11 +357,88 @@ pub fn step(
     (next_world, effects)
 }
 
+/// Draw gate: active mode draws; `Off` keeps drawing along the `last_active`
+/// axis while the master fade-out is still landing, then clears once the
+/// envelope reaches 0.
+fn draw_or_clear(
+    state: State,
+    anim: OverlayAnim,
+    next_cursor: Option<Point<Logical>>,
+    now: i64,
+) -> TickEffect {
+    let master_now = anim.master.sample(now);
+    match (state.mode, next_cursor) {
+        (Mode::Horizontal | Mode::Vertical, Some(cursor)) => TickEffect::DrawOverlay {
+            mode: state.mode,
+            cursor,
+            config: state.config,
+            sample: anim.sample(now),
+        },
+        (Mode::Off, Some(cursor)) if master_now > 0 => TickEffect::DrawOverlay {
+            mode: Mode::from(state.last_active),
+            cursor,
+            config: state.config,
+            sample: anim.sample(now),
+        },
+        _ => TickEffect::ClearOverlay,
+    }
+}
+
+/// `prev → next` の状態差分から各トランジションチャネルを retarget する。
+/// retarget は現サンプル値から re-base するので (`crate::anim`)、held key の
+/// repeat が飛行中に着弾しても値は連続に滑る。
+fn retarget_channels(
+    mut anim: OverlayAnim,
+    prev: State,
+    next: State,
+    now_ms: i64,
+    cfg: AnimConfig,
+) -> OverlayAnim {
+    if next.mode != prev.mode {
+        anim.master = match (prev.mode.active(), next.mode.active()) {
+            // Off → active: fade in (re-bases mid-fade-out, so a quick double
+            // toggle rises smoothly from wherever the fade-out got to).
+            (None, Some(_)) => anim.master.retarget(now_ms, u8::MAX, cfg.overlay_fade_ms),
+            // active → Off: fade out.
+            (Some(_), None) => anim.master.retarget(now_ms, 0, cfg.overlay_fade_ms),
+            // H ⇄ V: soft cut — the new axis fades in from 0. A hard reset
+            // (not a retarget) because the axis being faded changed identity.
+            (Some(_), Some(_)) => Transition {
+                from: 0,
+                to: u8::MAX,
+                start_ms: now_ms,
+                duration_ms: cfg.overlay_fade_ms,
+            },
+            // Unreachable: mode changed but both ends are Off.
+            (None, None) => anim.master,
+        };
+    }
+    if next.config.thickness != prev.config.thickness {
+        anim.thickness =
+            anim.thickness
+                .retarget(now_ms, next.config.thickness.get(), cfg.value_glide_ms);
+    }
+    if next.config.opacity != prev.config.opacity {
+        anim.mask_alpha =
+            anim.mask_alpha
+                .retarget(now_ms, next.config.opacity.get(), cfg.value_glide_ms);
+    }
+    if next.config.surround_style != prev.config.surround_style {
+        anim.style_mix = anim.style_mix.retarget(
+            now_ms,
+            next.config.surround_style.mix_target(),
+            cfg.overlay_fade_ms,
+        );
+    }
+    anim
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const TELEMETRY: Duration = Duration::from_millis(200);
+    const ANIM: AnimConfig = AnimConfig::DEFAULT;
 
     fn world() -> TickWorld {
         TickWorld::INITIAL
@@ -220,9 +454,9 @@ mod tests {
 
     #[test]
     fn empty_tick_clears_and_refreshes_hud() {
-        let (next, fx) = step(world(), &input(0), TELEMETRY);
+        let (next, fx) = step(world(), &input(0), TELEMETRY, ANIM);
         assert_eq!(fx[0], TickEffect::ClearOverlay);
-        assert!(matches!(fx.last(), Some(TickEffect::RefreshHud(_))));
+        assert!(matches!(fx.last(), Some(TickEffect::RefreshHud { .. })));
         assert_eq!(next.frame_seq, 1);
     }
 
@@ -231,7 +465,7 @@ mod tests {
         let mut input = input(0);
         input.drained_hotkeys.push(OverlayAction::CycleMode);
         input.polled_cursor = Some(Point::new(100, 100));
-        let (next, fx) = step(world(), &input, TELEMETRY);
+        let (next, fx) = step(world(), &input, TELEMETRY, ANIM);
         assert!(matches!(fx[0], TickEffect::LogStateChanged { .. }));
         assert!(
             fx.iter()
@@ -244,53 +478,392 @@ mod tests {
     fn quit_action_emits_quit_effect() {
         let mut input = input(0);
         input.drained_hotkeys.push(OverlayAction::Quit);
-        let (_, fx) = step(world(), &input, TELEMETRY);
+        let (_, fx) = step(world(), &input, TELEMETRY, ANIM);
         assert!(fx.contains(&TickEffect::Quit));
+    }
+
+    /// Off 中の調整キーは `NotifyRejected` を出し、telemetry interval 内でも
+    /// 同 tick で `RefreshHud` を強制する (`rejected_this_tick` 条項のピン)。
+    /// 状態は変わらないので `LogStateChanged` は出ない。
+    #[test]
+    fn bump_while_off_emits_notify_rejected_and_forces_hud_refresh() {
+        // Tick 1: 初期 refresh を消化して last_hud_refresh_at_ms を最新化。
+        let (w1, _) = step(world(), &input(0), TELEMETRY, ANIM);
+        // Tick 2: interval (200ms) 内に Off のまま BumpThickness。
+        let mut i2 = input(50);
+        i2.drained_hotkeys.push(OverlayAction::BumpThickness(8));
+        let (w2, fx) = step(w1, &i2, TELEMETRY, ANIM);
+        assert_eq!(w2.state, w1.state, "rejected action must not change state");
+        let notify_pos = fx.iter().position(|e| {
+            matches!(
+                e,
+                TickEffect::NotifyRejected {
+                    reason: RejectReason::AdjustWhileOff
+                }
+            )
+        });
+        let refresh_pos = fx
+            .iter()
+            .position(|e| matches!(e, TickEffect::RefreshHud { .. }));
+        assert!(notify_pos.is_some(), "expected NotifyRejected, got {fx:?}");
+        assert!(
+            refresh_pos.is_some(),
+            "rejection must force RefreshHud within the interval, got {fx:?}"
+        );
+        assert!(
+            notify_pos < refresh_pos,
+            "NotifyRejected must precede RefreshHud so the toast renders this tick"
+        );
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, TickEffect::LogStateChanged { .. })),
+            "no state change → no LogStateChanged"
+        );
+    }
+
+    /// 飽和 (active mode 内の no-op edge) は rejection ではないので
+    /// `NotifyRejected` を出さない。
+    #[test]
+    fn saturated_bump_in_active_mode_emits_no_notify() {
+        let mut on = input(0);
+        on.drained_hotkeys.push(OverlayAction::ToggleOnOff);
+        let (w1, _) = step(world(), &on, TELEMETRY, ANIM);
+        // Opacity を MIN まで一気に下げ、さらに下げて飽和させる。
+        let mut i2 = input(50);
+        i2.drained_hotkeys
+            .push(OverlayAction::BumpOpacity(-100_000));
+        let (w2, _) = step(w1, &i2, TELEMETRY, ANIM);
+        let mut i3 = input(100);
+        i3.drained_hotkeys.push(OverlayAction::BumpOpacity(-8));
+        let (_, fx) = step(w2, &i3, TELEMETRY, ANIM);
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, TickEffect::NotifyRejected { .. })),
+            "saturation must stay silent, got {fx:?}"
+        );
+    }
+
+    /// `ToggleOnOff` の往復: Off → 直前モードで Draw。再トグル直後はフェード
+    /// アウト中なので **まだ Draw** (`last_active` 軸で描き続ける)、フェード
+    /// 満了後の tick で初めて Clear になる。
+    #[test]
+    fn toggle_on_off_fades_out_then_clears() {
+        let cursor = Some(Point::new(100, 100));
+        let mut on = input(0);
+        on.polled_cursor = cursor;
+        on.drained_hotkeys.push(OverlayAction::ToggleOnOff);
+        let (w1, fx1) = step(world(), &on, TELEMETRY, ANIM);
+        assert_eq!(
+            w1.state.mode,
+            Mode::Horizontal,
+            "DEFAULT restores Horizontal"
+        );
+        assert!(
+            fx1.iter()
+                .any(|e| matches!(e, TickEffect::DrawOverlay { .. })),
+            "restored mode must draw, got {fx1:?}"
+        );
+
+        // フェードイン満了後に Off へトグル。
+        let fade = i64::from(ANIM.overlay_fade_ms);
+        let mut off = input(fade + 10);
+        off.polled_cursor = cursor;
+        off.drained_hotkeys.push(OverlayAction::ToggleOnOff);
+        let (w2, fx2) = step(w1, &off, TELEMETRY, ANIM);
+        assert_eq!(w2.state.mode, Mode::Off);
+        let draw = fx2.iter().find_map(|e| match e {
+            TickEffect::DrawOverlay { mode, sample, .. } => Some((*mode, *sample)),
+            _ => None,
+        });
+        let (mode, sample) = draw.expect("fade-out must keep drawing");
+        assert_eq!(mode, Mode::Horizontal, "fade-out renders the last axis");
+        assert_eq!(sample.master, 255, "retarget re-bases from current value");
+
+        // フェードアウト満了後の空 tick で Clear。
+        let mut after = input(fade + 10 + fade + 1);
+        after.polled_cursor = cursor;
+        let (_, fx3) = step(w2, &after, TELEMETRY, ANIM);
+        assert!(
+            fx3.iter().any(|e| matches!(e, TickEffect::ClearOverlay)),
+            "after the fade completes, Off must clear, got {fx3:?}"
+        );
+    }
+
+    /// Off → active のフェードイン: master が 0 から始まり満了で 255 に到達。
+    #[test]
+    fn mode_on_fade_ramps_master_to_full() {
+        let cursor = Some(Point::new(100, 100));
+        let mut on = input(0);
+        on.polled_cursor = cursor;
+        on.drained_hotkeys.push(OverlayAction::CycleMode);
+        let (w1, fx1) = step(world(), &on, TELEMETRY, ANIM);
+        let s1 = fx1
+            .iter()
+            .copied()
+            .find_map(sample_of)
+            .expect("draw on activation");
+        assert_eq!(s1.master, 0, "fade-in starts from 0 at the trigger tick");
+
+        let mut mid = input(i64::from(ANIM.overlay_fade_ms) / 2);
+        mid.polled_cursor = cursor;
+        let (w2, fx2) = step(w1, &mid, TELEMETRY, ANIM);
+        let s2 = fx2
+            .iter()
+            .copied()
+            .find_map(sample_of)
+            .expect("draw mid-fade");
+        assert!(
+            s2.master > 0 && s2.master < 255,
+            "mid-fade master must be between, got {}",
+            s2.master
+        );
+
+        let mut done = input(i64::from(ANIM.overlay_fade_ms) + 1);
+        done.polled_cursor = cursor;
+        let (_, fx3) = step(w2, &done, TELEMETRY, ANIM);
+        let s3 = fx3
+            .iter()
+            .copied()
+            .find_map(sample_of)
+            .expect("draw after fade");
+        assert_eq!(s3.master, 255, "fade-in must land exactly at 255");
+    }
+
+    /// 飛行中に次の bump が着弾しても thickness サンプルは逆行しない
+    /// (retarget の連続グライド保証の pipeline レベル確認)。
+    #[test]
+    fn held_bumps_glide_thickness_without_regression() {
+        let cursor = Some(Point::new(100, 100));
+        let mut w = TickWorld::with_initial_state(State::with_mode(Mode::Horizontal));
+        let mut last = 0_u16;
+        let mut now = 0_i64;
+        // 50ms 間隔で +8 bump を 4 回 → 各着弾はグライド (130ms) の途中。
+        for _ in 0..4 {
+            let mut i = input(now);
+            i.polled_cursor = cursor;
+            i.drained_hotkeys.push(OverlayAction::BumpThickness(8));
+            let (next, fx) = step(w, &i, TELEMETRY, ANIM);
+            let s = fx
+                .iter()
+                .copied()
+                .find_map(sample_of)
+                .expect("active mode draws");
+            assert!(
+                s.thickness_px >= last,
+                "thickness sample regressed: {last} -> {}",
+                s.thickness_px
+            );
+            last = s.thickness_px;
+            w = next;
+            now += 50;
+        }
+        // 最終グライド満了後は目標値 (28 + 4*8 = 60) に正確に到達。
+        let mut i = input(now + i64::from(ANIM.value_glide_ms) + 1);
+        i.polled_cursor = cursor;
+        let (_, fx) = step(w, &i, TELEMETRY, ANIM);
+        let s = fx.iter().copied().find_map(sample_of).expect("draw");
+        assert_eq!(s.thickness_px, 60);
+    }
+
+    /// トランジション満了後のサンプルは `OverlaySample::settled(config)` と
+    /// 完全一致する (定常状態のドリフトなし)。
+    #[test]
+    fn settled_sample_matches_config_after_transitions_complete() {
+        let cursor = Some(Point::new(100, 100));
+        let mut on = input(0);
+        on.polled_cursor = cursor;
+        on.drained_hotkeys.push(OverlayAction::CycleMode);
+        let (w1, _) = step(world(), &on, TELEMETRY, ANIM);
+        let mut later = input(10_000);
+        later.polled_cursor = cursor;
+        let (_, fx) = step(w1, &later, TELEMETRY, ANIM);
+        let s = fx.iter().copied().find_map(sample_of).expect("draw");
+        assert_eq!(s, crate::render::OverlaySample::settled(w1.state.config));
+    }
+
+    fn sample_of(e: TickEffect) -> Option<crate::render::OverlaySample> {
+        match e {
+            TickEffect::DrawOverlay { sample, .. } => Some(sample),
+            _ => None,
+        }
+    }
+
+    fn refresh_tier_of(e: TickEffect) -> Option<HudTier> {
+        match e {
+            TickEffect::RefreshHud { tier, .. } => Some(tier),
+            _ => None,
+        }
+    }
+
+    // ---- HUD tier FSM ------------------------------------------------------
+
+    /// 起動直後はフル表示 (教示期間)、`startup_full_hud_ms` 経過後の tick で
+    /// チップへ自動降格し、降格 tick で `RefreshHud { tier: Chip }` が出る。
+    #[test]
+    fn hud_boots_full_then_auto_demotes_to_chip() {
+        let (w1, fx1) = step(world(), &input(0), TELEMETRY, ANIM);
+        assert_eq!(
+            fx1.iter().copied().find_map(refresh_tier_of),
+            Some(HudTier::Full),
+            "boot tick must refresh in Full tier"
+        );
+        assert_eq!(w1.hud_view.boot_at_ms, 0, "boot origin set on first tick");
+
+        // 教示期間内: tier は Full のまま。
+        let (w2, _) = step(w1, &input(1_000), TELEMETRY, ANIM);
+        assert_eq!(w2.hud_view.tier, HudTier::Full);
+
+        // 教示期間満了: Chip へ自動降格 + その tick で RefreshHud。
+        let demote_at = i64::from(ANIM.startup_full_hud_ms);
+        let (w3, fx3) = step(w2, &input(demote_at), TELEMETRY, ANIM);
+        assert_eq!(w3.hud_view.tier, HudTier::Chip);
+        assert_eq!(
+            fx3.iter().copied().find_map(refresh_tier_of),
+            Some(HudTier::Chip),
+            "demotion tick must refresh in Chip tier, got {fx3:?}"
+        );
+    }
+
+    /// `ToggleHudDetail` は tier を反転し `user_touched` を立てる。以後は
+    /// 教示期間が過ぎても自動降格しない (ユーザーの選択を尊重)。
+    #[test]
+    fn user_toggle_flips_tier_and_disables_auto_demote() {
+        let (w1, _) = step(world(), &input(0), TELEMETRY, ANIM);
+
+        // 教示期間中にユーザーが Chip へ畳む。
+        let mut i2 = input(100);
+        i2.drained_hotkeys.push(OverlayAction::ToggleHudDetail);
+        let (w2, fx2) = step(w1, &i2, TELEMETRY, ANIM);
+        assert_eq!(w2.hud_view.tier, HudTier::Chip);
+        assert!(w2.hud_view.user_touched);
+        assert_eq!(
+            fx2.iter().copied().find_map(refresh_tier_of),
+            Some(HudTier::Chip),
+            "tier change must force a refresh, got {fx2:?}"
+        );
+
+        // もう一度トグルで Full に戻す。
+        let mut i3 = input(200);
+        i3.drained_hotkeys.push(OverlayAction::ToggleHudDetail);
+        let (w3, _) = step(w2, &i3, TELEMETRY, ANIM);
+        assert_eq!(w3.hud_view.tier, HudTier::Full);
+
+        // 教示期間をとうに過ぎても、user_touched 後は自動降格しない。
+        let far = i64::from(ANIM.startup_full_hud_ms) * 3;
+        let (w4, _) = step(w3, &input(far), TELEMETRY, ANIM);
+        assert_eq!(
+            w4.hud_view.tier,
+            HudTier::Full,
+            "auto-demote must stay disabled after a manual toggle"
+        );
+    }
+
+    /// `ToggleHudDetail` は overlay の `State` を変えない (`LogStateChanged`
+    /// も `NotifyRejected` も出ない)。
+    #[test]
+    fn toggle_hud_detail_does_not_touch_overlay_state() {
+        let mut i = input(0);
+        i.drained_hotkeys.push(OverlayAction::ToggleHudDetail);
+        let (w, fx) = step(world(), &i, TELEMETRY, ANIM);
+        assert_eq!(w.state, TickWorld::INITIAL.state);
+        assert!(
+            !fx.iter().any(|e| matches!(
+                e,
+                TickEffect::LogStateChanged { .. } | TickEffect::NotifyRejected { .. }
+            )),
+            "view-layer action must not produce state-change effects, got {fx:?}"
+        );
     }
 
     #[test]
     fn hud_refresh_is_skipped_when_neither_state_changed_nor_interval_elapsed() {
-        let (w1, _) = step(world(), &input(0), TELEMETRY);
-        let (_, fx2) = step(w1, &input(100), TELEMETRY);
-        assert!(!fx2.iter().any(|e| matches!(e, TickEffect::RefreshHud(_))));
-    }
-
-    /// `cursor_moved = polled_cursor != last_cursor` (L148) を pin する。
-    /// cursor が同位置に留まる tick では `SetHudOpacity` が emit されないこと、
-    /// cursor が動いた tick では emit されることを両方確かめる。
-    /// `!=` を `==` に mutate すると両 assert を同時に満たせない (Phase ε)。
-    #[test]
-    fn set_hud_opacity_is_emitted_iff_cursor_changed_position() {
-        // Tick 1: 初期 (last_cursor = None) → polled = Some(P1) なので cursor_moved=true
-        let mut i1 = input(0);
-        let p1 = Point::new(100, 100);
-        i1.polled_cursor = Some(p1);
-        let (w1, fx1) = step(world(), &i1, TELEMETRY);
-        assert!(
-            fx1.iter()
-                .any(|e| matches!(e, TickEffect::SetHudOpacity { .. })),
-            "first tick (None → Some(P1)): SetHudOpacity must be emitted"
-        );
-
-        // Tick 2: 同位置 P1 → cursor_moved = false なので SetHudOpacity 出ない
-        let mut i2 = input(50);
-        i2.polled_cursor = Some(p1);
-        let (w2, fx2) = step(w1, &i2, TELEMETRY);
+        let (w1, _) = step(world(), &input(0), TELEMETRY, ANIM);
+        let (_, fx2) = step(w1, &input(100), TELEMETRY, ANIM);
         assert!(
             !fx2.iter()
-                .any(|e| matches!(e, TickEffect::SetHudOpacity { .. })),
-            "second tick (Some(P1) → Some(P1) ): SetHudOpacity must NOT be emitted"
+                .any(|e| matches!(e, TickEffect::RefreshHud { .. }))
+        );
+    }
+
+    fn envelope_of(fx: &[TickEffect]) -> Option<u8> {
+        fx.iter().copied().find_map(|e| match e {
+            TickEffect::SetHudOpacity { envelope, .. } => Some(envelope),
+            _ => None,
+        })
+    }
+
+    /// `SetHudOpacity` の emit 条件を pin する: HUD エンベロープが動いている間
+    /// は cursor 不動でも毎 tick emit、settle 後は cursor が動いた tick のみ。
+    /// (`!=` → `==` mutation も `is_live` の取り違えも、どこかの assert を
+    /// 同時に満たせなくなる。)
+    #[test]
+    fn set_hud_opacity_emission_follows_cursor_and_envelope() {
+        let p1 = Point::new(100, 100);
+
+        // Tick 1 (boot): エンベロープが 0 → 255 で立ち上がる → emit (値は 0)。
+        let mut i1 = input(0);
+        i1.polled_cursor = Some(p1);
+        let (w1, fx1) = step(world(), &i1, TELEMETRY, ANIM);
+        assert_eq!(
+            envelope_of(&fx1),
+            Some(0),
+            "boot tick emits with envelope 0 (fade-in starts)"
         );
 
-        // Tick 3: 別位置 P2 → cursor_moved = true なので SetHudOpacity 出る
-        let mut i3 = input(100);
-        let p2 = Point::new(200, 100);
-        i3.polled_cursor = Some(p2);
-        let (_, fx3) = step(w2, &i3, TELEMETRY);
+        // Tick 2: cursor 同位置でもエンベロープ live なので emit、値が進む。
+        let mut i2 = input(50);
+        i2.polled_cursor = Some(p1);
+        let (w2, fx2) = step(w1, &i2, TELEMETRY, ANIM);
+        let mid = envelope_of(&fx2).expect("live envelope keeps emitting");
         assert!(
-            fx3.iter()
-                .any(|e| matches!(e, TickEffect::SetHudOpacity { .. })),
-            "third tick (Some(P1) → Some(P2)): SetHudOpacity must be emitted again"
+            mid > 0 && mid < 255,
+            "mid-fade envelope must be between, got {mid}"
+        );
+
+        // Tick 3: エンベロープ settle 後 + cursor 同位置 → emit されない。
+        let settled_at = i64::from(ANIM.hud_swap_ms) + 10;
+        let mut i3 = input(settled_at);
+        i3.polled_cursor = Some(p1);
+        let (w3, fx3) = step(w2, &i3, TELEMETRY, ANIM);
+        assert!(
+            envelope_of(&fx3).is_none(),
+            "settled envelope + stationary cursor must not emit, got {fx3:?}"
+        );
+
+        // Tick 4: cursor が動けば emit (エンベロープは満了値 255)。
+        let mut i4 = input(settled_at + 50);
+        i4.polled_cursor = Some(Point::new(200, 100));
+        let (_, fx4) = step(w3, &i4, TELEMETRY, ANIM);
+        assert_eq!(
+            envelope_of(&fx4),
+            Some(255),
+            "moved cursor must emit with the settled envelope"
+        );
+    }
+
+    /// チップ ⇄ フル切替の tick でエンベロープが 0 から再スタートする
+    /// (新しい見た目がフェードインする)。
+    #[test]
+    fn tier_swap_restarts_hud_envelope_from_zero() {
+        let p1 = Point::new(100, 100);
+        let mut i1 = input(0);
+        i1.polled_cursor = Some(p1);
+        let (w1, _) = step(world(), &i1, TELEMETRY, ANIM);
+
+        // boot のフェードインを満了させる。
+        let mut i2 = input(i64::from(ANIM.hud_swap_ms) + 10);
+        i2.polled_cursor = Some(p1);
+        let (w2, _) = step(w1, &i2, TELEMETRY, ANIM);
+
+        // トグル: tier 切替 tick は cursor 不動でも emit され、値は 0。
+        let mut i3 = input(i64::from(ANIM.hud_swap_ms) + 100);
+        i3.polled_cursor = Some(p1);
+        i3.drained_hotkeys.push(OverlayAction::ToggleHudDetail);
+        let (_, fx3) = step(w2, &i3, TELEMETRY, ANIM);
+        assert_eq!(
+            envelope_of(&fx3),
+            Some(0),
+            "tier swap must restart the envelope from 0, got {fx3:?}"
         );
     }
 }

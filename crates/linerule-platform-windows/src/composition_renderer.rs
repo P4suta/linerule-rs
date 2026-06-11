@@ -144,11 +144,19 @@ impl CompositionRenderer {
     }
 }
 
-/// `Layer` を (rect, color) に分解する純粋関数。`Brush::Solid` / `Geometry::Rect`
-/// 以外は将来拡張点。
+/// `Layer` を (rect, color) に分解する純粋関数。`Geometry::Rect` は唯一の variant。
+///
+/// `Brush::Blur` は予約 variant で、現状 core は生成しない (cheap な surround
+/// style は `Brush::Solid` で表現される)。後続タスクで背景キャプチャ + D2D
+/// Gaussian blur (`CLSID_D2D1GaussianBlur`) を実装するまでは、`tint` 色での
+/// ソリッド塗りにフォールバックする。
 pub(crate) fn decompose(layer: Layer) -> (ScreenRect<Logical>, Rgba) {
     let Geometry::Rect(rect) = layer.geometry;
-    let Brush::Solid(color) = layer.brush;
+    let color = match layer.brush {
+        Brush::Solid(color) => color,
+        // TODO(blur): D2D Gaussian blur 描画パスが入るまでは tint をそのまま塗る。
+        Brush::Blur { tint, .. } => tint,
+    };
     (rect, color)
 }
 
@@ -184,6 +192,24 @@ mod tests {
         let (r, _) = decompose(Layer::solid_rect(rect, color));
         assert_eq!(r.left(), -500);
         assert_eq!(r.top(), -200);
+    }
+
+    #[test]
+    fn decompose_blur_falls_back_to_tint_color() {
+        // Until the Gaussian-blur render path lands, a `Brush::Blur` layer is
+        // painted as a solid fill of its `tint`.
+        let rect = ScreenRect::new(Point::new(10, 20), 64, 48);
+        let tint = Rgba::new(0x00, 0x00, 0x00, 0x80);
+        let layer = Layer {
+            geometry: Geometry::Rect(rect),
+            brush: Brush::Blur {
+                radius_px: 12,
+                tint,
+            },
+        };
+        let (back_rect, back_color) = decompose(layer);
+        assert_eq!(back_rect, rect);
+        assert_eq!(back_color, tint);
     }
 
     proptest! {

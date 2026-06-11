@@ -10,7 +10,7 @@
 )]
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use linerule_core::{Mode, Point, ScreenRect, State, frame};
+use linerule_core::{Mode, OverlayConfig, OverlaySample, Point, ScreenRect, frame};
 use std::hint::black_box;
 
 const fn monitor() -> ScreenRect<linerule_core::Logical> {
@@ -20,23 +20,59 @@ const fn monitor() -> ScreenRect<linerule_core::Logical> {
 fn bench_frame(c: &mut Criterion) {
     let m = monitor();
     let cursor = Point::new(960, 540);
+    let config = OverlayConfig::DEFAULT;
+    let settled = OverlaySample::settled(config);
     let mut group = c.benchmark_group("frame");
     group.bench_function("off", |b| {
-        b.iter(|| frame(black_box(State::DEFAULT), black_box(cursor), black_box(m)));
+        b.iter(|| {
+            frame(
+                black_box(Mode::Off),
+                black_box(config),
+                black_box(cursor),
+                black_box(m),
+                black_box(settled),
+            )
+        });
     });
     group.bench_function("horizontal", |b| {
-        let s = State {
-            mode: Mode::Horizontal,
-            ..State::DEFAULT
-        };
-        b.iter(|| frame(black_box(s), black_box(cursor), black_box(m)));
+        b.iter(|| {
+            frame(
+                black_box(Mode::Horizontal),
+                black_box(config),
+                black_box(cursor),
+                black_box(m),
+                black_box(settled),
+            )
+        });
     });
     group.bench_function("vertical", |b| {
-        let s = State {
-            mode: Mode::Vertical,
-            ..State::DEFAULT
+        b.iter(|| {
+            frame(
+                black_box(Mode::Vertical),
+                black_box(config),
+                black_box(cursor),
+                black_box(m),
+                black_box(settled),
+            )
+        });
+    });
+    // トランジション中 (非 settled サンプル) の hot path も計測する。
+    group.bench_function("horizontal_mid_fade", |b| {
+        let mid = OverlaySample {
+            master: 128,
+            thickness_px: 64,
+            mask_alpha: 0x90,
+            style_mix: 128,
         };
-        b.iter(|| frame(black_box(s), black_box(cursor), black_box(m)));
+        b.iter(|| {
+            frame(
+                black_box(Mode::Horizontal),
+                black_box(config),
+                black_box(cursor),
+                black_box(m),
+                black_box(mid),
+            )
+        });
     });
     group.finish();
 }

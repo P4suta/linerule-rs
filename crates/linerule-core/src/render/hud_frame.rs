@@ -36,10 +36,29 @@ pub struct HudFrame {
     pub panel_height: f32,
     /// パネル背景色。
     pub background: Rgba,
+    /// パネル角丸半径 (logical px)。
+    pub corner_radius: f32,
     /// 全体の不透明度 (0.0–1.0)。`SetHudOpacity` で per-frame に更新される。
     pub opacity: f32,
+    /// テキスト以外の塗り矩形 (divider 等)。rows より先に描画される。
+    pub rules: Vec<HudRule>,
     /// 描画する行。
     pub rows: Vec<HudRow>,
+}
+
+/// HUD 内の塗り矩形 1 本 (divider 等)。座標は rows と同じく絶対 logical px。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct HudRule {
+    /// 左上 x (logical px)。
+    pub left: f32,
+    /// 左上 y (logical px)。
+    pub top: f32,
+    /// 幅 (logical px)。
+    pub width: f32,
+    /// 高さ (logical px)。
+    pub height: f32,
+    /// 塗り色。
+    pub color: Rgba,
 }
 
 /// HUD の 1 行。
@@ -70,6 +89,35 @@ pub enum HudFontKey {
     Title,
     /// 等幅系（テレメトリ等の数値表示）。
     Mono,
+}
+
+/// HUD の表示形態。
+///
+/// - `Chip`: 常駐の極小 1 行ステータス (`H · 28px · 67%`)。デフォルト。
+/// - `Full`: ホットキーガイドつきのフルパネル。起動直後の数秒と、
+///   `ToggleHudDetail` ホットキーでの明示トグルでのみ表示される。
+///
+/// 「操作方法を教える UI」はフル側に集約し、普段の読書中は画面の主張を
+/// チップ 1 行まで下げる、という設計判断 (カーソル=読書の道具なので
+/// hover 系のトリガーは採らない)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HudTier {
+    /// 常駐ステータスチップ。
+    Chip,
+    /// ホットキーガイドつきフルパネル。
+    Full,
+}
+
+impl HudTier {
+    /// チップ ⇄ フルの反転。
+    #[must_use]
+    pub const fn toggle(self) -> Self {
+        match self {
+            Self::Chip => Self::Full,
+            Self::Full => Self::Chip,
+        }
+    }
 }
 
 /// HUD の panel 下端に表示する短寿命メッセージ。`Recoverable` な runtime error /
@@ -156,24 +204,53 @@ impl HudTelemetry {
 ///     &[],
 ///     HotkeyMap::DEFAULT,
 ///     HudTelemetry::ZERO,
+///     linerule_core::HudTier::Full,
 /// );
 /// // 右上アンカー: パネル右端は monitor 右端から margin だけ左
 /// let expected_right = 1920.0 - HudConfig::DEFAULT.geometry.margin;
 /// assert!((frame.panel_left + frame.panel_width - expected_right).abs() < 0.5);
-/// // 5 baseline + 1 header + 7 hotkey rows = 13 行 (Quit 含む)
-/// assert!(frame.rows.len() >= 13);
+/// // 5 baseline + 1 header + 9 hotkey rows = 15 行 (Style / HUD detail / Quit 含む)
+/// assert!(frame.rows.len() >= 15);
 /// ```
 #[must_use]
 #[allow(
     clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "row 構築は逐次的でラインアウト計算が局所的に追跡できる方が読みやすい。\
-              分割すると `y` 累積を渡し回す必要があり可読性が落ちる。\
-              引数は既存 (refresh_hz/notifications/hotkeys) に並べて per-tick の\
-              非決定値 (telemetry) を 1 つ追加したもので、グルーピング struct を\
-              作るより呼び出し側が読みやすい"
+    reason = "引数は既存 (refresh_hz/notifications/hotkeys/telemetry) に表示形態\
+              (tier) を 1 つ追加したもので、グルーピング struct を作るより\
+              呼び出し側が読みやすい"
 )]
 pub fn hud_frame(
+    state: State,
+    hud: HudConfig,
+    monitor: ScreenRect<Logical>,
+    refresh_hz: u32,
+    notifications: &[HudNotification],
+    hotkeys: HotkeyMap,
+    telemetry: HudTelemetry,
+    tier: HudTier,
+) -> HudFrame {
+    match tier {
+        HudTier::Chip => chip_frame(state, hud, monitor, notifications),
+        HudTier::Full => full_frame(
+            state,
+            hud,
+            monitor,
+            refresh_hz,
+            notifications,
+            hotkeys,
+            telemetry,
+        ),
+    }
+}
+
+/// フルパネル (ホットキーガイドつき) のレイアウト。
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "row 構築は逐次的でラインアウト計算が局所的に追跡できる方が読みやすい。\
+              分割すると `y` 累積を渡し回す必要があり可読性が落ちる"
+)]
+fn full_frame(
     state: State,
     hud: HudConfig,
     monitor: ScreenRect<Logical>,
@@ -218,7 +295,7 @@ pub fn hud_frame(
     rows.push(HudRow {
         origin_x: x,
         origin_y: y,
-        text: format!("Mode: {}", mode_label(state.mode, state.visible)),
+        text: format!("Mode: {}", mode_label(state.mode)),
         font_size: hud.fonts.status,
         font: HudFontKey::Title,
         color: hud.colors.foreground,
@@ -264,8 +341,18 @@ pub fn hud_frame(
     });
     y += hud.fonts.telemetry + hud.padding.section;
 
+    // ステータス群とホットキーガイドの間に 1px の divider を引く (palette の
+    // divider 色)。section 余白の中点に置き、行レイアウトの y 累積は変えない。
+    let rules = vec![HudRule {
+        left: x,
+        top: hud.padding.section.mul_add(-0.5, y),
+        width: hud.padding.edge.mul_add(-2.0, panel_width),
+        height: 1.0,
+        color: hud.colors.divider,
+    }];
+
     // Hotkey help section. C# 版相当の操作説明を panel に常時表示する。
-    // section header (body サイズ, title font) → 7 hotkey rows (telemetry サイズ,
+    // section header (body サイズ, title font) → 8 hotkey rows (telemetry サイズ,
     // mono font) で chord 表記を揃える。Quit は emergency 退避手段なので必ず出す。
     rows.push(HudRow {
         origin_x: x,
@@ -277,13 +364,15 @@ pub fn hud_frame(
     });
     y += hud.fonts.body + hud.padding.row;
 
-    let hotkey_lines: [(&str, &str); 7] = [
+    let hotkey_lines: [(&str, &str); 9] = [
         ("Mode cycle", hotkeys.cycle_mode),
-        ("Show/Hide", hotkeys.toggle_visible),
+        ("On/Off", hotkeys.toggle_on_off),
         ("Thicker", hotkeys.thicker),
         ("Thinner", hotkeys.thinner),
         ("More opaque", hotkeys.more_opaque),
         ("Less opaque", hotkeys.less_opaque),
+        ("Style", hotkeys.style_cycle),
+        ("HUD detail", hotkeys.toggle_hud),
         ("Quit", hotkeys.quit),
     ];
     for (label, chord) in hotkey_lines {
@@ -320,9 +409,130 @@ pub fn hud_frame(
         panel_width,
         panel_height,
         background: hud.colors.background,
+        corner_radius: hud.corner_radius,
         opacity: hud.base_opacity,
+        rules,
         rows,
     }
+}
+
+/// 等幅フォントの平均文字送り (em 比)。チップ幅の概算に使う。DWrite の実測
+/// なしで core 側がレイアウトを完結させるための見積もり値 — Cascadia Mono の
+/// advance はおよそ 0.6em で、余裕側 (広め) に倒してある。
+const MONO_ADVANCE_RATIO: f32 = 0.62;
+
+/// 常駐チップ (1 行ステータス + 直下の toast 行) のレイアウト。
+///
+/// フルパネルと違い、幅は内容にフィットさせる (`MONO_ADVANCE_RATIO` 概算)。
+/// パネル座標・寸法は整数 logical px に丸め、小サイズのテキストが sub-pixel
+/// 配置でにじまないようにする。
+fn chip_frame(
+    state: State,
+    hud: HudConfig,
+    monitor: ScreenRect<Logical>,
+    notifications: &[HudNotification],
+) -> HudFrame {
+    let chip = hud.chip;
+    let margin = hud.geometry.margin;
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "screen-space px は f32 mantissa に余裕で収まる"
+    )]
+    let monitor_right = (monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX)) as f32;
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "screen-space px は f32 mantissa に余裕で収まる"
+    )]
+    let monitor_top = monitor.top() as f32;
+
+    let status = chip_text(state);
+
+    // 幅 = ステータス行と toast 行のうち最長のもの (概算) + 左右 padding。
+    let mut text_width = estimate_mono_width(&status, chip.font_size);
+    for n in notifications {
+        text_width = text_width.max(estimate_mono_width(&n.message, chip.font_size));
+    }
+    let panel_width = chip.pad_x.mul_add(2.0, text_width).ceil();
+
+    let row_advance = chip.font_size + hud.padding.row;
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "notification 件数は一桁オーダー"
+    )]
+    let toast_height = notifications.len() as f32 * row_advance;
+    let panel_height = (chip.pad_y.mul_add(2.0, chip.font_size) + toast_height).ceil();
+
+    let panel_left = (monitor_right - margin - panel_width).round();
+    let panel_top = (monitor_top + margin).round();
+
+    let x = panel_left + chip.pad_x;
+    let mut y = panel_top + chip.pad_y;
+    let mut rows = Vec::with_capacity(1 + notifications.len());
+    rows.push(HudRow {
+        origin_x: x,
+        origin_y: y,
+        text: status,
+        font_size: chip.font_size,
+        font: HudFontKey::Mono,
+        color: hud.colors.foreground,
+    });
+    y += row_advance;
+    for notification in notifications {
+        rows.push(HudRow {
+            origin_x: x,
+            origin_y: y,
+            text: notification.message.clone(),
+            font_size: chip.font_size,
+            font: HudFontKey::Mono,
+            color: notification_color(notification.class, hud),
+        });
+        y += row_advance;
+    }
+
+    HudFrame {
+        panel_left,
+        panel_top,
+        panel_width,
+        panel_height,
+        background: hud.colors.background,
+        corner_radius: hud.corner_radius,
+        opacity: hud.base_opacity,
+        rules: Vec::new(),
+        rows,
+    }
+}
+
+/// 等幅前提のテキスト幅概算 (logical px)。
+fn estimate_mono_width(text: &str, font_size: f32) -> f32 {
+    #[allow(clippy::cast_precision_loss, reason = "HUD テキストは数十文字オーダー")]
+    let chars = text.chars().count() as f32;
+    chars * font_size * MONO_ADVANCE_RATIO
+}
+
+/// チップのステータス文字列: `H · 28px · 67%` (Off 中は `Off`)。
+/// `%` は知覚値ではなく保存バイトの百分率 (0xAA → 67%)。
+fn chip_text(state: State) -> String {
+    let letter = match state.mode {
+        Mode::Off => return "Off".to_string(),
+        Mode::Horizontal => "H",
+        Mode::Vertical => "V",
+    };
+    let opacity_pct = percent_of_byte(state.config.opacity.get());
+    format!(
+        "{letter} · {}px · {opacity_pct}%",
+        state.config.thickness.get()
+    )
+}
+
+/// `byte / 255` の百分率 (四捨五入)。
+fn percent_of_byte(byte: u8) -> u32 {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "0..=255 を 100 倍しても f32 で exact、round 後は 0..=100"
+    )]
+    let pct = (f32::from(byte) * 100.0 / 255.0).round() as u32;
+    pct
 }
 
 /// [`NotificationClass`] を [`HudConfig::colors`] のパレットに mapping する。
@@ -334,12 +544,8 @@ const fn notification_color(class: NotificationClass, hud: HudConfig) -> Rgba {
     }
 }
 
-/// `State` の mode + visible を 1 つの表示ラベルに畳む。`visible == false` は
-/// hidden を上書き表示。
-const fn mode_label(mode: Mode, visible: bool) -> &'static str {
-    if !visible {
-        return "Hidden";
-    }
+/// `Mode` を表示ラベルに畳む。「非表示」は `Mode::Off` の一表現のみ。
+const fn mode_label(mode: Mode) -> &'static str {
     match mode {
         Mode::Off => "Off",
         Mode::Horizontal => "Horizontal",
@@ -356,9 +562,9 @@ mod tests {
         ScreenRect::new(Point::new(0, 0), 1920, 1080)
     }
 
-    /// `hud_frame()` を default 引数で呼ぶ test helper。Phase ζ で hotkeys 引数が
-    /// 必須化、PR 4 で telemetry 引数が必須化されたため、12+ 件の test を一行で
-    /// 書き直せるよう小さな wrapper を置く。telemetry は `ZERO` 既定。
+    /// `hud_frame()` を default 引数 (フル表示) で呼ぶ test helper。Phase ζ で
+    /// hotkeys 引数が必須化、PR 4 で telemetry 引数が必須化されたため、12+ 件の
+    /// test を一行で書き直せるよう小さな wrapper を置く。telemetry は `ZERO` 既定。
     fn default_frame(state: State, refresh_hz: u32, notifications: &[HudNotification]) -> HudFrame {
         hud_frame(
             state,
@@ -368,6 +574,21 @@ mod tests {
             notifications,
             HotkeyMap::DEFAULT,
             HudTelemetry::ZERO,
+            HudTier::Full,
+        )
+    }
+
+    /// チップ表示の test helper。
+    fn chip(state: State, notifications: &[HudNotification]) -> HudFrame {
+        hud_frame(
+            state,
+            HudConfig::DEFAULT,
+            monitor(),
+            60,
+            notifications,
+            HotkeyMap::DEFAULT,
+            HudTelemetry::ZERO,
+            HudTier::Chip,
         )
     }
 
@@ -383,8 +604,8 @@ mod tests {
     fn default_state_rows_are_present_and_ordered_top_to_bottom() {
         let f = default_frame(State::DEFAULT, 144, &[]);
         assert!(
-            f.rows.len() >= 13,
-            "expected at least 13 rows (5 baseline + 1 header + 7 hotkeys), got {}",
+            f.rows.len() >= 15,
+            "expected at least 15 rows (5 baseline + 1 header + 9 hotkeys), got {}",
             f.rows.len()
         );
         for w in f.rows.windows(2) {
@@ -399,9 +620,7 @@ mod tests {
 
     #[test]
     fn mode_label_reflects_state() {
-        let mut s = State::DEFAULT;
-        s.mode = Mode::Horizontal;
-        let f = default_frame(s, 60, &[]);
+        let f = default_frame(State::with_mode(Mode::Horizontal), 60, &[]);
         assert!(
             f.rows.iter().any(|r| r.text == "Mode: Horizontal"),
             "rows: {:?}",
@@ -410,13 +629,10 @@ mod tests {
     }
 
     #[test]
-    fn hidden_state_overrides_mode_label() {
-        let mut s = State::DEFAULT;
-        s.mode = Mode::Horizontal;
-        s.visible = false;
-        let f = default_frame(s, 60, &[]);
+    fn off_state_shows_mode_off() {
+        let f = default_frame(State::DEFAULT, 60, &[]);
         assert!(
-            f.rows.iter().any(|r| r.text == "Mode: Hidden"),
+            f.rows.iter().any(|r| r.text == "Mode: Off"),
             "rows: {:?}",
             f.rows
         );
@@ -456,6 +672,7 @@ mod tests {
             &[],
             HotkeyMap::DEFAULT,
             t,
+            HudTier::Full,
         );
         let row = f
             .rows
@@ -516,8 +733,8 @@ mod tests {
             until_ms: 1_000,
         };
         let f = default_frame(State::DEFAULT, 60, &[warn, info]);
-        // baseline 5 + hotkey help 1+7 = 13 + 2 notifications = 15 rows or more
-        assert!(f.rows.len() >= 15, "rows: {:?}", f.rows);
+        // baseline 5 + hotkey help 1+9 = 15 + 2 notifications = 17 rows or more
+        assert!(f.rows.len() >= 17, "rows: {:?}", f.rows);
         let n1 = &f.rows[f.rows.len() - 2];
         let n2 = &f.rows[f.rows.len() - 1];
         assert_eq!(n1.text, "Ctrl+Alt+R → already in use");
@@ -545,9 +762,9 @@ mod tests {
     fn empty_notifications_preserve_default_row_count() {
         let f = default_frame(State::DEFAULT, 60, &[]);
         // baseline 5 (title + status + thickness + opacity + telemetry)
-        // + 1 hotkey help header + 7 hotkey rows (cycle / show / thicker /
-        // thinner / more / less / quit) = 13 rows
-        assert_eq!(f.rows.len(), 13);
+        // + 1 hotkey help header + 9 hotkey rows (cycle / on-off / thicker /
+        // thinner / more / less / style / hud-detail / quit) = 15 rows
+        assert_eq!(f.rows.len(), 15);
     }
 
     /// 各 row の `origin_y` を `HudConfig::DEFAULT` 由来の算術で pin する。
@@ -567,7 +784,7 @@ mod tests {
     /// - row 4 (Telemetry)        `y4 = 146 + 20 (body font) + 16 (section)` = `182`
     /// - row 5 (Hotkeys header)   `y5 = 182 + 18 (telemetry) + 16 (section)` = `216`
     /// - row 6 (Mode cycle)       `y6 = 216 + 20 (body font) + 8 (row)` = `244`
-    /// - row 7..12 (Hotkey rows)  `y{n+1} = y{n} + 18 (telemetry) + 8 (row)` = `+26 each`
+    /// - row 7..14 (Hotkey rows)  `y{n+1} = y{n} + 18 (telemetry) + 8 (row)` = `+26 each`
     ///
     /// `HudConfig::DEFAULT` 自体が変わったらこの test を更新する (回帰検知の
     /// 重みを残すために、寛容な許容差ではなく `EPSILON` 級で pin する)。
@@ -576,8 +793,8 @@ mod tests {
         let f = default_frame(State::DEFAULT, 60, &[]);
         assert_eq!(
             f.rows.len(),
-            13,
-            "5 baseline + 1 header + 7 hotkeys expected"
+            15,
+            "5 baseline + 1 header + 9 hotkeys expected"
         );
 
         // `panel_top` itself は monitor_top + margin。
@@ -589,8 +806,10 @@ mod tests {
 
         // row 0..5: baseline + Hotkeys header
         let baseline_y = [48.0_f32, 88.0, 118.0, 146.0, 182.0, 216.0];
-        // row 6..12: 7 hotkey rows, starting at 244 with +26 step
-        let hotkey_y = [244.0_f32, 270.0, 296.0, 322.0, 348.0, 374.0, 400.0];
+        // row 6..14: 9 hotkey rows, starting at 244 with +26 step
+        let hotkey_y = [
+            244.0_f32, 270.0, 296.0, 322.0, 348.0, 374.0, 400.0, 426.0, 452.0,
+        ];
         let expected_y: Vec<f32> = baseline_y.iter().chain(hotkey_y.iter()).copied().collect();
         for (i, exp) in expected_y.iter().enumerate() {
             let actual = f.rows[i].origin_y;
@@ -602,14 +821,134 @@ mod tests {
         }
     }
 
+    /// divider rule を pin する: telemetry 行とホットキーガイドの間の section
+    /// 余白 (16px) の中点 = `216 - 8 = 208` に置かれ、左右 edge padding 内側を
+    /// 横断する 1px の palette divider 色。
+    #[test]
+    fn divider_rule_pins_position_and_color() {
+        let f = default_frame(State::DEFAULT, 60, &[]);
+        assert_eq!(f.rules.len(), 1, "exactly one divider rule expected");
+        let rule = f.rules[0];
+        assert!(
+            (rule.top - 208.0).abs() < 0.001,
+            "divider top expected 208.0, got {}",
+            rule.top
+        );
+        assert!((rule.height - 1.0).abs() < 0.001);
+        let edge = HudConfig::DEFAULT.padding.edge;
+        assert!((rule.left - (f.panel_left + edge)).abs() < 0.001);
+        assert!((rule.width - edge.mul_add(-2.0, f.panel_width)).abs() < 0.001);
+        assert_eq!(rule.color, HudConfig::DEFAULT.colors.divider);
+    }
+
+    /// `corner_radius` が config からそのまま frame に流れることを pin する。
+    #[test]
+    fn corner_radius_flows_from_config() {
+        let f = default_frame(State::DEFAULT, 60, &[]);
+        assert!((f.corner_radius - HudConfig::DEFAULT.corner_radius).abs() < f32::EPSILON);
+    }
+
+    // ---- chip tier ---------------------------------------------------------
+
+    /// Off 中のチップは `Off` 1 行のみ。
+    #[test]
+    fn chip_shows_off_label_when_mode_is_off() {
+        let f = chip(State::DEFAULT, &[]);
+        assert_eq!(f.rows.len(), 1);
+        assert_eq!(f.rows[0].text, "Off");
+        assert_eq!(f.rows[0].font, HudFontKey::Mono);
+    }
+
+    /// アクティブ中のチップは `H · 28px · 67%` 形式 (0xAA → 67%)。
+    #[test]
+    fn chip_status_text_format_is_pinned() {
+        let f = chip(State::with_mode(Mode::Horizontal), &[]);
+        assert_eq!(f.rows[0].text, "H · 28px · 67%");
+        let v = chip(State::with_mode(Mode::Vertical), &[]);
+        assert!(
+            v.rows[0].text.starts_with("V · "),
+            "text: {}",
+            v.rows[0].text
+        );
+    }
+
+    /// チップは右上アンカーかつ整数 px 境界に乗る。フルパネルよりずっと小さい。
+    #[test]
+    fn chip_is_anchored_top_right_and_integer_aligned() {
+        let f = chip(State::with_mode(Mode::Horizontal), &[]);
+        let margin = HudConfig::DEFAULT.geometry.margin;
+        assert!(
+            ((f.panel_left + f.panel_width) - (1920.0 - margin)).abs() <= 1.0,
+            "right edge ≈ monitor right - margin"
+        );
+        assert!((f.panel_top - margin).abs() < 0.001);
+        assert!(f.panel_left.fract().abs() < 0.001, "integer-aligned left");
+        assert!(f.panel_width.fract().abs() < 0.001, "integer width");
+        assert!(f.panel_height.fract().abs() < 0.001, "integer height");
+        assert!(
+            f.panel_width < 200.0 && f.panel_height < 40.0,
+            "chip must be small: {}x{}",
+            f.panel_width,
+            f.panel_height
+        );
+    }
+
+    /// toast はチップ行の下に追記され、パネル高が伸びる。フル展開はしない。
+    #[test]
+    fn chip_appends_toasts_below_status_and_grows_height() {
+        let toast = HudNotification {
+            class: NotificationClass::Info,
+            message: "Overlay is off — Ctrl+Alt+H to show".to_string(),
+            until_ms: i64::MAX,
+        };
+        let plain = chip(State::DEFAULT, &[]);
+        let with_toast = chip(State::DEFAULT, &[toast]);
+        assert_eq!(with_toast.rows.len(), 2);
+        assert!(
+            with_toast.rows[1].origin_y > with_toast.rows[0].origin_y,
+            "toast sits below the status row"
+        );
+        assert!(
+            with_toast.panel_height > plain.panel_height,
+            "toast grows the chip panel"
+        );
+        assert!(
+            with_toast.panel_width > plain.panel_width,
+            "long toast widens the chip panel"
+        );
+        assert_eq!(
+            with_toast.rows[1].color,
+            HudConfig::DEFAULT.colors.accent,
+            "Info toast uses the accent color"
+        );
+    }
+
+    /// `HudTier::toggle` は往復で元に戻る。
+    #[test]
+    fn hud_tier_toggle_is_involutive() {
+        assert_eq!(HudTier::Chip.toggle(), HudTier::Full);
+        assert_eq!(HudTier::Full.toggle(), HudTier::Chip);
+    }
+
+    /// チップにはガイド行 (Hotkeys) も divider も出ない。
+    #[test]
+    fn chip_has_no_guide_rows_and_no_rules() {
+        let f = chip(State::with_mode(Mode::Horizontal), &[]);
+        assert!(f.rules.is_empty(), "no divider on the chip");
+        assert!(
+            !f.rows.iter().any(|r| r.text.contains("Hotkeys")),
+            "no guide on the chip"
+        );
+    }
+
     /// notification rows の `origin_y` を pin する。hotkey help section の後ろに
     /// section 余白を挟んで notifications が並ぶ。
     ///
     /// 期待値:
-    /// - 最後の hotkey row (Quit) の y = 400 (上 test 参照)
-    /// - hotkey loop 終了後 `y += telemetry(18) + row(8) + (section - row)(8)` = +34 → 434
-    /// - notification[0] y = 434
-    /// - notification[1] y = `434 + 18 (telemetry) + 8 (row)` = `460`
+    /// - 最後の hotkey row (Quit) の y = 452 (上 test 参照)
+    /// - hotkey loop 終了後 `y += telemetry(18) + row(8) + (section - row)(8)` = +34 → 486
+    /// - notification[0] y = 486
+    /// - notification[1] y = `486 + 18 (telemetry) + 8 (row)` = `512`
     #[test]
     fn notification_origin_y_pins_default_layout_arithmetic() {
         let n1 = HudNotification {
@@ -623,16 +962,16 @@ mod tests {
             until_ms: i64::MAX,
         };
         let f = default_frame(State::DEFAULT, 60, &[n1, n2]);
-        assert_eq!(f.rows.len(), 15, "13 baseline+hotkey + 2 notification rows");
-        let actual_n1 = f.rows[13].origin_y;
-        let actual_n2 = f.rows[14].origin_y;
+        assert_eq!(f.rows.len(), 17, "15 baseline+hotkey + 2 notification rows");
+        let actual_n1 = f.rows[15].origin_y;
+        let actual_n2 = f.rows[16].origin_y;
         assert!(
-            (actual_n1 - 434.0).abs() < 0.001,
-            "notification[0] origin_y expected 434.0, got {actual_n1}"
+            (actual_n1 - 486.0).abs() < 0.001,
+            "notification[0] origin_y expected 486.0, got {actual_n1}"
         );
         assert!(
-            (actual_n2 - 460.0).abs() < 0.001,
-            "notification[1] origin_y expected 460.0, got {actual_n2}"
+            (actual_n2 - 512.0).abs() < 0.001,
+            "notification[1] origin_y expected 512.0, got {actual_n2}"
         );
     }
 
@@ -646,11 +985,13 @@ mod tests {
         // のような短い prefix が `Ctrl+Alt+Right` にマッチする問題を回避)。
         let custom = HotkeyMap {
             cycle_mode: "Ctrl+Shift+M",
-            toggle_visible: "Ctrl+Shift+V",
+            toggle_on_off: "Ctrl+Shift+V",
             thicker: "Ctrl+Shift+T",
             thinner: "Ctrl+Shift+N",
             more_opaque: "Ctrl+Shift+O",
             less_opaque: "Ctrl+Shift+S",
+            style_cycle: "Ctrl+Shift+Y",
+            toggle_hud: "Ctrl+Shift+D",
             quit: "Ctrl+Shift+X",
         };
         let f = hud_frame(
@@ -661,6 +1002,7 @@ mod tests {
             &[],
             custom,
             HudTelemetry::ZERO,
+            HudTier::Full,
         );
         let texts: Vec<&str> = f.rows.iter().map(|r| r.text.as_str()).collect();
         // hotkey rows は telemetry 行の後の 1 header + 7 rows
@@ -669,6 +1011,11 @@ mod tests {
             .find(|t| t.contains("Mode cycle"))
             .expect("cycle row");
         assert!(cycle_row.contains("Ctrl+Shift+M"), "cycle row: {cycle_row}");
+        let style_row = texts
+            .iter()
+            .find(|t| t.contains("Style"))
+            .expect("style row");
+        assert!(style_row.contains("Ctrl+Shift+Y"), "style row: {style_row}");
         let quit_row = texts.iter().find(|t| t.contains("Quit")).expect("quit row");
         assert!(quit_row.contains("Ctrl+Shift+X"), "quit row: {quit_row}");
         // DEFAULT chord は custom map に上書きされて表面化しないこと

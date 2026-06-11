@@ -39,7 +39,11 @@ fn main() -> anyhow::Result<()> {
         "creating overlay"
     );
 
-    let _overlay = OverlayWindow::new(monitor, HudConfig::DEFAULT)?;
+    let _overlay = OverlayWindow::new(
+        monitor,
+        HudConfig::DEFAULT,
+        linerule_core::AnimConfig::DEFAULT,
+    )?;
     run_message_pump()?;
     Ok(())
 }

@@ -121,8 +121,39 @@ impl HudRenderer {
             });
         }
 
+        // divider 等の塗り矩形を surface-local 座標へ変換する。
+        let rules: Vec<dwrite::HudDrawRule> = frame
+            .rules
+            .iter()
+            .map(|rule| dwrite::HudDrawRule {
+                rect: D2D_RECT_F {
+                    left: rule.left - frame.panel_left,
+                    top: rule.top - frame.panel_top,
+                    right: rule.left - frame.panel_left + rule.width,
+                    bottom: rule.top - frame.panel_top + rule.height,
+                },
+                color: rule.color,
+            })
+            .collect();
+
+        // 角丸パネルの塗り矩形 (surface-local 全面)。
+        let panel = D2D_RECT_F {
+            left: 0.0,
+            top: 0.0,
+            right: frame.panel_width,
+            bottom: frame.panel_height,
+        };
+
         let surface = self.surface.as_ref().expect("just created");
-        dwrite::draw_hud_to_surface(surface, frame.background, frame.opacity, &drawn)?;
+        dwrite::draw_hud_to_surface(
+            surface,
+            frame.background,
+            panel,
+            frame.corner_radius,
+            frame.opacity,
+            &rules,
+            &drawn,
+        )?;
 
         // visual の位置を反映する。
         //

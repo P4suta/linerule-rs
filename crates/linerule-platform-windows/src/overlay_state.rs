@@ -34,8 +34,8 @@ use std::time::Instant;
 
 use linerule_core::input::tick::TickWorld;
 use linerule_core::{
-    ChordError, HotkeyMap, HudConfig, HudNotification, Logical, NotificationClass, OverlayAction,
-    ScreenRect,
+    AnimConfig, ChordError, HotkeyMap, HudConfig, HudNotification, Logical, NotificationClass,
+    OverlayAction, Point, ScreenRect,
 };
 use tracing::Span;
 use windows::Win32::Foundation::HWND;
@@ -101,6 +101,12 @@ pub struct OverlayWndState {
     monitor: RefCell<ScreenRect<Logical>>,
     /// HUD の見た目・タイミング設定。
     hud_config: HudConfig,
+    /// トランジションのタイミング設定。`tick::step` に毎 tick 渡す。
+    anim_config: AnimConfig,
+    /// 直近の `RefreshHud` で実際に適用された HUD パネル矩形。チップ / フルで
+    /// サイズが変わるため、`SetHudOpacity` の距離フェードはこのキャッシュに
+    /// 対して計算する (config からの再計算ではフル固定サイズしか得られない)。
+    hud_panel_rect: Cell<ScreenRect<Logical>>,
     /// `RegisterHotKey` 経由で確定したユーザー向け chord 表示。`hud_frame()` の
     /// 操作説明セクションに渡して画面上に「Ctrl+Alt+R」等を出すために保持する。
     /// `register_hotkeys` 経由で一度書き込まれ、以降は読み取り専用。
@@ -133,8 +139,19 @@ impl OverlayWndState {
     /// 新しい instance state を構築する。デフォルトの `TickWorld::INITIAL`
     /// (mode = Off) で初期化される。
     #[must_use]
-    pub fn new(log_span: Span, monitor: ScreenRect<Logical>, hud_config: HudConfig) -> Self {
-        Self::new_with_initial_world(log_span, monitor, hud_config, TickWorld::INITIAL)
+    pub fn new(
+        log_span: Span,
+        monitor: ScreenRect<Logical>,
+        hud_config: HudConfig,
+        anim_config: AnimConfig,
+    ) -> Self {
+        Self::new_with_initial_world(
+            log_span,
+            monitor,
+            hud_config,
+            anim_config,
+            TickWorld::INITIAL,
+        )
     }
 
     /// 任意の `TickWorld` で初期化する。`--initial-mode` 等で起動時 mode を
@@ -145,6 +162,7 @@ impl OverlayWndState {
         log_span: Span,
         monitor: ScreenRect<Logical>,
         hud_config: HudConfig,
+        anim_config: AnimConfig,
         initial_world: TickWorld,
     ) -> Self {
         let (sender, receiver) = channel::<OverlayAction>();
@@ -159,7 +177,9 @@ impl OverlayWndState {
             hotkey_inbox: receiver,
             id_to_action: RefCell::new(HashMap::new()),
             monitor: RefCell::new(monitor),
+            hud_panel_rect: Cell::new(initial_hud_panel_rect(&hud_config, monitor)),
             hud_config,
+            anim_config,
             hotkeys: RefCell::new(HotkeyMap::DEFAULT),
             hotkey_conflicts: RefCell::new(Vec::new()),
             notifications: RefCell::new(Vec::new()),
@@ -179,9 +199,15 @@ impl OverlayWndState {
 
     /// 短寿命 toast を queue する。`lifetime_ms` 経過後に `live_notifications`
     /// で除去される。永続させたい場合は `i64::MAX` を渡す。
+    ///
+    /// 同一 `(class, message)` の toast が既にあれば積み増さず寿命を更新する
+    /// (repeatable hotkey の長押しで同じ rejection toast が key-repeat ごとに
+    /// 積み重なるのを防ぐ)。
     pub fn push_notification(&self, class: NotificationClass, message: String, lifetime_ms: i64) {
         let until_ms = self.now_ms().saturating_add(lifetime_ms);
-        self.notifications.borrow_mut().push(HudNotification {
+        let mut q = self.notifications.borrow_mut();
+        q.retain(|n| !(n.class == class && n.message == message));
+        q.push(HudNotification {
             class,
             message,
             until_ms,
@@ -317,6 +343,23 @@ impl OverlayWndState {
         &self.hud_config
     }
 
+    /// トランジション設定 (`Copy`) を取り出す。`tick::step` に渡す。
+    #[must_use]
+    pub fn anim_config(&self) -> AnimConfig {
+        self.anim_config
+    }
+
+    /// 直近 `RefreshHud` 適用時の実 HUD パネル矩形。
+    #[must_use]
+    pub fn hud_panel_rect(&self) -> ScreenRect<Logical> {
+        self.hud_panel_rect.get()
+    }
+
+    /// `RefreshHud` 適用時に実パネル矩形をキャッシュする。
+    pub fn set_hud_panel_rect(&self, rect: ScreenRect<Logical>) {
+        self.hud_panel_rect.set(rect);
+    }
+
     /// `register_hotkeys` から HUD 表示用に chord map を仕込む。
     pub fn record_hotkeys(&self, hotkeys: HotkeyMap) {
         *self.hotkeys.borrow_mut() = hotkeys;
@@ -355,6 +398,33 @@ impl OverlayWndState {
     }
 }
 
+/// 起動直後 (最初の `RefreshHud` 適用前) のフォールバック矩形: フルパネル想定。
+/// 最初の tick の `RefreshHud` が必ず上書きするので、精度より「妥当な初期値」
+/// であることが重要。
+fn initial_hud_panel_rect(hud: &HudConfig, monitor: ScreenRect<Logical>) -> ScreenRect<Logical> {
+    let monitor_right = monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX);
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "screen-space px; round の結果は i32 範囲内"
+    )]
+    let panel_left = monitor_right - (hud.geometry.margin + hud.geometry.width).round() as i32;
+    #[allow(clippy::cast_possible_truncation, reason = "ditto")]
+    let panel_top = monitor.top() + hud.geometry.margin.round() as i32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "パネル寸法は正の screen-space px"
+    )]
+    let w = hud.geometry.width.round() as u32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "ditto"
+    )]
+    let h = hud.geometry.height.round() as u32;
+    ScreenRect::new(Point::<Logical>::new(panel_left, panel_top), w, h)
+}
+
 impl core::fmt::Debug for OverlayWndState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("OverlayWndState")
@@ -377,7 +447,12 @@ mod tests {
 
     fn fresh_state() -> OverlayWndState {
         let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
-        OverlayWndState::new(Span::none(), monitor, HudConfig::DEFAULT)
+        OverlayWndState::new(
+            Span::none(),
+            monitor,
+            HudConfig::DEFAULT,
+            AnimConfig::DEFAULT,
+        )
     }
 
     #[test]
@@ -484,6 +559,24 @@ mod tests {
             conflicts[0].reason,
             HotkeyFailure::ChordParse(ChordError::Empty)
         ));
+    }
+
+    /// 同一 `(class, message)` の toast は積み増さず寿命だけ更新される。
+    /// repeatable hotkey の長押しで rejection toast が key-repeat ごとに
+    /// 重複表示される事故を防ぐピン。
+    #[test]
+    fn push_notification_dedups_same_class_and_message() {
+        let s = fresh_state();
+        s.push_notification(NotificationClass::Info, "Overlay is off".to_string(), 3_000);
+        s.push_notification(NotificationClass::Info, "Overlay is off".to_string(), 3_000);
+        assert_eq!(
+            s.live_notifications().len(),
+            1,
+            "duplicate toast must not stack"
+        );
+        // class が違えば別 toast として共存する。
+        s.push_notification(NotificationClass::Warn, "Overlay is off".to_string(), 3_000);
+        assert_eq!(s.live_notifications().len(), 2);
     }
 
     #[test]

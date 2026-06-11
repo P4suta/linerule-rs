@@ -20,6 +20,13 @@ impl Rgba {
     /// platform layer converts to premultiplied at the GPU boundary.
     pub const DEFAULT_MASK: Self = Self::new(0x00, 0x00, 0x00, 0xCC);
 
+    /// Bright surround mask: near-white at the same straight alpha as
+    /// [`Self::DEFAULT_MASK`]. Used by [`crate::config::SurroundStyle::Bright`]
+    /// to wash the area outside the slit in light instead of darkening it.
+    /// The alpha byte is overridden by `opacity` at frame-build time, so only
+    /// the RGB channels matter here.
+    pub const BRIGHT_MASK: Self = Self::new(0xFF, 0xFF, 0xFF, 0xCC);
+
     /// Fully transparent (all channels zero).
     pub const TRANSPARENT: Self = Self::new(0, 0, 0, 0);
     /// Opaque black.

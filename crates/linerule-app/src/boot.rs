@@ -121,21 +121,17 @@ fn run_overlay(
     let monitor = monitor_info::virtual_screen_bounds()?;
 
     // initial_mode 指定時は TickWorld の初期 state を上書きする (CI smoke 用)。
+    // `State::with_mode` が mode/last_active の不変条件を守る。
     let initial_world = initial_mode
-        .map(|m| {
-            let state = State {
-                mode: m.into(),
-                ..State::DEFAULT
-            };
-            TickWorld::with_initial_state(state)
-        })
+        .map(|m| TickWorld::with_initial_state(State::with_mode(m.into())))
         .unwrap_or(TickWorld::INITIAL);
 
     // Drop order が重要: 各 thread (`_clock`, `_auto_quit`) と `_foreground_hook`
     // の callback は overlay HWND に `PostMessageW` を投げる可能性があるので、
     // overlay HWND が破棄される前に解除/join する必要がある。Rust の逆順 Drop
     // を活かすため overlay → _foreground_hook → _clock → _auto_quit の順に宣言する。
-    let mut overlay = OverlayWindow::new_with_initial_world(monitor, config.hud, initial_world)?;
+    let mut overlay =
+        OverlayWindow::new_with_initial_world(monitor, config.hud, config.anim, initial_world)?;
     overlay.attach_dcomp()?;
     overlay.register_hotkeys(&config.hotkeys, config.input.tap_step)?;
     // Alt+Tab 等で他アプリが前景化した後も overlay を最前面に保つ (ADR-0012)。
@@ -165,7 +161,7 @@ fn run_overlay(
 
     tracing::info!(
         cycle_mode = config.hotkeys.cycle_mode,
-        toggle_visible = config.hotkeys.toggle_visible,
+        toggle_on_off = config.hotkeys.toggle_on_off,
         quit = config.hotkeys.quit,
         duration_ms = duration_ms.unwrap_or(0),
         initial_mode = ?initial_mode,

@@ -26,7 +26,7 @@ const MOD_NOREPEAT: u32 = 0x4000;
 /// `RegisterHotKey(hwnd, id, modifiers, vk)` の薄い safe wrapper。
 ///
 /// `repeatable = false` のとき `MOD_NOREPEAT` を自動付与し、長押し中の連続発火を
-/// 抑止する。CycleMode / ToggleVisible / Quit のような toggle 系 action 向け。
+/// 抑止する。CycleMode / ToggleOnOff / Quit のような toggle 系 action 向け。
 ///
 /// `repeatable = true` のとき `MOD_NOREPEAT` を付与しないため、Windows のキー
 /// リピート速度に従って `WM_HOTKEY` が連続で飛ぶ。BumpThickness / BumpOpacity の

@@ -19,8 +19,8 @@
 use linerule_core::input::hud_fade;
 use linerule_core::input::tick::{TickEffect, TickInput, step};
 use linerule_core::{
-    DeviceLostOutcome, HudFrame, Logical, OverlayAction, OverlayFrame, Point, ScreenRect, State,
-    hud_frame, is_device_lost_hresult, record_device_lost_failure, render,
+    DeviceLostOutcome, HudFrame, Logical, OverlayAction, OverlayFrame, Point, RejectReason,
+    ScreenRect, hud_frame, is_device_lost_hresult, record_device_lost_failure, render,
 };
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -40,6 +40,10 @@ use crate::win32_ffi;
 /// `WM_APP_TICK` の数値が `WM_APP` 帯にあることを const にしてリンカへ示す
 /// （`WM_APP` import 未使用警告を抑える兼ねた sanity check）。
 const _: () = assert!(WM_APP_TICK >= WM_APP);
+
+/// `NotifyRejected` toast の表示時間 (ms)。長押し repeat 中は dedup により
+/// 同一 toast の寿命が更新され続け、離してから 3 秒で消える。
+const REJECT_TOAST_MS: i64 = 3_000;
 
 /// WM_NCCREATE / WM_NCDESTROY 以外のメッセージを dispatch する純粋関数。
 ///
@@ -158,12 +162,14 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             // ForegroundHook の callback (OS hook thread) から PostMessage で
             // 届く。実 SetWindowPos(HWND_TOPMOST) は UI thread 必須なのでここで
             // 実行する (ADR-0012)。
+            // 既に topmost バンドに居る場合は reassert_topmost が no-op で
+            // 帰る (不要な SetWindowPos による z-order churn / チラつき防止)。
             if let Err(e) = win32_ffi::accessibility::reassert_topmost(hwnd) {
                 tracing::warn!(parent: state.span(), error = %e,
                     "reassert_topmost failed (foreground hook)");
             } else {
                 tracing::trace!(parent: state.span(),
-                    "topmost re-asserted after foreground change");
+                    "topmost ensured after foreground change");
             }
             Some(LRESULT(0))
         },
@@ -209,7 +215,7 @@ fn apply_tick(state: &OverlayWndState) -> Result<()> {
     };
     let world = state.tick_world_snapshot();
     let telemetry_refresh = state.hud_config().telemetry_refresh;
-    let (next_world, effects) = step(world, &input, telemetry_refresh);
+    let (next_world, effects) = step(world, &input, telemetry_refresh, state.anim_config());
     state.store_tick_world(next_world);
     let result = apply_effects(state, &effects);
     let elapsed = tick_start.elapsed();
@@ -272,16 +278,9 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                 mode,
                 cursor,
                 config,
+                sample,
             } => {
-                let frame = render::frame(
-                    State {
-                        mode,
-                        visible: true,
-                        config,
-                    },
-                    cursor,
-                    state.monitor(),
-                );
+                let frame = render::frame(mode, config, cursor, state.monitor(), sample);
                 with_device_lost_recovery(state, "DrawOverlay", &|s| {
                     apply_overlay_frame(s, &frame)
                 })?;
@@ -291,7 +290,7 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                     apply_overlay_frame(s, &OverlayFrame::EMPTY)
                 })?;
             },
-            TickEffect::RefreshHud(s) => {
+            TickEffect::RefreshHud { state: s, tier } => {
                 let hz = crate::render_timing::refresh_rate_hz();
                 let notifications = build_notifications(state);
                 let telemetry = state.frame_timing().borrow().snapshot();
@@ -303,35 +302,52 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                     &notifications,
                     state.hotkeys(),
                     telemetry,
+                    tier,
                 );
+                // 実際に適用したパネル矩形をキャッシュし、`SetHudOpacity` の
+                // 距離フェードが「いま画面に出ている方 (チップ or フル)」の
+                // bounds に対して効くようにする。
+                state.set_hud_panel_rect(panel_rect_of(&frame));
                 with_device_lost_recovery(state, "RefreshHud", &|st| apply_hud_frame(st, &frame))?;
             },
-            TickEffect::SetHudOpacity { state: s, cursor } => {
-                // cursor 距離から fade opacity を pure 関数で計算し、HUD visual
-                // の `IDCompositionVisual3::SetOpacity2` で multiplicative に
+            TickEffect::SetHudOpacity {
+                state: s,
+                cursor,
+                envelope,
+            } => {
+                // cursor 距離から fade opacity を pure 関数で計算し、HUD の
+                // フェードエンベロープ (起動 / チップ⇄フル切替) を乗算して
+                // `IDCompositionVisual3::SetOpacity2` で multiplicative に
                 // 適用する (issue #47)。`frame.opacity` の bake (色 alpha) は
-                // RefreshHud 側で別軸として保持されるので、cursor 移動だけで
-                // surface 再描画は走らない。
-                let opacity = hud_fade::compute_opacity(
+                // RefreshHud 側で別軸として保持されるので、cursor 移動や
+                // エンベロープ進行だけでは surface 再描画は走らない。
+                let distance = hud_fade::compute_opacity(
                     s,
                     cursor,
-                    hud_panel_rect(state),
+                    state.hud_panel_rect(),
                     state.hud_config().fade_decay_px,
                 );
-                apply_hud_opacity(state, opacity)?;
+                apply_hud_opacity(state, hud_fade::apply_envelope(distance, envelope))?;
             },
-            TickEffect::LogStateChanged {
-                action,
-                mode,
-                visible,
-            } => {
+            TickEffect::LogStateChanged { action, mode } => {
                 tracing::info!(
                     parent: state.span(),
                     ?action,
                     ?mode,
-                    visible,
                     "state changed"
                 );
+            },
+            TickEffect::NotifyRejected { reason } => match reason {
+                RejectReason::AdjustWhileOff => {
+                    // core は semantic な理由だけを運び、実際に設定されている
+                    // chord 文字列はこちら (HotkeyMap の持ち主) で整形する。
+                    let chord = state.hotkeys().toggle_on_off;
+                    state.push_notification(
+                        linerule_core::NotificationClass::Info,
+                        format!("Overlay is off — {chord} to show"),
+                        REJECT_TOAST_MS,
+                    );
+                },
             },
         }
     }
@@ -478,30 +494,30 @@ fn build_notifications(state: &OverlayWndState) -> Vec<linerule_core::HudNotific
     out
 }
 
-/// HUD パネルの bounds (logical px) を `hud_frame` と同じロジックで計算する。
-/// `compute_opacity` に渡すために `ScreenRect<Logical>` (i32) に丸める。
-fn hud_panel_rect(state: &OverlayWndState) -> ScreenRect<Logical> {
-    let hud = state.hud_config();
-    let monitor = state.monitor();
-    let width = hud.geometry.width;
-    let height = hud.geometry.height;
-    let margin = hud.geometry.margin;
+/// 適用済み `HudFrame` の実パネル矩形を `ScreenRect<Logical>` (i32) に丸める。
+/// `compute_opacity` の距離フェード対象として `OverlayWndState` にキャッシュ
+/// される (チップ / フルでサイズが変わるため、config からの再計算では足りない)。
+fn panel_rect_of(frame: &HudFrame) -> ScreenRect<Logical> {
     #[allow(
-        clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
-        reason = "screen-space px は f32 mantissa に余裕で収まり、ceil の結果は i32 範囲内"
+        reason = "screen-space px; round の結果は i32 範囲内"
     )]
-    let monitor_right = monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX);
+    let left = frame.panel_left.round() as i32;
+    #[allow(clippy::cast_possible_truncation, reason = "ditto")]
+    let top = frame.panel_top.round() as i32;
     #[allow(
-        clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "パネル寸法は正の screen-space px"
+    )]
+    let w = frame.panel_width.round().max(0.0) as u32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
         reason = "ditto"
     )]
-    let panel_left = monitor_right - (margin + width).round() as i32;
-    let panel_top = monitor.top() + margin.round() as i32;
-    let w = width.round() as u32;
-    let h = height.round() as u32;
-    ScreenRect::new(Point::<Logical>::new(panel_left, panel_top), w, h)
+    let h = frame.panel_height.round().max(0.0) as u32;
+    ScreenRect::new(Point::<Logical>::new(left, top), w, h)
 }
 
 #[cfg(test)]

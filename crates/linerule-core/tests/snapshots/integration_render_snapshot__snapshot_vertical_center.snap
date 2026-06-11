@@ -1,6 +1,5 @@
 ---
 source: crates/linerule-core/tests/integration_render_snapshot.rs
-assertion_line: 49
 expression: f
 ---
 OverlayFrame {
@@ -44,27 +43,6 @@ OverlayFrame {
                     g: 0,
                     b: 0,
                     a: 218,
-                },
-            ),
-        },
-        Layer {
-            geometry: Rect(
-                ScreenRect {
-                    origin: Point {
-                        x: 1904,
-                        y: 12,
-                        _space: PhantomData<fn() -> linerule_core::geometry::Logical>,
-                    },
-                    width: 4,
-                    height: 18,
-                },
-            ),
-            brush: Solid(
-                Rgba {
-                    r: 255,
-                    g: 255,
-                    b: 255,
-                    a: 194,
                 },
             ),
         },

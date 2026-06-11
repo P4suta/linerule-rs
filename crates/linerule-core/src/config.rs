@@ -8,7 +8,57 @@ use serde::{Deserialize, Serialize};
 
 use crate::color::{Opacity, Rgba, Thickness};
 
-/// Mask color + thickness + opacity. Composed into a [`crate::state::State`].
+/// How the area *outside* the slit is rendered.
+///
+/// The canonical cycle is `Dim → Bright → Dim`. `Blur` is reserved for a
+/// future Gaussian-blur surround; it is intentionally left out of [`cycle`]
+/// and is not yet drawn by the platform layer (the renderer falls back to a
+/// tinted solid). The planned blur path (screen capture → D2D
+/// `CLSID_D2D1GaussianBlur` → tinted overlay) is described on
+/// [`crate::render::Brush::Blur`] and in the README.
+///
+/// [`cycle`]: SurroundStyle::cycle
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurroundStyle {
+    /// Darken the surround (the original behavior): a translucent dark mask.
+    #[default]
+    Dim,
+    /// Wash the surround in a light/near-white veil instead of darkening it.
+    Bright,
+    /// Reserved: blur the surround. Not part of [`SurroundStyle::cycle`] yet
+    /// and not implemented in the renderer (falls back to a solid tint).
+    Blur,
+}
+
+impl SurroundStyle {
+    /// Advance to the next *implemented* style (`Dim → Bright → Dim`).
+    ///
+    /// `Blur` is reserved and excluded from the cycle until its render path
+    /// lands; if a config somehow holds `Blur`, cycling normalizes it back to
+    /// `Dim`. Enabling blur later is a one-line change here.
+    #[must_use]
+    pub const fn cycle(self) -> Self {
+        match self {
+            Self::Dim => Self::Bright,
+            Self::Bright | Self::Blur => Self::Dim,
+        }
+    }
+
+    /// Style crossfade target for the renderer's `style_mix` channel:
+    /// `Dim` = `0`, `Bright` = `255`. The reserved `Blur` falls back to the
+    /// dim mask (= `0`), matching the solid-tint fallback in the renderer.
+    #[must_use]
+    pub const fn mix_target(self) -> u8 {
+        match self {
+            Self::Dim | Self::Blur => 0,
+            Self::Bright => u8::MAX,
+        }
+    }
+}
+
+/// Mask color + thickness + opacity + surround style. Composed into a
+/// [`crate::state::State`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OverlayConfig {
     /// Color of the dim layers above and below (or beside) the slit.
@@ -17,14 +67,19 @@ pub struct OverlayConfig {
     pub thickness: Thickness,
     /// Mask opacity (perceptual-mapped on output).
     pub opacity: Opacity,
+    /// How the surround (everything but the slit) is rendered.
+    #[serde(default)]
+    pub surround_style: SurroundStyle,
 }
 
 impl OverlayConfig {
-    /// Default mask: `DEFAULT_MASK` × `Thickness::DEFAULT` × `Opacity::DEFAULT`.
+    /// Default mask: `DEFAULT_MASK` × `Thickness::DEFAULT` × `Opacity::DEFAULT`
+    /// × `SurroundStyle::Dim`.
     pub const DEFAULT: Self = Self {
         mask_color: Rgba::DEFAULT_MASK,
         thickness: Thickness::DEFAULT,
         opacity: Opacity::DEFAULT,
+        surround_style: SurroundStyle::Dim,
     };
 }
 
@@ -64,7 +119,7 @@ impl Default for TapStepConfig {
 pub struct RepeatConfig {
     /// Delay before the first repeat fires after the initial press.
     pub initial_delay: Duration,
-    /// Hold time beyond which `ToggleVisible` is treated as a long-press undo.
+    /// Hold time beyond which `ToggleOnOff` is treated as a long-press undo.
     pub long_press_threshold: Duration,
     /// Steady interval for the `Slow` cadence.
     pub slow_repeat_interval: Duration,
@@ -244,14 +299,15 @@ pub struct HudColors {
 impl HudColors {
     /// Default dark palette.
     ///
-    /// `background.alpha` is `0xFF` (fully opaque): the HUD panel sits on top of
-    /// the overlay mask in `DComp` z-order, and a translucent background would let
-    /// that mask bleed through and darken the panel further. Per-frame fade is
-    /// still applied via [`HudConfig::base_opacity`] / `compute_opacity`, so the
-    /// HUD can still ease out near the cursor without baking translucency into
-    /// the palette itself.
+    /// `background.alpha` is `0xEB` (≈ 92%): a slight translucency lets the
+    /// desktop / overlay mask breathe through the panel (Fluent-style acrylic
+    /// feel) while staying dark enough that text contrast is unaffected. The
+    /// HUD sits on top of the overlay mask in `DComp` z-order, so the mask
+    /// darkens the panel marginally when active — intended. Per-frame fade is
+    /// still applied via [`HudConfig::base_opacity`] / `compute_opacity` on
+    /// top of this.
     pub const DEFAULT: Self = Self {
-        background: Rgba::new(0x10, 0x12, 0x18, 0xFF),
+        background: Rgba::new(0x10, 0x12, 0x18, 0xEB),
         foreground: Rgba::new(0xE6, 0xE9, 0xEF, 0xFF),
         subtle: Rgba::new(0x9A, 0xA0, 0xAE, 0xFF),
         accent: Rgba::new(0x6C, 0x9F, 0xFF, 0xFF),
@@ -266,6 +322,35 @@ impl Default for HudColors {
     }
 }
 
+/// Geometry of the persistent status chip (the default, low-key HUD tier).
+///
+/// The chip is a one-line mono status (`H · 28px · 67%`) anchored top-right;
+/// the full guide panel only appears at startup or via the HUD-detail hotkey.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct HudChip {
+    /// Chip text size (logical pt, mono family).
+    pub font_size: f32,
+    /// Horizontal padding around the text.
+    pub pad_x: f32,
+    /// Vertical padding around the text.
+    pub pad_y: f32,
+}
+
+impl HudChip {
+    /// Default chip metrics.
+    pub const DEFAULT: Self = Self {
+        font_size: 13.0,
+        pad_x: 10.0,
+        pad_y: 6.0,
+    };
+}
+
+impl Default for HudChip {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 /// HUD configuration root.
 //
 // `Deserialize` is omitted; see [`HudFonts`].
@@ -275,9 +360,11 @@ pub struct HudConfig {
     pub base_opacity: f32,
     /// Distance (logical pixels) at which the HUD fades by `1 - 1/e`.
     pub fade_decay_px: f32,
+    /// Panel corner radius (logical pixels, Fluent-style rounding).
+    pub corner_radius: f32,
     /// Interval for refreshing telemetry rows.
     pub telemetry_refresh: Duration,
-    /// HUD bounding rectangle.
+    /// HUD bounding rectangle (full tier).
     pub geometry: HudGeometry,
     /// HUD panel padding.
     pub padding: HudPadding,
@@ -285,6 +372,8 @@ pub struct HudConfig {
     pub fonts: HudFonts,
     /// HUD palette.
     pub colors: HudColors,
+    /// Persistent status chip metrics (chip tier).
+    pub chip: HudChip,
 }
 
 impl HudConfig {
@@ -292,15 +381,57 @@ impl HudConfig {
     pub const DEFAULT: Self = Self {
         base_opacity: 0.875,
         fade_decay_px: 120.0,
+        corner_radius: 8.0,
         telemetry_refresh: Duration::from_millis(200),
         geometry: HudGeometry::DEFAULT,
         padding: HudPadding::DEFAULT,
         fonts: HudFonts::DEFAULT,
         colors: HudColors::DEFAULT,
+        chip: HudChip::DEFAULT,
     };
 }
 
 impl Default for HudConfig {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Transition timing tunables (milliseconds).
+///
+/// The design constraint is "fast, subtle, never sluggish": every duration is
+/// a short ease-out glide well under 200 ms, so motion reads as
+/// responsiveness rather than decoration. `0` disables a transition
+/// (instant), which doubles as the CI / determinism escape hatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "ミリ秒単位を field 名で明示する (`_ms` suffix) 方が呼び出し側の誤用を防ぐ"
+)]
+pub struct AnimConfig {
+    /// Show/hide, mode switch, and style crossfade duration.
+    pub overlay_fade_ms: u16,
+    /// Thickness / opacity bump glide duration (held keys retarget mid-glide,
+    /// so repeats merge into one continuous motion).
+    pub value_glide_ms: u16,
+    /// HUD chip ⇄ full presentation swap fade duration.
+    pub hud_swap_ms: u16,
+    /// How long the full HUD (hotkey guide) stays up after startup before
+    /// collapsing to the chip.
+    pub startup_full_hud_ms: u32,
+}
+
+impl AnimConfig {
+    /// Default transition timings.
+    pub const DEFAULT: Self = Self {
+        overlay_fade_ms: 160,
+        value_glide_ms: 130,
+        hud_swap_ms: 140,
+        startup_full_hud_ms: 5_000,
+    };
+}
+
+impl Default for AnimConfig {
     fn default() -> Self {
         Self::DEFAULT
     }
@@ -322,6 +453,8 @@ pub struct UserConfig {
     pub hud: HudConfig,
     /// Render-budget tunables.
     pub render: RenderConfig,
+    /// Transition timings.
+    pub anim: AnimConfig,
 }
 
 impl UserConfig {
@@ -332,6 +465,7 @@ impl UserConfig {
         input: InputConfig::DEFAULT,
         hud: HudConfig::DEFAULT,
         render: RenderConfig::DEFAULT,
+        anim: AnimConfig::DEFAULT,
     };
 }
 
@@ -360,10 +494,75 @@ mod tests {
     }
 
     #[test]
+    fn hud_default_corner_radius_is_pinned_at_fluent_8px() {
+        assert!((HudConfig::DEFAULT.corner_radius - 8.0).abs() < f32::EPSILON);
+    }
+
+    /// HUD 背景は僅かに半透明 (0xEB ≈ 92%)。完全不透明 (0xFF) に戻すと Fluent
+    /// 的な抜け感が消え、0x80 級まで下げると overlay 暗幕の透けで可読性が落ちる。
+    /// どちらの方向の事故も pin で検知する。
+    #[test]
+    fn hud_default_background_alpha_is_pinned_slightly_translucent() {
+        assert_eq!(HudColors::DEFAULT.background.a, 0xEB);
+    }
+
+    #[test]
     fn hud_default_telemetry_refresh_is_pinned_at_200ms() {
         assert_eq!(
             HudConfig::DEFAULT.telemetry_refresh,
             Duration::from_millis(200)
         );
+    }
+
+    #[test]
+    fn surround_style_default_is_dim() {
+        assert_eq!(SurroundStyle::default(), SurroundStyle::Dim);
+        assert_eq!(OverlayConfig::DEFAULT.surround_style, SurroundStyle::Dim);
+    }
+
+    #[test]
+    fn surround_style_cycle_toggles_dim_and_bright() {
+        assert_eq!(SurroundStyle::Dim.cycle(), SurroundStyle::Bright);
+        assert_eq!(SurroundStyle::Bright.cycle(), SurroundStyle::Dim);
+    }
+
+    /// アニメ既定値を pin する。「速く・控えめ」の設計制約: 全トランジション
+    /// 200ms 未満。値が伸びる方向の変更 (もたつき) を検知する。
+    #[test]
+    fn anim_defaults_are_pinned_under_200ms() {
+        let a = AnimConfig::DEFAULT;
+        assert_eq!(a.overlay_fade_ms, 160);
+        assert_eq!(a.value_glide_ms, 130);
+        assert_eq!(a.hud_swap_ms, 140);
+        assert_eq!(a.startup_full_hud_ms, 5_000);
+        assert!(a.overlay_fade_ms < 200 && a.value_glide_ms < 200 && a.hud_swap_ms < 200);
+    }
+
+    /// `mix_target` の対応を pin する: Dim=0 / Bright=255 / Blur=0 (dim fallback)。
+    #[test]
+    fn surround_style_mix_target_mapping_is_pinned() {
+        assert_eq!(SurroundStyle::Dim.mix_target(), 0);
+        assert_eq!(SurroundStyle::Bright.mix_target(), 255);
+        assert_eq!(SurroundStyle::Blur.mix_target(), 0);
+    }
+
+    #[test]
+    fn surround_style_cycle_normalizes_reserved_blur_to_dim() {
+        // `Blur` is reserved and not part of the user-facing cycle yet.
+        assert_eq!(SurroundStyle::Blur.cycle(), SurroundStyle::Dim);
+    }
+
+    #[test]
+    fn overlay_config_deserializes_without_surround_style_field() {
+        // `#[serde(default)]` keeps older payloads (pre-surround_style) loadable.
+        // Build the payload by stripping the key from a serialized DEFAULT so the
+        // test stays agnostic to the inner field representations.
+        let mut value = serde_json::to_value(OverlayConfig::DEFAULT).expect("serialize");
+        value
+            .as_object_mut()
+            .expect("config serializes as a JSON object")
+            .remove("surround_style");
+        let cfg: OverlayConfig = serde_json::from_value(value).expect("legacy config loads");
+        assert_eq!(cfg.surround_style, SurroundStyle::Dim);
     }
 }

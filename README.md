@@ -5,18 +5,38 @@ Rust 製の Windows 用 reading ruler（読書補助オーバーレイ）。透�
 実機での操作:
 
 - `Ctrl+Alt+R`: モード切替（Off → Horizontal → Vertical → Off）
-- `Ctrl+Alt+H`: 表示／非表示トグル
+- `Ctrl+Alt+H`: ON/OFF トグル（Off ⇄ 直前のアクティブモード。最後に使った向きを覚えている）
 - `Ctrl+Alt+Up` / `Ctrl+Alt+Down`: スリット厚さ ±（長押しで連続調整）
 - `Ctrl+Alt+Right` / `Ctrl+Alt+Left`: 不透明度 ±（長押しで連続調整）
+- `Ctrl+Alt+S`: 周囲スタイル切替（Dim 暗転 → Bright 真っ白 → Dim）
+- `Ctrl+Alt+K`: HUD 表示切替（常駐チップ ⇄ ホットキーガイドつきフルパネル）
 - `Ctrl+Alt+Q`: 終了
 
-Bump 系（厚さ・不透明度）は長押しで連続発火する。Mode 切替・表示トグル・終了は誤連打を
-避けるため 1 押下 1 発火に固定。割り当てが OEM 系キー（`[`/`]`/`=`/`-`）ではなく Arrow
-キーなのは、Windows の IME / keyboard layout で OEM キーの VK が化けて `RegisterHotKey`
-がキャプチャを取り逃すケースがあったため（JIS keyboard × ENG IME で再現）。
+「非表示」は `Mode::Off` ただ一つ。Off 中に厚さ・不透明度・スタイルのキーを押しても
+設定は変更されず、HUD に「Overlay is off — Ctrl+Alt+H to show」の toast が出る
+（見えない状態がこっそり変わるサプライズを排除）。
 
-HUD パネル（画面右上）に Mode / Thickness / Opacity / Refresh Hz と上記の操作一覧が常時
-表示される。multi-monitor 環境では virtual screen 全体に overlay が広がる。
+Bump 系（厚さ・不透明度）は長押しで連続発火する。Mode 切替・ON/OFF トグル・スタイル切替・
+終了は誤連打を避けるため 1 押下 1 発火に固定。割り当てが OEM 系キー（`[`/`]`/`=`/`-`）では
+なく Arrow キーなのは、Windows の IME / keyboard layout で OEM キーの VK が化けて
+`RegisterHotKey` がキャプチャを取り逃すケースがあったため（JIS keyboard × ENG IME で再現）。
+
+**周囲スタイル（`Ctrl+Alt+S`）**: スリット以外の領域の見せ方を切り替える。`Dim`（従来の
+暗転）と `Bright`（真っ白に覆う）を、短いクロスフェードで巡回する。`Blur`（背景をぼかす
+ガウシアン）は型・ADT（`Brush::Blur` / `SurroundStyle::Blur`）として予約済みで、描画パス
+（画面キャプチャ + D2D `CLSID_D2D1GaussianBlur`）は後続タスク。それまでプラットフォーム側は
+tint 色のソリッド塗りにフォールバックする。
+
+表示・モード切替・スタイル切替・厚さ / 不透明度の変更は、すべて 200ms 未満の ease-out
+トランジションで滑らかに遷移する（長押し中の連続調整は retarget で 1 つの連続モーションに
+合流する）。モード表示は HUD チップ（右上）が担う。
+
+**HUD は二段階表示**: 普段は画面右上に極小の常駐チップ（`H · 28px · 67%`、Off 中は
+`Off`）だけが出る。起動直後の数秒はホットキーガイドつきのフルパネルが表示され、その後
+チップへ自動的に畳まれる。操作を忘れたら `Ctrl+Alt+K` でいつでもフルパネル（Mode /
+Thickness / Opacity / Refresh Hz と全ホットキー一覧）に展開できる。スリットやカーソルが
+HUD に近づくと譲ってフェードアウトする。multi-monitor 環境では virtual screen 全体に
+overlay が広がる。
 
 ## 構成
 
@@ -102,6 +122,35 @@ just crash-latest                   # 最新クラッシュダンプ
 下のブロックは `crates/linerule-core/src/lib.rs` の crate-level doc から `cargo rdme` で自動同期されます。手書きで中身を編集しないこと（`just docs` で再生成）。
 
 <!-- cargo-rdme start -->
+
+linerule-core
+
+純粋ロジック層: ADT、reducer、render、parser、FSM。`#![forbid(unsafe_code)]`
+で `unsafe` を完全に排除し、非決定性 (時刻・乱数・I/O) は呼び出し側から引数で
+受け取る。
+
+#### 構成
+
+- [`anim`] — 整数エンドポイントの時間遷移 `Transition<T>` と easing
+- [`color`] — `Rgba` / `Opacity` / `DimLevel` / `Thickness` と perceptual カーブ
+- [`config`] — `UserConfig` ツリー (`OverlayConfig` / `HudConfig` / ...)
+- [`diagnostics`] — `LineruleError` / `Severity`
+- [`geometry`] — 座標空間タグ付き `Point<S>` / `ScreenRect<S>`
+- [`input`] — chord parser / hold FSM / tick pipeline / HUD fade / hotkey map
+- [`render`] — `OverlayFrame` ADT と純粋関数 `render::frame`
+- [`state`] — `State` / `OverlayAction` / `StateDelta` と `state::reduce::apply`
+
+#### 短い public path
+
+主要型は `lib.rs` で再エクスポートしているので、consumer は
+`linerule_core::Rgba` / `linerule_core::frame(...)` のような短い path で
+書ける。internal 実装は `linerule_core::color::rgba::Rgba` などの長い
+path で書き、リファクタの自由度を残す。
+
+#### 依存方向
+
+`linerule-app` → `linerule-platform-windows` → `linerule-core`。本クレートは
+他の linerule-rs クレートに依存しない。
 
 <!-- cargo-rdme end -->
 
