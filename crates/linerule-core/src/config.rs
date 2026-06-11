@@ -446,9 +446,10 @@ mod tests {
         assert!((HudConfig::DEFAULT.corner_radius - 8.0).abs() < f32::EPSILON);
     }
 
-    /// HUD 背景は僅かに半透明 (0xEB ≈ 92%)。完全不透明 (0xFF) に戻すと Fluent
-    /// 的な抜け感が消え、0x80 級まで下げると overlay 暗幕の透けで可読性が落ちる。
-    /// どちらの方向の事故も pin で検知する。
+    /// The HUD background is slightly translucent (0xEB ≈ 92%). Fully opaque
+    /// (0xFF) loses the Fluent airiness; dropping toward 0x80 lets the
+    /// overlay curtain bleed through and hurts readability. The pin catches
+    /// accidents in either direction.
     #[test]
     fn hud_default_background_alpha_is_pinned_slightly_translucent() {
         assert_eq!(HudColors::DEFAULT.background.a, 0xEB);

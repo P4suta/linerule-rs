@@ -359,16 +359,16 @@ fn full_frame(
     }
 }
 
-/// 等幅フォントの平均文字送り (em 比)。チップ幅の概算に使う。DWrite の実測
-/// なしで core 側がレイアウトを完結させるための見積もり値 — Cascadia Mono の
-/// advance はおよそ 0.6em で、余裕側 (広め) に倒してある。
+/// Average monospace advance width (em ratio), used to estimate chip width.
+/// Lets core finish layout without DWrite measurements — Cascadia Mono's
+/// advance is roughly 0.6em; we err on the wide side.
 const MONO_ADVANCE_RATIO: f32 = 0.62;
 
-/// 常駐チップ (1 行ステータス + 直下の toast 行) のレイアウト。
+/// Layout for the resident chip (one status row + toast rows right below).
 ///
-/// フルパネルと違い、幅は内容にフィットさせる (`MONO_ADVANCE_RATIO` 概算)。
-/// パネル座標・寸法は整数 logical px に丸め、小サイズのテキストが sub-pixel
-/// 配置でにじまないようにする。
+/// Unlike the full panel, width fits the content (`MONO_ADVANCE_RATIO`
+/// estimate). Panel origin and size are rounded to integer logical px so
+/// small text doesn't blur from sub-pixel placement.
 fn chip_frame(
     state: State,
     hud: HudConfig,
@@ -379,18 +379,18 @@ fn chip_frame(
     let margin = hud.geometry.margin;
     #[allow(
         clippy::cast_precision_loss,
-        reason = "screen-space px は f32 mantissa に余裕で収まる"
+        reason = "screen-space px fits comfortably in the f32 mantissa"
     )]
     let monitor_right = (monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX)) as f32;
     #[allow(
         clippy::cast_precision_loss,
-        reason = "screen-space px は f32 mantissa に余裕で収まる"
+        reason = "screen-space px fits comfortably in the f32 mantissa"
     )]
     let monitor_top = monitor.top() as f32;
 
     let status = chip_text(state);
 
-    // 幅 = ステータス行と toast 行のうち最長のもの (概算) + 左右 padding。
+    // Width = longest of the status and toast rows (estimated) + horizontal padding.
     let mut text_width = estimate_mono_width(&status, chip.font_size);
     for n in notifications {
         text_width = text_width.max(estimate_mono_width(&n.message, chip.font_size));
@@ -400,7 +400,7 @@ fn chip_frame(
     let row_advance = chip.font_size + hud.padding.row;
     #[allow(
         clippy::cast_precision_loss,
-        reason = "notification 件数は一桁オーダー"
+        reason = "notification count is single-digit"
     )]
     let toast_height = notifications.len() as f32 * row_advance;
     let panel_height = (chip.pad_y.mul_add(2.0, chip.font_size) + toast_height).ceil();
@@ -445,34 +445,40 @@ fn chip_frame(
     }
 }
 
-/// 等幅前提のテキスト幅概算 (logical px)。
+/// Estimated text width assuming monospace (logical px).
 fn estimate_mono_width(text: &str, font_size: f32) -> f32 {
-    #[allow(clippy::cast_precision_loss, reason = "HUD テキストは数十文字オーダー")]
+    #[allow(clippy::cast_precision_loss, reason = "HUD text is tens of characters")]
     let chars = text.chars().count() as f32;
     chars * font_size * MONO_ADVANCE_RATIO
 }
 
-/// チップのステータス文字列: `H · 28px · 67%` (Off 中は `Off`)。
-/// `%` は知覚値ではなく保存バイトの百分率 (0xAA → 67%)。
+/// Chip status string: `H · 28px · 67%` (`Off` while off). The `%` is the
+/// stored byte as a percentage (0xAA → 67%), not the perceptual value. Under
+/// the Blur effect opacity is inert, so the third segment shows the blur σ
+/// (`H · 28px · blur 9px`) — the value the opacity hotkeys actually adjust.
 fn chip_text(state: State) -> String {
     let letter = match state.mode {
         Mode::Off => return "Off".to_string(),
         Mode::Horizontal => "H",
         Mode::Vertical => "V",
     };
-    let opacity_pct = percent_of_byte(state.config.opacity.get());
+    let intensity = if state.config.effect.is_blur() {
+        format!("blur {}px", state.config.blur.to_std_dev().round())
+    } else {
+        format!("{}%", percent_of_byte(state.config.opacity.get()))
+    };
     format!(
-        "{letter} · {}px · {opacity_pct}%",
+        "{letter} · {}px · {intensity}",
         state.config.thickness.get()
     )
 }
 
-/// `byte / 255` の百分率 (四捨五入)。
+/// `byte / 255` as a percentage (rounded).
 fn percent_of_byte(byte: u8) -> u32 {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "0..=255 を 100 倍しても f32 で exact、round 後は 0..=100"
+        reason = "0..=255 times 100 is exact in f32; 0..=100 after rounding"
     )]
     let pct = (f32::from(byte) * 100.0 / 255.0).round() as u32;
     pct
@@ -572,7 +578,7 @@ mod tests {
         )
     }
 
-    /// チップ表示の test helper。
+    /// Test helper for the chip tier.
     fn chip(state: State, notifications: &[HudNotification]) -> HudFrame {
         hud_frame(
             state,
@@ -862,7 +868,7 @@ mod tests {
         assert_eq!(rule.color, HudConfig::DEFAULT.colors.divider);
     }
 
-    /// `corner_radius` が config からそのまま frame に流れることを pin する。
+    /// Pins that `corner_radius` flows from config straight into the frame.
     #[test]
     fn corner_radius_flows_from_config() {
         let f = default_frame(State::DEFAULT, 60, &[]);
@@ -871,7 +877,7 @@ mod tests {
 
     // ---- chip tier ---------------------------------------------------------
 
-    /// Off 中のチップは `Off` 1 行のみ。
+    /// While off the chip is a single `Off` row.
     #[test]
     fn chip_shows_off_label_when_mode_is_off() {
         let f = chip(State::DEFAULT, &[]);
@@ -880,7 +886,7 @@ mod tests {
         assert_eq!(f.rows[0].font, HudFontKey::Mono);
     }
 
-    /// アクティブ中のチップは `H · 28px · 67%` 形式 (0xAA → 67%)。
+    /// While active the chip uses the `H · 28px · 67%` format (0xAA → 67%).
     #[test]
     fn chip_status_text_format_is_pinned() {
         let f = chip(State::with_mode(Mode::Horizontal), &[]);
@@ -893,7 +899,25 @@ mod tests {
         );
     }
 
-    /// チップは右上アンカーかつ整数 px 境界に乗る。フルパネルよりずっと小さい。
+    /// Under the Blur effect the chip's third segment shows the blur σ
+    /// instead of the (inert) opacity percentage.
+    #[test]
+    fn chip_shows_blur_sigma_under_blur_effect() {
+        use crate::state::SurroundEffect;
+        let mut s = State::with_mode(Mode::Horizontal);
+        s.config.effect = SurroundEffect::Blur;
+        let f = chip(s, &[]);
+        let expected = format!("H · 28px · blur {}px", s.config.blur.to_std_dev().round());
+        assert_eq!(f.rows[0].text, expected);
+        assert!(
+            !f.rows[0].text.contains('%'),
+            "opacity %% must not appear under Blur: {}",
+            f.rows[0].text
+        );
+    }
+
+    /// The chip anchors top-right on integer px boundaries, far smaller than
+    /// the full panel.
     #[test]
     fn chip_is_anchored_top_right_and_integer_aligned() {
         let f = chip(State::with_mode(Mode::Horizontal), &[]);
@@ -914,7 +938,8 @@ mod tests {
         );
     }
 
-    /// toast はチップ行の下に追記され、パネル高が伸びる。フル展開はしない。
+    /// Toasts append below the chip row and grow the panel height; no full
+    /// expansion.
     #[test]
     fn chip_appends_toasts_below_status_and_grows_height() {
         let toast = HudNotification {
@@ -944,14 +969,14 @@ mod tests {
         );
     }
 
-    /// `HudTier::toggle` は往復で元に戻る。
+    /// `HudTier::toggle` round-trips back to the original.
     #[test]
     fn hud_tier_toggle_is_involutive() {
         assert_eq!(HudTier::Chip.toggle(), HudTier::Full);
         assert_eq!(HudTier::Full.toggle(), HudTier::Chip);
     }
 
-    /// チップにはガイド行 (Hotkeys) も divider も出ない。
+    /// The chip shows neither guide rows (Hotkeys) nor a divider.
     #[test]
     fn chip_has_no_guide_rows_and_no_rules() {
         let f = chip(State::with_mode(Mode::Horizontal), &[]);

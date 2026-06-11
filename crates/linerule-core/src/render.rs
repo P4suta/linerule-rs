@@ -262,7 +262,8 @@ mod tests {
         ScreenRect::new(Point::new(0, 0), 1920, 1080)
     }
 
-    /// 定常状態 (`OverlaySample::settled`) で `frame` を呼ぶ test helper。
+    /// Test helper that calls `frame` in the settled state
+    /// (`OverlaySample::settled`).
     fn settled_frame(mode: Mode, config: OverlayConfig, cursor: Point<Logical>) -> OverlayFrame {
         frame(
             mode,
@@ -525,9 +526,10 @@ mod tests {
 
     // ---- OverlaySample (transition channels) ------------------------------
 
-    /// 定常サンプル (`master = 255`) の mask alpha は従来の
-    /// `Opacity::to_perceptual_byte()` と **バイト一致** する。トランジション
-    /// 導入で settled frame の見た目が 1 bit でもドリフトしたら即検知する。
+    /// The mask alpha of a settled sample (`master = 255`) is
+    /// **byte-identical** to the legacy `Opacity::to_perceptual_byte()`.
+    /// Catches even 1-bit drift in settled frames from introducing
+    /// transitions.
     #[test]
     fn settled_sample_alpha_is_byte_identical_to_perceptual_byte() {
         for byte in [1_u8, 0x40, 0x80, 0xAA, 0xFF] {
@@ -542,8 +544,8 @@ mod tests {
         }
     }
 
-    /// thickness は config ではなく sample から取られる (グライド中の中間値が
-    /// そのままスリット幅になる)。
+    /// Thickness comes from the sample, not the config (mid-glide
+    /// intermediate values become the slit width directly).
     #[test]
     fn sample_thickness_overrides_config() {
         let config = OverlayConfig::DEFAULT; // thickness = 28
@@ -565,12 +567,13 @@ mod tests {
                 Geometry::Rect(r) => r,
             })
             .collect();
-        // 上下バンドの隙間 (スリット) = sample.thickness_px
+        // Gap between the top/bottom bands (the slit) = sample.thickness_px
         let gap = bands[1].top() - bands[0].bottom();
         assert_eq!(gap, 100, "slit width must come from the sample");
     }
 
-    /// `style_mix` 中間値では surround が Dim と Bright の間の色になる。
+    /// At an intermediate `style_mix` the surround is a color between Dim and
+    /// Bright.
     #[test]
     fn midway_style_mix_blends_between_dim_and_bright() {
         let config = OverlayConfig::DEFAULT; // mask_color = black
@@ -597,7 +600,7 @@ mod tests {
         assert_eq!((c.r, c.g), (c.g, c.b), "blend stays achromatic");
     }
 
-    /// `master = 0` (フェード完全アウト) では全レイヤの alpha が 0。
+    /// At `master = 0` (fully faded out) every layer's alpha is 0.
     #[test]
     fn master_zero_yields_fully_transparent_layers() {
         let config = OverlayConfig::DEFAULT;

@@ -377,14 +377,14 @@ impl OverlayWndState {
     }
 }
 
-/// 起動直後 (最初の `RefreshHud` 適用前) のフォールバック矩形: フルパネル想定。
-/// 最初の tick の `RefreshHud` が必ず上書きするので、精度より「妥当な初期値」
-/// であることが重要。
+/// Fallback rect right after startup (before the first `RefreshHud` lands),
+/// sized for the full panel. The first tick's `RefreshHud` always overwrites
+/// it, so a plausible initial value matters more than precision.
 fn initial_hud_panel_rect(hud: &HudConfig, monitor: ScreenRect<Logical>) -> ScreenRect<Logical> {
     let monitor_right = monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX);
     #[allow(
         clippy::cast_possible_truncation,
-        reason = "screen-space px; round の結果は i32 範囲内"
+        reason = "screen-space px; rounded result fits in i32"
     )]
     let panel_left = monitor_right - (hud.geometry.margin + hud.geometry.width).round() as i32;
     #[allow(clippy::cast_possible_truncation, reason = "ditto")]
@@ -392,7 +392,7 @@ fn initial_hud_panel_rect(hud: &HudConfig, monitor: ScreenRect<Logical>) -> Scre
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "パネル寸法は正の screen-space px"
+        reason = "panel dimensions are positive screen-space px"
     )]
     let w = hud.geometry.width.round() as u32;
     #[allow(
@@ -541,9 +541,9 @@ mod tests {
         ));
     }
 
-    /// 同一 `(class, message)` の toast は積み増さず寿命だけ更新される。
-    /// repeatable hotkey の長押しで rejection toast が key-repeat ごとに
-    /// 重複表示される事故を防ぐピン。
+    /// A toast with the same `(class, message)` doesn't stack; only its
+    /// lifetime refreshes. Pins that holding a repeatable hotkey doesn't
+    /// duplicate the rejection toast on every key repeat.
     #[test]
     fn push_notification_dedups_same_class_and_message() {
         let s = fresh_state();
@@ -554,7 +554,7 @@ mod tests {
             1,
             "duplicate toast must not stack"
         );
-        // class が違えば別 toast として共存する。
+        // A different class coexists as a separate toast.
         s.push_notification(NotificationClass::Warn, "Overlay is off".to_string(), 3_000);
         assert_eq!(s.live_notifications().len(), 2);
     }

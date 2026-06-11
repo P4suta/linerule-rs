@@ -272,8 +272,9 @@ mod tests {
         assert_eq!(d.rejected, None);
     }
 
-    /// `ToggleHudDetail` は view-layer action: reducer では Off 中も含めて
-    /// 純粋 no-op (rejection でもない)。tier の反転は tick 側の責務。
+    /// `ToggleHudDetail` is a view-layer action: a pure no-op in the reducer
+    /// (not even a rejection), including while off. Flipping the tier is the
+    /// tick side's job.
     #[test]
     fn toggle_hud_detail_is_a_pure_no_op_even_while_off() {
         for s0 in [State::DEFAULT, State::with_mode(Mode::Horizontal)] {

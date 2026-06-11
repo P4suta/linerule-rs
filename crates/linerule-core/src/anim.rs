@@ -28,7 +28,7 @@ impl Lerp for u8 {
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
-            reason = "lerp_f32 は両端点の min..=max に clamp 済み、u8 域に収まる"
+            reason = "lerp_f32 clamps to the endpoints' min..=max, within u8 range"
         )]
         let v = lerp_f32(f32::from(from), f32::from(to), t).round() as Self;
         v
@@ -40,15 +40,16 @@ impl Lerp for u16 {
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
-            reason = "lerp_f32 は両端点の min..=max に clamp 済み、u16 域に収まる"
+            reason = "lerp_f32 clamps to the endpoints' min..=max, within u16 range"
         )]
         let v = lerp_f32(f32::from(from), f32::from(to), t).round() as Self;
         v
     }
 }
 
-/// `from + (to - from) * t`、`t` は `[0, 1]` に clamp (NaN → 0)。結果は
-/// 両端点の張る区間に clamp するので、整数キャストが域外に出ることはない。
+/// `from + (to - from) * t`, with `t` clamped to `[0, 1]` (NaN → 0). The
+/// result is clamped to the interval spanned by the endpoints, so integer
+/// casts never go out of range.
 fn lerp_f32(from: f32, to: f32, t: f32) -> f32 {
     let t = if t.is_finite() {
         t.clamp(0.0, 1.0)
@@ -59,8 +60,8 @@ fn lerp_f32(from: f32, to: f32, t: f32) -> f32 {
     v.clamp(from.min(to), from.max(to))
 }
 
-/// Cubic ease-out: `1 - (1 - t)³`。`t` は `[0, 1]` に clamp、非有限は `0`
-/// に倒す ([`crate::color::perceptual`] のガードと同じ流儀)。
+/// Cubic ease-out: `1 - (1 - t)³`. `t` is clamped to `[0, 1]`; non-finite
+/// values map to `0` (same guard style as [`crate::color::perceptual`]).
 #[must_use]
 pub fn ease_out(t: f32) -> f32 {
     if !t.is_finite() || t <= 0.0 {
@@ -73,22 +74,25 @@ pub fn ease_out(t: f32) -> f32 {
     (inv * inv).mul_add(-inv, 1.0)
 }
 
-/// 整数エンドポイント間の時間遷移。`sample(now_ms)` が ease-out 済みの現在値
-/// を返す。`from == to` または期間満了で「settled」(以後どの時刻でも `to`)。
+/// Timed transition between integer endpoints. `sample(now_ms)` returns the
+/// eased current value. "Settled" once `from == to` or the duration elapsed
+/// (then `to` at any time).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct Transition<T: Lerp> {
-    /// 開始値。
+    /// Start value.
     pub from: T,
-    /// 目標値。
+    /// Target value.
     pub to: T,
-    /// 開始時刻 (ms, tick の `now_ms` と同じ時間軸)。
+    /// Start time (ms, same time axis as the tick's `now_ms`).
     pub start_ms: i64,
-    /// 期間 (ms)。`0` = 即時 (CI / アニメ無効化の逃げ道)。
+    /// Duration (ms). `0` = instant (escape hatch for CI / disabled
+    /// animation).
     pub duration_ms: u16,
 }
 
 impl<T: Lerp> Transition<T> {
-    /// 最初から `value` に settle した遷移。`sample` はどの時刻でも `value`。
+    /// A transition settled at `value` from the start. `sample` returns
+    /// `value` at any time.
     #[must_use]
     pub const fn settled(value: T) -> Self {
         Self {
@@ -99,8 +103,8 @@ impl<T: Lerp> Transition<T> {
         }
     }
 
-    /// 進行率 `[0, 1]` (easing 前の線形値)。`duration_ms == 0` は常に `1.0`、
-    /// `now_ms < start_ms` は `0.0`。
+    /// Progress in `[0, 1]` (linear, pre-easing). `duration_ms == 0` is
+    /// always `1.0`; `now_ms < start_ms` is `0.0`.
     #[must_use]
     pub fn progress(self, now_ms: i64) -> f32 {
         if self.duration_ms == 0 {
@@ -115,28 +119,30 @@ impl<T: Lerp> Transition<T> {
         }
         #[allow(
             clippy::cast_precision_loss,
-            reason = "elapsed は 0..u16::MAX に bound 済み、f32 で exact"
+            reason = "elapsed is bounded to 0..u16::MAX, exact in f32"
         )]
         let e = elapsed as f32;
         e / f32::from(self.duration_ms)
     }
 
-    /// `now_ms` 時点の値 (ease-out 適用後)。
+    /// Value at `now_ms` (after ease-out).
     #[must_use]
     pub fn sample(self, now_ms: i64) -> T {
         T::lerp(self.from, self.to, ease_out(self.progress(now_ms)))
     }
 
-    /// まだ動いているか。settle 済み (`from == to` または期間満了) なら `false`。
-    /// `true` の間は呼び出し側が毎 tick 再描画を続ける必要がある。
+    /// Whether the transition is still moving. `false` once settled
+    /// (`from == to` or duration elapsed). While `true`, callers must keep
+    /// redrawing every tick.
     #[must_use]
     pub fn is_live(self, now_ms: i64) -> bool {
         self.from != self.to && self.progress(now_ms) < 1.0
     }
 
-    /// 目標を差し替える。**現在のサンプル値から** re-base するので、飛行中に
-    /// 新しい目標が届いても値は連続に滑る (held-key の連続グライド保証)。
-    /// 同一目標への retarget は no-op (既存の飛行を再スタートさせない)。
+    /// Swap the target. Re-bases **from the currently sampled value**, so a
+    /// new target arriving mid-flight keeps the value gliding continuously
+    /// (held-key glide guarantee). Retargeting to the same target is a no-op
+    /// (does not restart the existing flight).
     #[must_use]
     pub fn retarget(self, now_ms: i64, to: T, duration_ms: u16) -> Self {
         if self.to == to {
@@ -174,8 +180,8 @@ mod tests {
         assert!((ease_out(1.0) - 1.0).abs() < 1e-6);
     }
 
-    /// `ease_out(0.5)` の具体値を pin する: `1 - 0.5³ = 0.875`。
-    /// `inv*inv*inv` の演算子 mutation (`*` → `+` 等) を spot で catch する。
+    /// Pins the concrete value of `ease_out(0.5)`: `1 - 0.5³ = 0.875`.
+    /// Spot-catches operator mutations in `inv*inv*inv` (`*` → `+` etc.).
     #[test]
     fn ease_out_midpoint_value_is_pinned() {
         let v = ease_out(0.5);
@@ -246,8 +252,8 @@ mod tests {
         assert_eq!(settled.retarget(5_000, 200, 160), settled);
     }
 
-    /// ease-out なので進行率 0.5 時点で線形 (50%) より先へ進んでいる。
-    /// `ease_out` を恒等関数に mutate すると 100 になり検出できる。
+    /// With ease-out, the value at 0.5 progress is past linear (50%).
+    /// Mutating `ease_out` into the identity would yield 100 and be caught.
     #[test]
     fn sample_midpoint_is_past_linear_midpoint() {
         let t = tr(0, 200, 0, 160);
@@ -257,7 +263,7 @@ mod tests {
     }
 
     proptest! {
-        /// 任意時刻で sample は from..=to (順序正規化済み) の範囲内。
+        /// At any time, sample stays within from..=to (order-normalized).
         #[test]
         fn sample_stays_within_endpoints(
             from in any::<u8>(), to in any::<u8>(),
@@ -269,7 +275,8 @@ mod tests {
             prop_assert!(v >= from.min(to) && v <= from.max(to));
         }
 
-        /// `from <= to` のとき sample は now に対して単調非減少 (逆向きは鏡映)。
+        /// When `from <= to`, sample is non-decreasing in now (mirrored for
+        /// the reverse direction).
         #[test]
         fn sample_is_monotone_in_time(
             from in any::<u8>(), to in any::<u8>(),
@@ -287,8 +294,9 @@ mod tests {
             }
         }
 
-        /// retarget の連続性: 差し替え直後のサンプル値は差し替え前と一致する。
-        /// held bump key が飛行中に何度着弾しても値が飛ばない保証の核。
+        /// Retarget continuity: the sample right after the swap equals the
+        /// sample right before. Core of the guarantee that held bump keys
+        /// landing mid-flight never make the value jump.
         #[test]
         fn retarget_is_continuous_at_switch_time(
             from in any::<u8>(), to in any::<u8>(), new_to in any::<u8>(),
@@ -302,19 +310,23 @@ mod tests {
             prop_assert_eq!(r.sample(now), before, "value must not jump at retarget");
         }
 
-        /// retarget 後は新しい目標へ向かい、期間満了で到達する。
+        /// After a retarget to a *different* target, the transition heads to
+        /// it and arrives when the new duration elapses. Same-target retarget
+        /// is a documented no-op (keeps the existing flight), pinned by
+        /// `retarget_to_same_target_is_identity`.
         #[test]
         fn retarget_reaches_new_target(
             from in any::<u8>(), to in any::<u8>(), new_to in any::<u8>(),
             dur in 1_u16..2_000, new_dur in 1_u16..2_000,
             elapsed in 0_i64..3_000,
         ) {
+            prop_assume!(new_to != to);
             let t = Transition { from, to, start_ms: 0, duration_ms: dur };
             let r = t.retarget(elapsed, new_to, new_dur);
             prop_assert_eq!(r.sample(elapsed + i64::from(new_dur)), new_to);
         }
 
-        /// ease_out は任意入力で panic せず [0, 1] を返し、[0,1] 内で単調。
+        /// ease_out never panics, returns [0, 1], and is monotone on [0, 1].
         #[test]
         fn ease_out_total_and_monotone(t1 in 0.0_f32..=1.0, t2 in 0.0_f32..=1.0) {
             let (lo, hi) = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
@@ -325,7 +337,7 @@ mod tests {
             prop_assert!(a <= b, "ease_out must be non-decreasing");
         }
 
-        /// u16 実装も端点一致 (thickness px チャネル用)。
+        /// The u16 impl also matches endpoints (thickness px channel).
         #[test]
         fn u16_lerp_endpoints(from in any::<u16>(), to in any::<u16>()) {
             prop_assert_eq!(u16::lerp(from, to, 0.0), from);
