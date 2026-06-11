@@ -45,10 +45,10 @@ pub fn compute_opacity(
     perceptual::smooth(linear)
 }
 
-/// 距離フェード ([`compute_opacity`]) の結果に HUD フェードエンベロープを
-/// 乗算する。エンベロープ byte は知覚カーブ ([`perceptual::smooth`]) を通す
-/// ので立ち上がりが視覚的に自然になる。`envelope == 255` は恒等 (定常状態の
-/// 不透明度を変えない)。
+/// Multiplies the distance-fade result ([`compute_opacity`]) by the HUD fade
+/// envelope. The envelope byte goes through the perceptual curve
+/// ([`perceptual::smooth`]) so the ramp-up looks visually natural.
+/// `envelope == 255` is the identity (steady-state opacity unchanged).
 #[must_use]
 pub fn apply_envelope(distance_opacity: f32, envelope: u8) -> f32 {
     distance_opacity * perceptual::smooth(f32::from(envelope) / 255.0)
@@ -129,7 +129,8 @@ mod tests {
 
     // ---- apply_envelope ---------------------------------------------------
 
-    /// `envelope == 255` は恒等、`0` は完全不可視。中間値は単調。
+    /// `envelope == 255` is identity, `0` fully invisible; intermediate
+    /// values are monotone.
     #[test]
     fn apply_envelope_endpoints_and_monotonicity() {
         let base = 0.8_f32;

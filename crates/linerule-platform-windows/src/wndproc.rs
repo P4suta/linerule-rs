@@ -283,9 +283,9 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                     telemetry,
                     tier,
                 );
-                // 実際に適用したパネル矩形をキャッシュし、`SetHudOpacity` の
-                // 距離フェードが「いま画面に出ている方 (チップ or フル)」の
-                // bounds に対して効くようにする。
+                // Cache the panel rect actually applied so `SetHudOpacity`'s
+                // distance fade works against the bounds of whichever tier
+                // (chip or full) is currently on screen.
                 state.set_hud_panel_rect(panel_rect_of(&frame));
                 with_device_lost_recovery(state, "RefreshHud", &|st| apply_hud_frame(st, &frame))?;
             },
@@ -317,8 +317,8 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
             },
             TickEffect::NotifyRejected { reason } => match reason {
                 RejectReason::AdjustWhileOff => {
-                    // core は semantic な理由だけを運び、実際に設定されている
-                    // chord 文字列はこちら (HotkeyMap の持ち主) で整形する。
+                    // Core carries only the semantic reason; the configured
+                    // chord string is formatted here (the HotkeyMap owner).
                     let chord = state.hotkeys().toggle_on_off;
                     state.push_notification(
                         linerule_core::NotificationClass::Info,

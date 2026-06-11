@@ -56,7 +56,7 @@ fn bench_frame(c: &mut Criterion) {
             )
         });
     });
-    // トランジション中 (非 settled サンプル) の hot path も計測する。
+    // Also measure the mid-transition (non-settled sample) hot path.
     group.bench_function("horizontal_mid_fade", |b| {
         let mid = OverlaySample {
             master: 128,
