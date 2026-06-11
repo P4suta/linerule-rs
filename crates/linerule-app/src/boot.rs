@@ -1,12 +1,12 @@
-//! `boot()` — clap dispatch から呼ばれるブートストラップ。
+//! Bootstrap called from clap dispatch.
 //!
-//! 流れ:
-//! 1. tracing + crash dump を初期化（最優先、panic 時のレポートが残せるように）
-//! 2. CLI 系コマンドなら console attach
-//! 3. サブコマンド分岐:
-//!    - `Run`: Windows のみ。`linerule-platform-windows` に委譲。
-//!    - `Diagnostics`: `%APPDATA%\linerule\` の中身を pretty-print。
-//!    - `Version`: バージョン情報。
+//! Flow:
+//! 1. Init tracing + crash dump first, so a panic report can be written.
+//! 2. Attach a console for CLI commands.
+//! 3. Dispatch subcommands:
+//!    - `Run`: Windows only; delegates to `linerule-platform-windows`.
+//!    - `Diagnostics`: pretty-prints the contents of the data dir.
+//!    - `Version`: version info.
 
 #![forbid(unsafe_code)]
 
@@ -16,15 +16,15 @@ use uuid::Uuid;
 use crate::cli::{Cli, Command};
 use crate::{console, crash_dump, logging};
 
-/// 実 main。
+/// Real main.
 ///
-/// `run_id` は panic hook と tracing root span の両方に渡し、`events.jsonl` と
-/// `crash-<run_id>-*.json` を機械的に紐付けられるようにする。span の lifetime
-/// が boot 全体を覆うので、全 subcommand (`Run` / `Diagnostics` / `Version`) の
-/// `tracing` event に `run_id` field が自動付与される。
+/// `run_id` is passed to both the panic hook and the tracing root span so that
+/// `events.jsonl` and `crash-<run_id>-*.json` can be correlated. The span
+/// covers all of boot, so every subcommand's `tracing` events carry the
+/// `run_id` field.
 ///
 /// # Errors
-/// 各サブコマンドが失敗したとき。
+/// When a subcommand fails.
 pub(crate) fn boot(cli: Cli) -> Result<()> {
     let run_id = Uuid::new_v4();
     crash_dump::install_panic_hook(run_id);
@@ -34,9 +34,8 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
         console::ensure_console_attached();
     }
 
-    // subscriber init 後に root span を enter。`tracing-subscriber` の JSON layer
-    // は親 span の field を `span` キーに自動付与するので、本 span 内で発火する
-    // 全 event の `events.jsonl` 行に `"run_id":"<UUID>"` が乗る。
+    // Enter root span after subscriber init so every event in scope carries
+    // run_id in its events.jsonl line.
     let root = tracing::info_span!("linerule_run", run_id = %run_id);
     let _entered = root.enter();
     tracing::info!(run_id = %run_id, version = env!("CARGO_PKG_VERSION"), "linerule boot");
@@ -44,20 +43,22 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
     dispatch_command(cli)
 }
 
-/// `boot()` から global subscriber 初期化と panic hook 設置を取り除いた本体。
-/// テストで `#[traced_test]` を当てる用。
+/// Body of `boot()` without global subscriber init or panic hook install, so
+/// tests can drive it under `#[traced_test]`.
 ///
 /// # Errors
-/// 各サブコマンドが失敗したとき。
+/// When a subcommand fails.
 pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
     match cli.command.unwrap_or(Command::Run {
         duration_ms: None,
         initial_mode: None,
+        initial_effect: None,
     }) {
         Command::Run {
             duration_ms,
             initial_mode,
-        } => run_overlay(duration_ms, initial_mode),
+            initial_effect,
+        } => run_overlay(duration_ms, initial_mode, initial_effect),
         Command::Diagnostics {
             dry_run,
             last_crash,
@@ -77,8 +78,7 @@ pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
     }
 }
 
-/// `diagnostics` サブコマンドの flag をまとめた struct (`clap` の構造を本体
-/// 関数のシグネチャに直接持ち込まないため)。
+/// Flags for the `diagnostics` subcommand, kept out of the body fn signature.
 #[derive(Debug, Clone, Copy, Default)]
 struct DiagnosticsArgs {
     dry_run: bool,
@@ -91,6 +91,7 @@ struct DiagnosticsArgs {
 fn run_overlay(
     duration_ms: Option<u64>,
     initial_mode: Option<crate::cli::InitialMode>,
+    initial_effect: Option<crate::cli::InitialEffect>,
 ) -> Result<()> {
     use std::time::Duration;
 
@@ -101,12 +102,9 @@ fn run_overlay(
         set_dpi_aware,
     };
 
-    // 最初に DPI awareness を Per-Monitor V2 に設定する。Window 作成前に呼ぶ
-    // 必要があるため `OverlayWindow::new` より前に置く。失敗しても fatal には
-    // せず log のみ（既に dpi awareness が manifested 等のケース）。AppError
-    // 経由で class() に流して classify_and_log を経由させる (ADR-0013)。
-    // overlay handle がまだ無いのでこの時点では HUD push せず、後段で boot 完了
-    // 後に conflict / dpi failure を一括 push する経路に合流させる。
+    // Set DPI awareness to Per-Monitor V2 before creating any window. Failure
+    // is non-fatal: classify via AppError and, if recoverable, defer the HUD
+    // notification until the overlay handle exists.
     let mut early_recoverable: Vec<String> = Vec::new();
     if let Err(e) = set_dpi_aware() {
         let app_err: crate::error::AppError = e.into();
@@ -116,27 +114,33 @@ fn run_overlay(
     }
 
     let config = UserConfig::DEFAULT;
-    // virtual screen bounds (全 monitor を覆う矩形) を使い、multi-monitor 環境で
-    // overlay HWND がモニタ境界を跨いで slit を引けるようにする。
+    // Use the virtual screen bounds (rect covering all monitors) so the overlay
+    // HWND can draw slits across monitor boundaries.
     let monitor = monitor_info::virtual_screen_bounds()?;
 
-    // initial_mode 指定時は TickWorld の初期 state を上書きする (CI smoke 用)。
-    // `State::with_mode` が mode/last_active の不変条件を守る。
-    let initial_world = initial_mode
-        .map(|m| TickWorld::with_initial_state(State::with_mode(m.into())))
-        .unwrap_or(TickWorld::INITIAL);
+    // Override the initial TickWorld state when initial_mode/initial_effect
+    // are given (CI smoke). `State::with_mode` keeps the mode/last_active
+    // invariant.
+    let initial_world = if initial_mode.is_some() || initial_effect.is_some() {
+        let mut state = initial_mode.map_or(State::DEFAULT, |m| State::with_mode(m.into()));
+        if let Some(e) = initial_effect {
+            state.config.effect = e.into();
+        }
+        TickWorld::with_initial_state(state)
+    } else {
+        TickWorld::INITIAL
+    };
 
-    // Drop order が重要: 各 thread (`_clock`, `_auto_quit`) と `_foreground_hook`
-    // の callback は overlay HWND に `PostMessageW` を投げる可能性があるので、
-    // overlay HWND が破棄される前に解除/join する必要がある。Rust の逆順 Drop
-    // を活かすため overlay → _foreground_hook → _clock → _auto_quit の順に宣言する。
+    // Drop order matters: the `_clock`/`_auto_quit` threads and
+    // `_foreground_hook` callback may `PostMessageW` to the overlay HWND, so
+    // they must be torn down before it. Declared overlay → _foreground_hook →
+    // _clock → _auto_quit to get the right reverse-order Drop.
     let mut overlay =
         OverlayWindow::new_with_initial_world(monitor, config.hud, config.anim, initial_world)?;
-    overlay.attach_dcomp()?;
+    overlay.attach_compositor()?;
     overlay.register_hotkeys(&config.hotkeys, config.input.tap_step)?;
-    // Alt+Tab 等で他アプリが前景化した後も overlay を最前面に保つ (ADR-0012)。
-    // 失敗しても fatal にせず log のみ — overlay 自体は WS_EX_TOPMOST で十分
-    // 多くの場合に最前面が保てる。
+    // Keep the overlay topmost after other apps come to the foreground (e.g.
+    // Alt+Tab). Non-fatal on failure: WS_EX_TOPMOST already covers most cases.
     let _foreground_hook = match ForegroundHook::install(overlay.hwnd()) {
         Ok(h) => Some(h),
         Err(e) => {
@@ -145,9 +149,7 @@ fn run_overlay(
         },
     };
 
-    // boot 中に積み上がった recoverable errors を HUD notification として push
-    // する (ADR-0013、Phase H PR-E)。AppError::class() = Recoverable と判定された
-    // 項目をユーザーに HUD で 10 秒間 toast する。
+    // Push recoverable errors collected during boot as 10s HUD notifications.
     for message in early_recoverable.drain(..) {
         overlay
             .state()
@@ -161,11 +163,13 @@ fn run_overlay(
 
     tracing::info!(
         cycle_mode = config.hotkeys.cycle_mode,
+        cycle_effect = config.hotkeys.cycle_effect,
         toggle_on_off = config.hotkeys.toggle_on_off,
         quit = config.hotkeys.quit,
         duration_ms = duration_ms.unwrap_or(0),
         initial_mode = ?initial_mode,
-        "overlay running; press Ctrl+Alt+R to cycle modes, Ctrl+Alt+Q to quit"
+        initial_effect = ?initial_effect,
+        "overlay running; press Ctrl+Alt+R to cycle modes, Ctrl+Alt+E to cycle effects, Ctrl+Alt+Q to quit"
     );
     run_message_pump()?;
     Ok(())
@@ -175,6 +179,7 @@ fn run_overlay(
 fn run_overlay(
     _duration_ms: Option<u64>,
     _initial_mode: Option<crate::cli::InitialMode>,
+    _initial_effect: Option<crate::cli::InitialEffect>,
 ) -> Result<()> {
     anyhow::bail!("`linerule run` is Windows-only");
 }
@@ -182,24 +187,24 @@ fn run_overlay(
 fn diagnostics(args: DiagnosticsArgs) -> Result<()> {
     let data_dir = logging::data_dir()?;
 
-    // `--data-dir`: path だけ stdout に書いて exit。script pipe 用 ergonomic。
+    // `--data-dir`: print the path to stdout and exit.
     if args.data_dir {
         println!("{}", data_dir.display());
         tracing::info!(data_dir = %data_dir.display(), "linerule --data-dir");
         return Ok(());
     }
 
-    // `--last-crash`: 最新の crash-*.json を pretty-print。
+    // `--last-crash`: pretty-print the latest crash-*.json.
     if args.last_crash {
         return print_last_crash(&data_dir);
     }
 
-    // `--recent-events N`: events.jsonl.<today> の末尾 N 行を JSON pretty-print。
+    // `--recent-events N`: pretty-print the last N lines of events.jsonl.<today>.
     if let Some(n) = args.recent_events {
         return print_recent_events(&data_dir, n);
     }
 
-    // Default (or `--dry-run`): data dir 列挙のみ。
+    // Default (or `--dry-run`): just list the data dir.
     println!("linerule data dir: {}", data_dir.display());
     tracing::info!(data_dir = %data_dir.display(), "linerule data dir");
     if data_dir.exists() {
@@ -210,11 +215,11 @@ fn diagnostics(args: DiagnosticsArgs) -> Result<()> {
     } else {
         println!("  (directory does not exist yet — no events / crashes)");
     }
-    let _ = args.dry_run; // 既存挙動の明示 (file 列挙以外の I/O はもともと無い)
+    let _ = args.dry_run; // no I/O beyond listing, so dry_run is a no-op here
     Ok(())
 }
 
-/// `%APPDATA%\linerule\crash-*.json` を mtime で並べ最新を pretty-print する。
+/// Pretty-print the most recent `crash-*.json` (by mtime) in the data dir.
 fn print_last_crash(data_dir: &std::path::Path) -> Result<()> {
     if !data_dir.exists() {
         println!("(no crash dumps — data dir does not exist)");
@@ -241,15 +246,14 @@ fn print_last_crash(data_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// `events.jsonl.<today>` の末尾 N 行を 1 行ずつ pretty-print する。jq -C 風の
-/// 表示を Rust 内で完結させる。
+/// Pretty-print the last N lines of `events.jsonl.<today>`, one entry at a time.
 fn print_recent_events(data_dir: &std::path::Path, n: usize) -> Result<()> {
     use std::io::{BufRead, BufReader};
     if !data_dir.exists() {
         println!("(no events — data dir does not exist)");
         return Ok(());
     }
-    // 最新の `events.jsonl.YYYY-MM-DD` を mtime で選ぶ。
+    // Pick the most recent `events.jsonl.YYYY-MM-DD` by mtime.
     let latest_log = std::fs::read_dir(data_dir)?
         .filter_map(std::result::Result::ok)
         .filter(|e| e.file_name().to_string_lossy().starts_with("events.jsonl"))
@@ -308,11 +312,9 @@ mod tests {
         );
     }
 
-    /// PR-B: `boot()` の `info_span!("linerule_run", run_id = ...)` 経由で
-    /// log line に `run_id` が乗ることを確認する。`boot()` 全体を叩くと global
-    /// subscriber + panic hook を install してしまうので、span だけ手で構築
-    /// して `dispatch_command` を呼び、`traced_test` subscriber が span field
-    /// を含めて log line を render することを assert する。
+    /// Assert that log lines carry `run_id` via boot's `linerule_run` span.
+    /// Build the span by hand (calling `boot()` would install the global
+    /// subscriber + panic hook) and call `dispatch_command` under it.
     #[traced_test]
     #[test]
     fn root_span_propagates_run_id_into_log_lines() {
@@ -328,7 +330,7 @@ mod tests {
         );
     }
 
-    /// `Diagnostics` 経路でも `run_id` span field が log line に乗ることを確認。
+    /// Assert the `run_id` span field reaches log lines on the `Diagnostics` path.
     #[traced_test]
     #[test]
     fn root_span_propagates_run_id_in_diagnostics_path() {

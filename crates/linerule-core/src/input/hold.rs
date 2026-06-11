@@ -1,11 +1,7 @@
 //! Hold-to-repeat FSM.
 //!
-//! The platform layer fires this on every hotkey press and every ~16 ms tick
-//! while a chord is held. The FSM is a pure function from
-//! `(HoldState, HoldInput, RepeatConfig, oracle) → (HoldState, Vec<HoldEffect>)`:
-//! it never touches the OS, never queries state, never wakes a timer. The
-//! platform layer is responsible for delivering the effects (Enqueue,
-//! Schedule, Halt) to the right subsystem.
+//! Pure transition over `(HoldState, HoldInput, RepeatConfig, oracle)`. It never
+//! touches the OS; the platform layer applies the emitted effects.
 
 use std::time::Duration;
 
@@ -257,12 +253,12 @@ pub(crate) const fn classify(action: OverlayAction) -> Classification {
     use OverlayAction as A;
     match action {
         A::BumpThickness(_) | A::BumpOpacity(_) => Classification::AccelRepeat,
-        A::CycleMode => Classification::SlowRepeat,
+        A::CycleMode | A::CycleEffect => Classification::SlowRepeat,
         A::ToggleOnOff => Classification::AwaitRelease {
             undo_on_long_press: A::ToggleOnOff,
         },
         // A discrete toggle like Quit/Cycle: one fire per press, no repeat.
-        A::CycleStyle | A::ToggleHudDetail | A::Quit => Classification::OneShot,
+        A::ToggleHudDetail | A::Quit => Classification::OneShot,
     }
 }
 
@@ -271,7 +267,7 @@ pub(crate) const fn with_magnitude(action: OverlayAction, magnitude: i32) -> Ove
     match action {
         A::BumpThickness(d) => A::BumpThickness(d.saturating_mul(magnitude)),
         A::BumpOpacity(d) => A::BumpOpacity(d.saturating_mul(magnitude)),
-        A::CycleMode | A::ToggleOnOff | A::CycleStyle | A::ToggleHudDetail | A::Quit => action,
+        A::CycleMode | A::CycleEffect | A::ToggleOnOff | A::ToggleHudDetail | A::Quit => action,
     }
 }
 
@@ -540,8 +536,19 @@ mod tests {
     }
 
     #[test]
-    fn classify_cycle_style_is_one_shot() {
-        assert_eq!(classify(OverlayAction::CycleStyle), Classification::OneShot);
+    fn classify_cycle_effect_is_slow_repeat() {
+        assert_eq!(
+            classify(OverlayAction::CycleEffect),
+            Classification::SlowRepeat
+        );
+    }
+
+    #[test]
+    fn classify_toggle_hud_detail_is_one_shot() {
+        assert_eq!(
+            classify(OverlayAction::ToggleHudDetail),
+            Classification::OneShot
+        );
     }
 
     // ---- with_magnitude --------------------------------------------------
@@ -578,8 +585,9 @@ mod tests {
     fn with_magnitude_leaves_non_bump_actions_unchanged() {
         for a in [
             OverlayAction::CycleMode,
+            OverlayAction::CycleEffect,
             OverlayAction::ToggleOnOff,
-            OverlayAction::CycleStyle,
+            OverlayAction::ToggleHudDetail,
             OverlayAction::Quit,
         ] {
             assert_eq!(with_magnitude(a, 99), a);

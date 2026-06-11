@@ -321,7 +321,6 @@ mod tests {
     fn arrow_keys() {
         assert_eq!(parse("Up").unwrap().key, KeyCode::Arrow(Direction::Up));
         assert_eq!(parse("down").unwrap().key, KeyCode::Arrow(Direction::Down));
-        // 「left」「right」も pin する (mutation baseline で match arm 削除を検出)
         assert_eq!(parse("Left").unwrap().key, KeyCode::Arrow(Direction::Left));
         assert_eq!(
             parse("right").unwrap().key,
@@ -329,9 +328,7 @@ mod tests {
         );
     }
 
-    /// `Display` 実装が `display()` と同じ文字列を吐くことを pin する。
-    /// `Display::fmt` を `Ok(Default::default())` (= 何も書かない) に
-    /// mutate されたケースを検出するために必要。
+    /// `Display` produces the same string as `display()`.
     #[test]
     fn display_format_matches_display_method() {
         let c = parse("Ctrl+Alt+R").expect("valid chord");

@@ -1,7 +1,5 @@
-//! Monitor 情報取得。プライマリ + 任意座標 → 最近接モニタの 2 系統を提供する。
-//!
-//! `primary_bounds()` は起動時の初期値用、`bounds_for_point()` は per-tick の
-//! active monitor 解決用 (multi-monitor 環境で cursor 追随)。
+//! Monitor bounds: primary monitor for startup, nearest-to-point for per-tick
+//! active-monitor resolution (cursor following on multi-monitor setups).
 
 #![forbid(unsafe_code)]
 
@@ -10,14 +8,11 @@ use linerule_core::{Logical, Point, ScreenRect};
 use crate::error::Result;
 use crate::win32_ffi;
 
-/// プライマリモニタの bounds を logical pixels で返す。
-///
-/// `MonitorFromPoint(0, 0, MONITOR_DEFAULTTOPRIMARY)` + `GetMonitorInfoW` 経由。
-/// Per-monitor DPI awareness を有効化していれば、bounds は logical (DPI scaled)
-/// で返ってくる。
+/// Primary monitor bounds in logical pixels, via `MonitorFromPoint` +
+/// `GetMonitorInfoW`.
 ///
 /// # Errors
-/// `GetMonitorInfoW` が失敗したとき (現実には起こらない)。
+/// When `GetMonitorInfoW` fails.
 pub fn primary_bounds() -> Result<ScreenRect<Logical>> {
     let hmonitor = win32_ffi::primary_monitor();
     let info = win32_ffi::get_monitor_info(hmonitor)?;
@@ -33,16 +28,15 @@ pub fn primary_bounds() -> Result<ScreenRect<Logical>> {
     Ok(rect)
 }
 
-/// すべての monitor を覆う virtual screen の bounds を返す。multi-monitor
-/// 環境で overlay HWND がモニタ境界を跨いで slit を引けるようにするために、
-/// `primary_bounds()` ではなく本関数を起動時に使う。
+/// Virtual screen bounds covering all monitors. Used at startup so the overlay
+/// can draw slits across monitor boundaries.
 ///
 /// # Errors
-/// 現状は失敗しない（`GetSystemMetrics` は引数チェックなし）。`Result` を返すのは
-/// 将来 `EnumDisplayMonitors` ベースの厳密版に差し替える時の signature 互換のため。
+/// Does not currently fail; `Result` is kept for signature compatibility with a
+/// future `EnumDisplayMonitors`-based version.
 #[allow(
     clippy::unnecessary_wraps,
-    reason = "Result は将来 EnumDisplayMonitors 版への移行のために維持する"
+    reason = "Result kept for a future EnumDisplayMonitors-based version"
 )]
 pub fn virtual_screen_bounds() -> Result<ScreenRect<Logical>> {
     let (left, top, width, height) = win32_ffi::virtual_screen_metrics();
@@ -60,20 +54,18 @@ pub fn virtual_screen_bounds() -> Result<ScreenRect<Logical>> {
     Ok(rect)
 }
 
-/// 与えられた点を含む（外側ならば最も近い）monitor の bounds を返す。
-///
-/// `MonitorFromPoint(MONITOR_DEFAULTTONEAREST)` 経由なので、cursor が画面外
-/// （remote desktop で out-of-bounds 等）でも fallback する。
+/// Bounds of the monitor containing `p`, or the nearest one if `p` is outside
+/// all monitors (via `MONITOR_DEFAULTTONEAREST`).
 ///
 /// # Errors
-/// `GetMonitorInfoW` が失敗したとき。
+/// When `GetMonitorInfoW` fails.
 pub fn bounds_for_point(p: Point<Logical>) -> Result<ScreenRect<Logical>> {
     let hmonitor = win32_ffi::monitor_from_point(p.x, p.y);
     let info = win32_ffi::get_monitor_info(hmonitor)?;
     Ok(rect_from_monitorinfo(&info))
 }
 
-/// `MONITORINFO::rcMonitor` を `ScreenRect<Logical>` に変換する。
+/// Convert `MONITORINFO::rcMonitor` to `ScreenRect<Logical>`.
 fn rect_from_monitorinfo(info: &windows::Win32::Graphics::Gdi::MONITORINFO) -> ScreenRect<Logical> {
     let r = info.rcMonitor;
     let width = u32::try_from((r.right - r.left).max(0)).unwrap_or(0);

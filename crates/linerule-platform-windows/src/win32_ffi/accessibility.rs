@@ -1,23 +1,20 @@
-//! ★ FFI 境界 — Accessibility hook (`SetWinEventHook` / `UnhookWinEvent`) と
-//! z-order 再 assert (`SetWindowPos`)。
+//! FFI boundary — accessibility hook (`SetWinEventHook` / `UnhookWinEvent`) and
+//! z-order re-assert (`SetWindowPos`).
 //!
-//! `linerule-platform-windows` 内で `unsafe` を含む副集約。前景アプリ変更を
-//! 監視して overlay の z-order を最前面に再 assert するために使う。callback
-//! 本体 (`extern "system" fn`) もここに局在化し、`catch_unwind` で OS thread
-//! への panic 漏洩を防ぐ。詳細方針は ADR-0003 / ADR-0012。
+//! Watches foreground-app changes to re-assert the overlay's topmost z-order.
+//! The callback (`extern "system" fn`) is also kept here, with `catch_unwind`
+//! to stop panics leaking into the OS thread.
 //!
-//! 設計のキー:
-//! - `WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS` で OS が自プロセスの
-//!   前景化通知を抑制してくれるので、callback 側で HWND 比較する必要がない。
-//! - HWND は `!Send` だが `AtomicIsize` 越しの isize 表現で thread 越えする
-//!   (既存 `render_clock.rs` の HWND 越境パターンと同じ)。
-//! - callback 内では `PostMessageW(WM_APP_REASSERT_TOPMOST)` だけ。実 SetWindowPos
-//!   は UI thread 側 (`wndproc::dispatch`) で行う。`PostMessageW` は thread-safe。
+//! - `WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS`: the OS suppresses
+//!   own-process foreground events, so the callback needs no HWND compare.
+//! - `HWND` is `!Send`, so it crosses threads as an isize via `AtomicIsize`.
+//! - The callback only `PostMessageW(WM_APP_REASSERT_TOPMOST)`; the actual
+//!   SetWindowPos runs on the UI thread (`wndproc::dispatch`). `PostMessageW`
+//!   is thread-safe.
 
 #![allow(
     unsafe_code,
-    reason = "FFI 境界。SetWinEventHook / UnhookWinEvent / SetWindowPos / \
-              PostMessageW は windows crate の unsafe fn。本ファイルが集約点。"
+    reason = "FFI boundary; SetWinEventHook/UnhookWinEvent/SetWindowPos/PostMessageW are unsafe fn."
 )]
 
 use core::ffi::c_void;
@@ -35,22 +32,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::error::{PlatformError, Result};
 use crate::messages::WM_APP_REASSERT_TOPMOST;
 
-/// callback (OS hook thread) から UI thread の overlay HWND に向けて
-/// `PostMessageW` するために、overlay HWND を atomically 共有する。`HWND` は
-/// `!Send` なので isize 経由で hop する（render_clock.rs と同じパターン）。
-/// 0 = uninstalled / no target。
+/// Overlay HWND shared atomically so the callback (OS hook thread) can
+/// `PostMessageW` it on the UI thread. `HWND` is `!Send`, so it hops as an
+/// isize. 0 = uninstalled / no target.
 static TARGET_HWND: AtomicIsize = AtomicIsize::new(0);
 
-/// 前景アプリ変更通知を register する。`target` は通知を受ける overlay HWND。
-/// 戻り値の `HWINEVENTHOOK` は [`unhook_win_event`] で必ず解除すること
-/// (RAII は `crate::foreground_hook::ForegroundHook` 側)。
+/// Registers foreground-app change notifications. `target` is the overlay HWND
+/// to notify. The returned `HWINEVENTHOOK` must be released via
+/// `unhook_win_event` (RAII lives in `crate::foreground_hook::ForegroundHook`).
 ///
-/// `WINEVENT_SKIPOWNPROCESS` を指定するので自プロセス由来のイベントは OS が
-/// 抑制する。callback 側での HWND 比較は不要。
+/// `WINEVENT_SKIPOWNPROCESS` makes the OS suppress own-process events, so the
+/// callback needs no HWND compare.
 pub fn set_foreground_hook(target: HWND) -> Result<HWINEVENTHOOK> {
     TARGET_HWND.store(target.0 as isize, Ordering::SeqCst);
-    // SAFETY: 引数は全て Windows SDK の正規範囲。callback は static fn pointer
-    // (lifetime 不要)。0/0 = 全プロセス全 thread を監視。
+    // SAFETY: all args are in valid Windows SDK range; callback is a static fn
+    // pointer (no lifetime). 0/0 watches all processes and threads.
     let hook = unsafe {
         SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
@@ -71,10 +67,10 @@ pub fn set_foreground_hook(target: HWND) -> Result<HWINEVENTHOOK> {
     Ok(hook)
 }
 
-/// register した hook を解除する。`Drop` から呼ばれる前提なので、失敗しても
-/// プログラム継続のために `Result` で返すだけ。
+/// Removes a registered hook. Called from `Drop`, so failure only returns a
+/// `Result` rather than aborting.
 pub fn unhook_win_event(hook: HWINEVENTHOOK) -> Result<()> {
-    // SAFETY: hook は set_foreground_hook 由来。null は呼び出し側で除外。
+    // SAFETY: hook is from set_foreground_hook; the caller excludes null.
     let ok = unsafe { UnhookWinEvent(hook) };
     TARGET_HWND.store(0, Ordering::SeqCst);
     if !ok.as_bool() {
@@ -86,27 +82,28 @@ pub fn unhook_win_event(hook: HWINEVENTHOOK) -> Result<()> {
     Ok(())
 }
 
-/// `GWL_EXSTYLE` の `WS_EX_TOPMOST` bit が立っているか。OS は window が
-/// topmost バンドに居る間この bit を維持するので、「再 assert が必要か」の
-/// 判定に使える。
+/// Whether `GWL_EXSTYLE` has the `WS_EX_TOPMOST` bit. The OS keeps the bit
+/// while the window sits in the topmost band, so it answers "does the z-order
+/// need re-asserting?".
 #[must_use]
 pub fn is_topmost(hwnd: HWND) -> bool {
     let bits = u32::try_from(crate::win32_ffi::get_ex_style(hwnd)).unwrap_or(u32::MAX);
     bits & WS_EX_TOPMOST.0 != 0
 }
 
-/// `SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)`。
-/// overlay の z-order を最前面に戻す。focus は奪わない。位置/サイズは不変。
+/// `SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+/// SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)`. Restores the overlay's topmost
+/// z-order without stealing focus or changing position/size.
 ///
-/// 既に `WS_EX_TOPMOST` が立っている (= topmost バンド在籍中の) window へは
-/// no-op で early return する。前景変化のたびに無条件で `SetWindowPos` を呼ぶ
-/// と DWM の z-order churn で一瞬のチラつきが出るため、必要なときだけ呼ぶ。
+/// Early-returns as a no-op when `WS_EX_TOPMOST` is already set: calling
+/// `SetWindowPos` unconditionally on every foreground change causes a brief
+/// flicker from DWM z-order churn, so it runs only when needed.
 pub fn reassert_topmost(hwnd: HWND) -> Result<()> {
     if is_topmost(hwnd) {
         return Ok(());
     }
     let flags: SET_WINDOW_POS_FLAGS = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
-    // SAFETY: hwnd は OverlayWindow 由来の valid HWND。HWND_TOPMOST は WinAPI 定数。
+    // SAFETY: hwnd is a valid OverlayWindow HWND. HWND_TOPMOST is a WinAPI constant.
     unsafe { SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags) }.map_err(|e| {
         PlatformError::BadHr {
             operation: "SetWindowPos(HWND_TOPMOST)",
@@ -115,9 +112,9 @@ pub fn reassert_topmost(hwnd: HWND) -> Result<()> {
     })
 }
 
-/// `SetWinEventHook` の callback。OS hook thread から呼ばれる。
-/// `WINEVENT_SKIPOWNPROCESS` 指定済みなので、自プロセス由来のイベントは届かない。
-/// 本体は `PostMessageW` 1 本のみ。`SetWindowPos` 等の重い処理は UI thread に委ねる。
+/// `SetWinEventHook` callback, invoked on the OS hook thread. With
+/// `WINEVENT_SKIPOWNPROCESS`, own-process events never arrive. The body only
+/// `PostMessageW`s; heavy work (SetWindowPos) is left to the UI thread.
 extern "system" fn on_foreground_event(
     _hook: HWINEVENTHOOK,
     _event: u32,
@@ -127,22 +124,21 @@ extern "system" fn on_foreground_event(
     _thread_id: u32,
     _time: u32,
 ) {
-    // OS callback への panic 漏洩を防ぐ (win32_ffi/core.rs::overlay_wnd_proc 同様)。
+    // Prevent panics leaking into the OS callback.
     let _ = catch_unwind(AssertUnwindSafe(|| {
         let raw = TARGET_HWND.load(Ordering::SeqCst);
         if raw == 0 {
             return;
         }
         let target = HWND(raw as *mut c_void);
-        // SAFETY: PostMessageW は thread-safe (Microsoft 仕様)。target は
-        // AtomicIsize で生存中の overlay HWND。失敗しても visual 影響無し
-        // (hook thread から tracing するのは避ける)。
+        // SAFETY: PostMessageW is thread-safe (per Microsoft). target is the live
+        // overlay HWND from AtomicIsize. Failure has no visual impact.
         let _ =
             unsafe { PostMessageW(Some(target), WM_APP_REASSERT_TOPMOST, WPARAM(0), LPARAM(0)) };
     }));
 }
 
-// テストはコンパイル時保証 (WINEVENTPROC シグネチャ整合) と messages.rs 側の
-// `WM_APP_REASSERT_TOPMOST` 帯テストでカバー。SetWinEventHook / SetWindowPos
-// の実呼び出しは Windows native 環境必須で、global static `TARGET_HWND` に
-// 副作用を持つため unit test には適さない。実機検証は ADR-0012 参照。
+// Coverage comes from compile-time guarantees (WINEVENTPROC signature) and the
+// `WM_APP_REASSERT_TOPMOST` tests in messages.rs. Real SetWinEventHook /
+// SetWindowPos calls need a native Windows environment and mutate the global
+// `TARGET_HWND`, so they are unsuitable for unit tests.

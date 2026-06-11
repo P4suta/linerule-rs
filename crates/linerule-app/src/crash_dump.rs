@@ -1,5 +1,5 @@
-//! Panic hook がトリガーされたとき、`<linerule.exe と同じ dir>/crash-<runid>-<ts>.json`
-//! にクラッシュレポートを同期書き出す (ADR-0011)。
+//! On panic, synchronously write a crash report to
+//! `<exe dir>/crash-<run_id>-<ts>.json`.
 
 #![forbid(unsafe_code)]
 
@@ -11,15 +11,15 @@ use uuid::Uuid;
 
 use crate::logging;
 
-/// アプリ開始時に panic hook をインストールする。
+/// Install the panic hook at startup.
 pub(crate) fn install_panic_hook(run_id: Uuid) {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if let Err(e) = write_crash_dump(info, run_id) {
-            // crash dump 自体が失敗した場合は stderr に流すしかない。
+            // If the crash dump itself fails, stderr is all we have.
             eprintln!("crash_dump write failed: {e}");
         }
-        // 標準 hook も呼んで通常通り backtrace を表示
+        // Also run the default hook for the usual backtrace.
         prev(info);
     }));
 }
@@ -31,8 +31,8 @@ struct CrashRecord<'a> {
     message: String,
     location: Option<CrashLocation<'a>>,
     backtrace: String,
-    /// panic 直前の tracing event tail (capacity 64)。`event_ring::snapshot_tail`
-    /// で取り出す。lock 取得失敗時は空 `Vec`。
+    /// Tail of tracing events before the panic (up to 64), via
+    /// `event_ring::snapshot_tail`. Empty `Vec` if the lock can't be taken.
     recent_events: Vec<crate::event_ring::RingEntry>,
 }
 

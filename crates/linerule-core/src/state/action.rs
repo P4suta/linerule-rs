@@ -9,16 +9,17 @@ use serde::{Deserialize, Serialize};
 pub enum OverlayAction {
     /// Advance `Mode` through `Off → Horizontal → Vertical → Off`.
     CycleMode,
+    /// Advance `SurroundEffect` through `DimBlack → WhiteWash → Blur →
+    /// DimBlack`. Rejected while `Mode::Off` (like the bump actions) — the
+    /// reducer reports `RejectReason::AdjustWhileOff`.
+    CycleEffect,
     /// Toggle `Off ⇄ last_active` (quick on/off preserving the slit axis).
     ToggleOnOff,
     /// Add `delta` (signed) to `OverlayConfig::thickness`.
     BumpThickness(i32),
-    /// Add `delta` (signed) to `OverlayConfig::opacity`.
+    /// Add `delta` (signed) to `OverlayConfig::opacity`. Under the `Blur`
+    /// effect the delta retargets onto `OverlayConfig::blur` instead.
     BumpOpacity(i32),
-    /// Advance `OverlayConfig::surround_style` through its cycle
-    /// (`Dim → Bright → Dim`). Rejected while `Mode::Off` (like the bump
-    /// actions) — the reducer reports `RejectReason::AdjustWhileOff`.
-    CycleStyle,
     /// Toggle the HUD presentation between the chip and the full guide.
     /// Pure no-op at the reducer (view state lives in `TickWorld`, not
     /// `State`); the tick pipeline interprets it.

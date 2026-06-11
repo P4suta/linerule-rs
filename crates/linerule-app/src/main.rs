@@ -1,28 +1,27 @@
 //! linerule-app
 //!
-//! 単一バイナリ `linerule.exe` のエントリーポイント。CLI 解析・ロギング
-//! 初期化・`linerule-platform-windows` の `windows_app::run` への結線のみを
-//! 行い、ドメインロジックは書かない。
+//! Entry point for the single binary `linerule.exe`. Does CLI parsing, logging
+//! init, and wiring into `linerule-platform-windows`; no domain logic.
 //!
-//! GUI モードでは `windows_subsystem = "windows"` によりコンソールが開かず、
-//! CLI 系コマンド (`diagnostics`, `version`, `--cli`) が要求された時にだけ
-//! `console` モジュールがコンソールを attach / alloc する。
+//! In GUI mode `windows_subsystem = "windows"` keeps the console closed; the
+//! `console` module attaches/allocates one only when a CLI command
+//! (`diagnostics`, `version`, `--cli`) is requested.
 
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 #![cfg_attr(not(target_os = "windows"), forbid(unsafe_code))]
 #![allow(
     clippy::print_stdout,
     clippy::print_stderr,
-    reason = "linerule-app は CLI / boundary なので stdout / stderr を直接使う"
+    reason = "CLI/boundary crate uses stdout/stderr directly"
 )]
 #![allow(
     clippy::redundant_pub_crate,
-    reason = "pub(crate) は意図表現。unreachable_pub と redundant_pub_crate の衝突は前者を優先"
+    reason = "prefer unreachable_pub over redundant_pub_crate"
 )]
 #![allow(
     clippy::missing_const_for_fn,
     clippy::unnecessary_wraps,
-    reason = "ブート系関数は将来副作用を追加する余地を残す"
+    reason = "boot fns may gain side effects later"
 )]
 
 use clap::Parser;

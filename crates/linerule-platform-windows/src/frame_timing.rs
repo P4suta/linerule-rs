@@ -1,15 +1,10 @@
-//! Tick latency と dropped frame の固定窓 tracker。HUD telemetry に
-//! `HudTelemetry { tick_p99_ms, frames_dropped, commit_timeouts }` として供給する。
+//! Fixed-window tracker for tick latency and dropped frames. Feeds HUD
+//! telemetry as `HudTelemetry { tick_p99_ms, frames_dropped, commit_timeouts }`.
 //!
-//! 設計:
-//! - サンプル窓は固定 256 frames (≒ 4 秒 @ 60Hz, ≒ 1.8 秒 @ 144Hz)。VecDeque の
-//!   push_back + pop_front で O(1) 更新。
-//! - p99 は snapshot 時に Vec にコピーして sort し index `(n-1) * 99 / 100` を取る。
-//!   per-tick の計算ではない (snapshot は 200ms 毎にしか呼ばれない)。
-//! - `Instant::now` は呼び出し側 (`wndproc::apply_tick`) で取って begin_tick /
-//!   end_tick に渡すことで、本モジュールを純粋ロジックに保ち unit test 可能にする。
-//! - `frames_dropped` / `commit_timeouts` は monotonic counter。リセットしない
-//!   (cs HudTelemetry.cs と同じ意味論)。
+//! - Window is 256 frames (~4s @ 60Hz, ~1.8s @ 144Hz); O(1) via `VecDeque`.
+//! - p99 sorts a copy at `snapshot()` time (called ~every 200ms, not per tick).
+//! - Callers pass elapsed `Duration` so the module stays pure and unit-testable.
+//! - `frames_dropped` / `commit_timeouts` are monotonic; never reset.
 
 #![forbid(unsafe_code)]
 
@@ -18,29 +13,24 @@ use std::time::Duration;
 
 use linerule_core::HudTelemetry;
 
-/// p99 計算のサンプル窓サイズ。256 frames ≒ 4s @ 60Hz, ≒ 1.8s @ 144Hz。
+/// p99 sample window size. 256 frames ~= 4s @ 60Hz, ~= 1.8s @ 144Hz.
 const WINDOW_CAPACITY: usize = 256;
 
-/// HUD telemetry の rolling tracker。`wndproc::apply_tick` の入口で
-/// `begin_tick(now)`、出口で `end_tick(now, over_budget)` を呼び、`RefreshHud`
-/// effect の処理時に `snapshot()` で [`HudTelemetry`] を取得する。
+/// Rolling tracker for HUD telemetry: `record_tick` per frame, `snapshot` to
+/// produce [`HudTelemetry`].
 #[derive(Debug)]
 pub struct FrameTimingTracker {
-    /// 各 tick の elapsed (begin → end) の固定窓サンプル。
+    /// Fixed-window samples of per-tick elapsed time.
     samples: VecDeque<Duration>,
-    /// budget 超過 tick の monotonic counter。
+    /// Monotonic count of over-budget ticks.
     frames_dropped: u64,
-    /// dcomp commit 失敗の monotonic counter。
+    /// Monotonic count of failed composition commits.
     commit_timeouts: u64,
-    /// 直近の `begin_tick()` 時刻。`None` なら未開始 (or end_tick で reset 済み)。
-    /// elapsed 計算は `end_tick(end) - tick_start` で行う。`Instant` を保持する
-    /// と clock を mock しづらいので Duration ベースで callers が elapsed を渡す
-    /// 設計にしている (`end_tick(elapsed, over_budget)`)。
     _phantom: (),
 }
 
 impl FrameTimingTracker {
-    /// 空の tracker を作る。サンプル無しの状態は p99 = 0.0 を返す。
+    /// Empty tracker; reports p99 = 0.0 with no samples.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -51,10 +41,8 @@ impl FrameTimingTracker {
         }
     }
 
-    /// 1 tick の elapsed をサンプル窓に追加し、budget 超過なら drop counter を
-    /// increment する。`over_budget` は caller (`wndproc`) が
-    /// `RenderConfig::warn_ratio * (1000 / refresh_hz)` と elapsed を比較して
-    /// 決める (本モジュールは budget を知らない — 純粋ロジック維持のため)。
+    /// Append one tick's elapsed time; bump the drop counter if over budget.
+    /// The caller decides `over_budget`; this module does not know the budget.
     pub fn record_tick(&mut self, elapsed: Duration, over_budget: bool) {
         if self.samples.len() >= WINDOW_CAPACITY {
             self.samples.pop_front();
@@ -65,14 +53,14 @@ impl FrameTimingTracker {
         }
     }
 
-    /// dcomp commit の失敗 / timeout を 1 件記録する。`composition_renderer::apply`
-    /// の commit error を caller が拾ってここに通知する。
+    /// Record one composition commit failure/timeout. WinRT auto-commits via
+    /// the DispatcherQueue, so currently this has no callers (telemetry stays 0).
     pub fn record_timeout(&mut self) {
         self.commit_timeouts = self.commit_timeouts.saturating_add(1);
     }
 
-    /// 現在の累積値から HUD 表示用 snapshot を作る。`tick_p99_ms` は
-    /// 直近窓の 99 パーセンタイル。サンプル数 < 1 のときは 0.0。
+    /// Snapshot for the HUD. `tick_p99_ms` is the window's 99th percentile,
+    /// or 0.0 with no samples.
     #[must_use]
     pub fn snapshot(&self) -> HudTelemetry {
         HudTelemetry {
@@ -89,12 +77,8 @@ impl Default for FrameTimingTracker {
     }
 }
 
-/// 直近窓の Duration サンプルから 99 パーセンタイルを ms (f32) で返す。
-/// 空のときは 0.0。サンプル数 n に対し index は `((n - 1) * 99) / 100`。
-///
-/// 純粋関数として切り出してあるので proptest 対象。窓サイズが 100 を超える
-/// と percentile index の差分 (例: n=200 で `(199 * 99) / 100 = 197`、
-/// n=256 で `(255 * 99) / 100 = 252`) が線形に増える挙動を test で pin する。
+/// 99th percentile of the window's samples in ms (f32); 0.0 if empty.
+/// Index is `((n - 1) * 99) / 100`.
 fn p99_ms(samples: &VecDeque<Duration>) -> f32 {
     if samples.is_empty() {
         return 0.0;
@@ -103,7 +87,6 @@ fn p99_ms(samples: &VecDeque<Duration>) -> f32 {
     copy.sort_unstable();
     let n = copy.len();
     let idx = ((n - 1) * 99) / 100;
-    // 0..1000 ms 範囲なら f32 で十分。`as_secs_f32` は秒、 1000 倍で ms。
     copy[idx].as_secs_f32() * 1000.0
 }
 
@@ -194,15 +177,14 @@ mod tests {
     }
 
     proptest! {
-        /// 任意の長さのサンプル列に対し、p99 は常に `[0, max_sample_ms]` の範囲に
-        /// 入る。範囲外を返したら percentile index 計算のバグ。
+        /// p99 always falls within `[0, max_sample_ms]`.
         #[test]
         fn p99_stays_within_sample_range(samples in proptest::collection::vec(1u64..=1000, 1..=300)) {
             let mut t = FrameTimingTracker::new();
             for s in &samples {
                 t.record_tick(ms(*s), false);
             }
-            // window cap 256 で truncate されることを考慮
+            // Account for window truncation at WINDOW_CAPACITY.
             let kept: Vec<u64> = samples.iter().rev().take(WINDOW_CAPACITY).copied().collect();
             let &max = kept.iter().max().unwrap();
             #[allow(clippy::cast_precision_loss)]
@@ -212,7 +194,7 @@ mod tests {
             prop_assert!(p99 <= max_f32 + 0.001);
         }
 
-        /// 全 sample が同じ値なら p99 もその値。
+        /// Uniform samples yield p99 equal to that value.
         #[test]
         fn p99_with_uniform_samples_equals_sample(v in 1u64..=500, n in 1usize..=256) {
             let mut t = FrameTimingTracker::new();
@@ -225,7 +207,7 @@ mod tests {
             prop_assert!((p99 - v_f32).abs() < 0.001);
         }
 
-        /// commit_timeouts は monotonic non-decreasing。
+        /// commit_timeouts is monotonic non-decreasing.
         #[test]
         fn timeouts_are_monotonic(calls in 0u64..=500) {
             let mut t = FrameTimingTracker::new();

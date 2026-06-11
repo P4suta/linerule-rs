@@ -1,12 +1,12 @@
 # 0006 — DWrite FFI を `win32_ffi/dwrite.rs` に集約
 
-**Status:** Accepted (Phase G HUD telemetry 描画の前段, 2026-05-20).
+**Status:** Accepted (2026-05-20).
 
-**See also:** [[0003-unsafe-isolation]] (`unsafe` を `win32_ffi/` に集約), [[0002-architecture-principles]] §7 (unsafe 局所化), Phase G groundwork PR #41.
+**See also:** [[0003-unsafe-isolation]] (`unsafe` を `win32_ffi/` に集約), [[0002-architecture-principles]] §7 (unsafe 局所化).
 
 ## 文脈
 
-Phase G の HUD telemetry 表示には DirectWrite (DWrite) によるテキスト描画が必須 (`IDWriteFactory` / `IDWriteTextFormat` / `IDWriteTextLayout` + `ID2D1DeviceContext::DrawText`)。これらは windows crate でも `unsafe fn` で覆われている COM 接面で、Phase D で確立した D3D11 + DXGI + D2D + DComp 統合パイプライン (`win32_ffi/graphics.rs`) と並列の独立した FFI 接面を構成する。
+HUD telemetry 表示には DirectWrite によるテキスト描画が必須 (`IDWriteFactory` / `IDWriteTextFormat` / `IDWriteTextLayout` + `ID2D1DeviceContext::DrawText`)。これらは windows crate でも `unsafe fn` で覆われた COM 接面で、`win32_ffi/graphics.rs` の D3D11 + DXGI + D2D + DComp パイプラインと並列の独立した FFI 接面を構成する。
 
 ADR-0003 で「`#![allow(unsafe_code)]` のファイル数を増やすときは ADR を要する」と定めたため、`win32_ffi/dwrite.rs` の新規追加には本 ADR を要する。
 

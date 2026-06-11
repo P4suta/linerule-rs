@@ -1,46 +1,38 @@
 //! linerule-platform-windows
 //!
-//! Win32 / COM 実装層。HWND ライフサイクル、DirectComposition + Direct2D + D3D11
-//! 描画 (Phase D 以降)、ホットキー、`DwmFlush` ペーシング、`tracing` への構造化
-//! イベント発行のみを担う。
+//! Win32 / COM layer: HWND lifecycle, DirectComposition + Direct2D + D3D11
+//! rendering, hotkeys, `DwmFlush` pacing, structured `tracing` events. No logic.
 //!
-//! このクレートは `#![cfg(windows)]` でクレートトップから Windows 専用にゲートされる。
-//! Linux 上では空クレートとしてコンパイル通過させ、本物のビルドは windows-latest
-//! CI と `cargo xwin check` の双方で行う。
+//! Gated to Windows via `#![cfg(windows)]`; compiles as an empty crate elsewhere.
 //!
-//! ## `unsafe` ポリシー (ADR-0003)
+//! `unsafe` is confined to `win32_ffi.rs`. Every other module is
+//! `#![forbid(unsafe_code)]` and calls Win32 / COM only through its safe wrappers.
 //!
-//! `unsafe` は **`win32_ffi.rs` 1 ファイルに集約**する。他のモジュール
-//! (`overlay_window`, `wndproc`, `monitor_info`, `windows_app`, ...) は
-//! `#![forbid(unsafe_code)]` を強制し、Win32 / COM API は `win32_ffi` の薄い
-//! safe wrapper 経由でのみ呼ぶ。詳細は [`docs/adr/0003-unsafe-isolation.md`]
-//! を参照。
-//!
-//! ## 不変条件
-//!
-//! - ロジックを書かない (`linerule-core` の reducer / render を呼ぶだけ)
-//! - `Drop` で COM オブジェクト・HWND・Hook・`JoinHandle` を確実に解放する
+//! Invariants:
+//! - No logic here; call `linerule-core` reducers / render.
+//! - `Drop` must release COM objects, HWNDs, hooks, and `JoinHandle`s.
 
 #![cfg(windows)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod auto_quit;
-pub mod composition_renderer;
 pub mod cursor_tracker;
 pub mod error;
 pub mod ex_style_snapshot;
 pub mod foreground_hook;
 pub mod frame_timing;
-pub mod hud_renderer;
 pub mod messages;
 pub mod monitor_info;
 pub mod overlay_state;
 pub mod overlay_window;
 pub mod render_clock;
 pub mod render_timing;
+pub mod renderer_backend;
 pub mod win32_ffi;
 pub mod window_class;
 pub mod windows_app;
+pub mod winrt_composition_renderer;
+pub mod winrt_hud_renderer;
 pub mod wndproc;
 
 pub use auto_quit::AutoQuitTimer;

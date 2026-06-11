@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (Phase 0 of the testing-rebuild plan, 2026-05-20).
+Accepted (2026-05-20).
 
 ## Context
 
@@ -25,7 +25,7 @@ The required `coverage` gate measures **`linerule-core` + `linerule-app` only**.
 
 - **Linux job (`coverage`)**:
   - Command: `cargo llvm-cov nextest --workspace --exclude linerule-platform-windows --exclude xtask --fail-under-lines <threshold>`
-  - Threshold: starts at `80` after Phase 1 lands, raised to `85` once Phase 2 stabilizes.
+  - Threshold: `80`, raised to `85` once coverage stabilizes.
   - `xtask` is also excluded: it's a build-time helper binary executed via
     `cargo xtask ...`, not exercised by `cargo nextest`, and lifting it to
     full coverage would require duplicating the workflow inside the test
@@ -47,4 +47,3 @@ The same scope split applies to mutation testing: `cargo-mutants` runs only agai
 
 - ADR-0002 §2 (crate invariants — core stays pure).
 - ADR-0003 (unsafe isolation to `win32_ffi/`).
-- Testing rebuild plan: `/home/yasunobu/.claude/plans/linerule-cs-c-linerule-rust-windows-c-cs-starry-taco.md`.

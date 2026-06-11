@@ -60,6 +60,12 @@ pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
                 StateDelta::mode(mode),
             )
         },
+        // Goes through `bump_config`, so cycling while `Off` is rejected with
+        // HUD feedback instead of invisibly changing the surround.
+        A::CycleEffect => bump_config(state, |c| OverlayConfig {
+            effect: c.effect.cycle(),
+            ..c
+        }),
         A::ToggleOnOff => {
             let (mode, last_active) = match state.mode {
                 // Off → restore the last active mode.
@@ -83,13 +89,21 @@ pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
             thickness: c.thickness.saturating_add(delta),
             ..c
         }),
-        A::BumpOpacity(delta) => bump_config(state, |c| OverlayConfig {
-            opacity: c.opacity.saturating_add(delta),
-            ..c
-        }),
-        A::CycleStyle => bump_config(state, |c| OverlayConfig {
-            surround_style: c.surround_style.cycle(),
-            ..c
+        // Under the `Blur` effect the opacity hotkeys retarget onto the blur σ
+        // amount (the brightness knob was dropped, so opacity is inert there);
+        // for the flat effects they tune opacity as before.
+        A::BumpOpacity(delta) => bump_config(state, |c| {
+            if c.effect.is_blur() {
+                OverlayConfig {
+                    blur: c.blur.saturating_add(delta),
+                    ..c
+                }
+            } else {
+                OverlayConfig {
+                    opacity: c.opacity.saturating_add(delta),
+                    ..c
+                }
+            }
         }),
         // View-layer / process-layer actions: pure no-ops here. The tick
         // pipeline interprets them (HUD tier flip / TickEffect::Quit).
@@ -123,10 +137,7 @@ fn bump_config(
 }
 
 fn config_unchanged(a: OverlayConfig, b: OverlayConfig) -> bool {
-    a.thickness == b.thickness
-        && a.opacity == b.opacity
-        && a.mask_color == b.mask_color
-        && a.surround_style == b.surround_style
+    a.thickness == b.thickness && a.opacity == b.opacity && a.effect == b.effect && a.blur == b.blur
 }
 
 // ----- private helpers on StateDelta to keep the reducer terse ----------------
@@ -273,38 +284,19 @@ mod tests {
         }
     }
 
+    /// Cycling the effect while `Off` is rejected with HUD feedback instead of
+    /// invisibly changing the surround (same policy as the bump actions).
     #[test]
-    fn cycle_style_is_rejected_when_mode_is_off() {
+    fn cycle_effect_is_rejected_when_mode_is_off() {
         let s0 = State::DEFAULT;
-        let (s1, d) = apply(s0, OverlayAction::CycleStyle);
+        let (s1, d) = apply(s0, OverlayAction::CycleEffect);
         assert_eq!(s1, s0);
         assert!(!d.is_any());
         assert_eq!(d.rejected, Some(RejectReason::AdjustWhileOff));
     }
 
-    /// `CycleStyle` must flip the style *and* report `config_changed`. If the
-    /// delta were `NONE` (e.g. `surround_style` left out of `config_unchanged`),
-    /// the platform layer would never re-render and the style would silently
-    /// never change on screen — a test on the field alone would not catch it.
-    #[test]
-    fn cycle_style_advances_and_reports_config_changed() {
-        use crate::config::SurroundStyle;
-        let s0 = State::with_mode(Mode::Horizontal);
-        assert_eq!(s0.config.surround_style, SurroundStyle::Dim);
-        let (s1, d1) = apply(s0, OverlayAction::CycleStyle);
-        assert_eq!(s1.config.surround_style, SurroundStyle::Bright);
-        assert!(d1.config_changed, "Dim → Bright must report config_changed");
-        let (s2, d2) = apply(s1, OverlayAction::CycleStyle);
-        assert_eq!(s2.config.surround_style, SurroundStyle::Dim);
-        assert!(d2.config_changed, "Bright → Dim must report config_changed");
-    }
-
-    /// `BumpOpacity` が `opacity` field を実際に更新することを pin する。
-    /// `OverlayConfig` リテラル内で `opacity: ...` を `..c` のみ
-    /// (= field 省略) に変えた mutation が、saturating_add(-8) で MIN から MIN
-    /// のままになる test では検出できなかった (Phase ε mutation baseline)。
-    /// `Horizontal` mode + DEFAULT (= 0xAA) から +8 すると 0xB2 になる、これは
-    /// `..c` だと 0xAA のままで失敗する。
+    /// `BumpOpacity` actually mutates the `opacity` field
+    /// (`Horizontal` + DEFAULT 0xAA, +8 → 0xB2).
     #[test]
     fn bump_opacity_actually_mutates_opacity_field() {
         let s0 = State::with_mode(Mode::Horizontal);
@@ -316,8 +308,95 @@ mod tests {
             "opacity must change from DEFAULT after BumpOpacity(+8)"
         );
         assert!(d.config_changed);
-        // 同時に thickness と mask_color は変化しない (他 field を巻き込まない)
+        // thickness and effect stay put (no other field is touched).
         assert_eq!(s1.config.thickness, s0.config.thickness);
-        assert_eq!(s1.config.mask_color, s0.config.mask_color);
+        assert_eq!(s1.config.effect, s0.config.effect);
+    }
+
+    #[test]
+    fn cycle_effect_walks_the_three_state_loop_when_mode_is_on() {
+        use crate::state::SurroundEffect;
+        let s0 = State {
+            mode: Mode::Horizontal,
+            ..State::DEFAULT
+        };
+        assert_eq!(s0.config.effect, SurroundEffect::DimBlack);
+        let (s1, d1) = apply(s0, OverlayAction::CycleEffect);
+        assert_eq!(s1.config.effect, SurroundEffect::WhiteWash);
+        assert!(d1.config_changed);
+        let (s2, d2) = apply(s1, OverlayAction::CycleEffect);
+        assert_eq!(s2.config.effect, SurroundEffect::Blur);
+        assert!(d2.config_changed);
+        let (s3, d3) = apply(s2, OverlayAction::CycleEffect);
+        assert_eq!(s3.config.effect, SurroundEffect::DimBlack);
+        assert!(d3.config_changed);
+    }
+
+    /// Under the Blur effect, `BumpOpacity` moves the σ amount (`blur`); `opacity` is inert.
+    #[test]
+    fn bump_opacity_retargets_to_blur_amount_under_blur_effect() {
+        use crate::color::BlurAmount;
+        use crate::state::SurroundEffect;
+        let s0 = State {
+            mode: Mode::Horizontal,
+            config: OverlayConfig {
+                effect: SurroundEffect::Blur,
+                ..OverlayConfig::DEFAULT
+            },
+            ..State::DEFAULT
+        };
+        let (s1, d) = apply(s0, OverlayAction::BumpOpacity(8));
+        assert_eq!(s1.config.blur, BlurAmount::DEFAULT.saturating_add(8));
+        assert_eq!(
+            s1.config.opacity, s0.config.opacity,
+            "opacity must stay put under the Blur effect"
+        );
+        assert!(d.config_changed);
+    }
+
+    /// Under a flat (non-Blur) effect, `BumpOpacity` moves `opacity`; `blur` is inert.
+    #[test]
+    fn bump_opacity_tunes_opacity_under_flat_effect() {
+        use crate::color::Opacity;
+        let s0 = State {
+            mode: Mode::Horizontal,
+            ..State::DEFAULT // DimBlack
+        };
+        let (s1, d) = apply(s0, OverlayAction::BumpOpacity(8));
+        assert_eq!(s1.config.opacity, Opacity::DEFAULT.saturating_add(8));
+        assert_eq!(
+            s1.config.blur, s0.config.blur,
+            "blur amount must stay put under a flat effect"
+        );
+        assert!(d.config_changed);
+    }
+
+    /// A blur-amount-only change still flags `config_changed`; guards against
+    /// `config_unchanged` dropping the `blur` comparison.
+    #[test]
+    fn blur_amount_only_change_marks_config_changed() {
+        use crate::state::SurroundEffect;
+        let s0 = State {
+            mode: Mode::Horizontal,
+            config: OverlayConfig {
+                effect: SurroundEffect::Blur,
+                ..OverlayConfig::DEFAULT
+            },
+            ..State::DEFAULT
+        };
+        let (s1, d) = apply(s0, OverlayAction::BumpOpacity(8));
+        assert_ne!(s1.config.blur, s0.config.blur);
+        assert!(
+            d.config_changed,
+            "a blur-amount-only change must still flag config_changed"
+        );
+    }
+
+    #[test]
+    fn cycle_effect_is_a_no_op_when_mode_is_off() {
+        let s0 = State::DEFAULT; // mode Off
+        let (s1, d) = apply(s0, OverlayAction::CycleEffect);
+        assert_eq!(s1, s0);
+        assert!(!d.is_any());
     }
 }

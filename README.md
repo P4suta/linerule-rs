@@ -5,45 +5,60 @@ Rust 製の Windows 用 reading ruler（読書補助オーバーレイ）。透�
 実機での操作:
 
 - `Ctrl+Alt+R`: モード切替（Off → Horizontal → Vertical → Off）
+- `Ctrl+Alt+E`: 周囲効果切替（Dim（暗幕）→ White（白マスク）→ Blur（背後ぼかし）→ Dim）
 - `Ctrl+Alt+H`: ON/OFF トグル（Off ⇄ 直前のアクティブモード。最後に使った向きを覚えている）
 - `Ctrl+Alt+Up` / `Ctrl+Alt+Down`: スリット厚さ ±（長押しで連続調整）
-- `Ctrl+Alt+Right` / `Ctrl+Alt+Left`: 不透明度 ±（長押しで連続調整）
-- `Ctrl+Alt+S`: 周囲スタイル切替（Dim 暗転 → Bright 真っ白 → Dim）
+- `Ctrl+Alt+Right` / `Ctrl+Alt+Left`: 不透明度 ±（長押しで連続調整）。`Blur` 効果中は
+  代わりに **ぼかし量（Gaussian σ, px）** を増減する（Blur では不透明度は inert で、
+  調整対象はぼかし量に切り替わる）
 - `Ctrl+Alt+K`: HUD 表示切替（常駐チップ ⇄ ホットキーガイドつきフルパネル）
 - `Ctrl+Alt+Q`: 終了
 
-「非表示」は `Mode::Off` ただ一つ。Off 中に厚さ・不透明度・スタイルのキーを押しても
+「非表示」は `Mode::Off` ただ一つ。Off 中に厚さ・不透明度・効果のキーを押しても
 設定は変更されず、HUD に「Overlay is off — Ctrl+Alt+H to show」の toast が出る
 （見えない状態がこっそり変わるサプライズを排除）。
 
-Bump 系（厚さ・不透明度）は長押しで連続発火する。Mode 切替・ON/OFF トグル・スタイル切替・
-終了は誤連打を避けるため 1 押下 1 発火に固定。割り当てが OEM 系キー（`[`/`]`/`=`/`-`）では
-なく Arrow キーなのは、Windows の IME / keyboard layout で OEM キーの VK が化けて
+Bump 系（厚さ・不透明度／ぼかし量）は長押しで連続発火する。Mode 切替・ON/OFF トグル・
+効果切替・終了は誤連打を避けるため 1 押下 1 発火に固定。割り当てが OEM 系キー（`[`/`]`/`=`/`-`）
+ではなく Arrow キーなのは、Windows の IME / keyboard layout で OEM キーの VK が化けて
 `RegisterHotKey` がキャプチャを取り逃すケースがあったため（JIS keyboard × ENG IME で再現）。
 
-**周囲スタイル（`Ctrl+Alt+S`）**: スリット以外の領域の見せ方を切り替える。`Dim`（従来の
-暗転）と `Bright`（真っ白に覆う）を、短いクロスフェードで巡回する。`Blur`（背景をぼかす
-ガウシアン）は型・ADT（`Brush::Blur` / `SurroundStyle::Blur`）として予約済みで、描画パス
-（画面キャプチャ + D2D `CLSID_D2D1GaussianBlur`）は後続タスク。それまでプラットフォーム側は
-tint 色のソリッド塗りにフォールバックする。
-
-表示・モード切替・スタイル切替・厚さ / 不透明度の変更は、すべて 200ms 未満の ease-out
+表示・モード切替・効果切替・厚さ / 不透明度の変更は、すべて 200ms 未満の ease-out
 トランジションで滑らかに遷移する（長押し中の連続調整は retarget で 1 つの連続モーションに
-合流する）。モード表示は HUD チップ（右上）が担う。
+合流する）。Dim ⇄ White はマスク色の RGB クロスフェード、flat ⇄ Blur はブラシ種が変わる
+（スプライトプール再構築）ためマスター包絡によるソフトカットで切り替わる。
 
 **HUD は二段階表示**: 普段は画面右上に極小の常駐チップ（`H · 28px · 67%`、Off 中は
 `Off`）だけが出る。起動直後の数秒はホットキーガイドつきのフルパネルが表示され、その後
 チップへ自動的に畳まれる。操作を忘れたら `Ctrl+Alt+K` でいつでもフルパネル（Mode /
-Thickness / Opacity / Refresh Hz と全ホットキー一覧）に展開できる。スリットやカーソルが
+Thickness / Opacity / Effect / Refresh Hz と全ホットキー一覧）に展開できる（`Blur`
+効果中は Opacity 行が `Blur: N px`（ぼかし量）に切り替わる）。スリットやカーソルが
 HUD に近づくと譲ってフェードアウトする。multi-monitor 環境では virtual screen 全体に
 overlay が広がる。
+
+### Blur 効果と composition backend
+
+composition backend は WinRT `Windows.UI.Composition` 単一（旧 Win32 DirectComposition
+backend と `LINERULE_COMPOSITOR` 環境変数は撤去、ADR 0016）。`Blur`（背後ぼかし）は
+WinRT backdrop blur で常時レンダリングされる。色ベール（tint）は重ねないが、純粋なぼかしだけ
+だと実機での見えが「のっぺり」するため、ぼかしの後段に彩度（Saturation）とコントラスト
+（Contrast）を持ち上げる D2D エフェクトを連結し、摺りガラス的な素材感を出している
+（`backdrop → GaussianBlur → Saturation → Contrast`）。彩度/コントラストの強さは実機調整用に
+環境変数 `LINERULE_BLUR_SATURATION`（`[0,1]`、既定 0.70、0.5 で原画）/ `LINERULE_BLUR_CONTRAST`
+（`[-1,1]`、既定 0.15、0 で原画）で再ビルド無しに上書きできる。ぼかし量（Gaussian σ）は
+`Ctrl+Alt+Right/Left` で調整でき（既定 ≈9px、範囲 ≈2–64px）、ステップは Weber–Fechner 則に
+沿って σ を幾何級数的に変化させる（内部の知覚レベルを等間隔に動かす）ため、どの強さでも
+1 タップの体感変化がほぼ一定になる。ぼけ方は実機の GPU / compositor に依存するため見え方は
+ハードウェアで確認すること。背後サンプリングが効かず単色に見える場合は
+`LINERULE_BLUR_HOST=1` で backdrop 取得方法（`CreateBackdropBrush` ↔ `CreateHostBackdropBrush`）を
+切り替えて比較できる。
 
 ## 構成
 
 | Crate | 役割 |
 |---|---|
 | `linerule-core` | 純粋ロジック層。ADT / reducer / render / chord parser / hold FSM / tick pipeline。`#![forbid(unsafe_code)]` |
-| `linerule-platform-windows` | Win32 / COM 実装層。DirectComposition + Direct2D + DXGI + D3D11 を直接叩く。`#![cfg(windows)]` |
+| `linerule-platform-windows` | Win32 / COM 実装層。WinRT Composition + Direct2D + DXGI + D3D11 を直接叩く。`#![cfg(windows)]` |
 | `linerule-app` | 単一バイナリ `linerule.exe` のエントリポイント。`windows_subsystem = "windows"` + サブコマンドで GUI / CLI 切替 |
 | `xtask` | ビルド自動化。`lint` / `dep-graph` / `ci` |
 
@@ -125,32 +140,31 @@ just crash-latest                   # 最新クラッシュダンプ
 
 linerule-core
 
-純粋ロジック層: ADT、reducer、render、parser、FSM。`#![forbid(unsafe_code)]`
-で `unsafe` を完全に排除し、非決定性 (時刻・乱数・I/O) は呼び出し側から引数で
-受け取る。
+Pure logic layer: ADTs, reducer, render, parser, FSM. `#![forbid(unsafe_code)]`
+bans `unsafe` outright; nondeterminism (time, randomness, I/O) is passed in
+by the caller as arguments.
 
-#### 構成
+#### Modules
 
-- [`anim`] — 整数エンドポイントの時間遷移 `Transition<T>` と easing
-- [`color`] — `Rgba` / `Opacity` / `DimLevel` / `Thickness` と perceptual カーブ
-- [`config`] — `UserConfig` ツリー (`OverlayConfig` / `HudConfig` / ...)
+- [`anim`] — integer-endpoint timed transitions (`Transition<T>`) and easing
+- [`color`] — `Rgba` / `Opacity` / `DimLevel` / `Thickness` / `BlurAmount` and perceptual curves
+- [`config`] — `UserConfig` tree (`OverlayConfig` / `HudConfig` / ...)
 - [`diagnostics`] — `LineruleError` / `Severity`
-- [`geometry`] — 座標空間タグ付き `Point<S>` / `ScreenRect<S>`
+- [`geometry`] — coordinate-space-tagged `Point<S>` / `ScreenRect<S>`
 - [`input`] — chord parser / hold FSM / tick pipeline / HUD fade / hotkey map
-- [`render`] — `OverlayFrame` ADT と純粋関数 `render::frame`
-- [`state`] — `State` / `OverlayAction` / `StateDelta` と `state::reduce::apply`
+- [`render`] — `OverlayFrame` ADT and the pure `render::frame`
+- [`state`] — `State` / `OverlayAction` / `StateDelta` and `state::reduce::apply`
 
-#### 短い public path
+#### Short public paths
 
-主要型は `lib.rs` で再エクスポートしているので、consumer は
-`linerule_core::Rgba` / `linerule_core::frame(...)` のような短い path で
-書ける。internal 実装は `linerule_core::color::rgba::Rgba` などの長い
-path で書き、リファクタの自由度を残す。
+Key types are re-exported here, so consumers write short paths like
+`linerule_core::Rgba` / `linerule_core::frame(...)`. Internal code uses the
+long paths (`linerule_core::color::rgba::Rgba`), leaving room to refactor.
 
-#### 依存方向
+#### Dependency direction
 
-`linerule-app` → `linerule-platform-windows` → `linerule-core`。本クレートは
-他の linerule-rs クレートに依存しない。
+`linerule-app` → `linerule-platform-windows` → `linerule-core`. This crate
+depends on no other linerule-rs crate.
 
 <!-- cargo-rdme end -->
 
@@ -163,9 +177,9 @@ path で書き、リファクタの自由度を残す。
 
 ## 設計・運用ドキュメント
 
-- [`docs/adr/0001-port-from-csharp.md`](docs/adr/0001-port-from-csharp.md): 旧 C# 版 (`linerule-cs`) からの Rust 全面リライト判断、旧 ADR 処遇マッピング
-- [`docs/adr/0002-architecture-principles.md`](docs/adr/0002-architecture-principles.md): 18 個の merge ブロッカー原則（一方向依存 / RAII / exhaustive match / unsafe 局所化 / `#[non_exhaustive]` を使わない / 等）
-- [`docs/roadmap/phase-eta.md`](docs/roadmap/phase-eta.md): Phase η の draft ロードマップ（code signing / Winget / i18n / accessibility 候補と Out of Scope の整理）
+設計判断は [`docs/adr/`](docs/adr/) に ADR として記録する。一方向依存 / RAII /
+exhaustive match / unsafe 局所化などの merge ブロッカー原則は
+[`docs/adr/0002-architecture-principles.md`](docs/adr/0002-architecture-principles.md) を参照。
 
 ## ライセンス
 

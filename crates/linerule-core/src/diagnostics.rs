@@ -57,24 +57,21 @@ pub enum LineruleError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorClass {
-    /// Log + fallback と継続可能 (例: hotkey 競合 / chord parse 失敗 / network 一時断)。
-    /// HUD toast に表示する候補。
+    /// Recoverable via log + fallback (e.g. hotkey conflict, chord parse
+    /// failure, transient network loss). Candidate for a HUD toast.
     Recoverable,
-    /// プロセス終了 + crash report 残しを要求 (例: HWND 作成失敗 / D3D11 初期化失敗)。
-    /// 上位で `?` で `main` に上げて anyhow に変換され、exit code 1 で終了する。
+    /// Requires process exit + crash report (e.g. HWND creation or D3D11 init
+    /// failure). Propagated via `?` to `main`, converted to anyhow, exit code 1.
     Fatal,
-    /// 本来 panic で表現すべき不変条件違反だが、boundary でふいに `?` に乗ったときの
-    /// tag (例: `Opacity::try_new(0)` の静的バグ)。Recoverable とは扱わず、debug build
-    /// では `debug_assert!` で即捕捉する余地を残す。
+    /// An invariant violation that should be a panic, but rode `?` past a
+    /// boundary (e.g. a static `Opacity::try_new(0)` bug). Not treated as
+    /// recoverable; debug builds may catch it via `debug_assert!`.
     ProgrammerError,
 }
 
 impl CoreError {
-    /// `CoreError` の recovery class。`Opacity::try_new` / `Thickness::try_new`
-    /// の静的入力エラーは boundary validation のプログラマ誤りとして
-    /// [`ErrorClass::ProgrammerError`] を返す。
-    ///
-    /// `CoreError` は `Copy` (8 byte) なので by-value で受ける。
+    /// Recovery class. `try_new` boundary-validation failures are static
+    /// programmer errors, so this returns [`ErrorClass::ProgrammerError`].
     #[must_use]
     pub const fn class(self) -> ErrorClass {
         match self {
@@ -84,14 +81,12 @@ impl CoreError {
 }
 
 impl ChordError {
-    /// `ChordError` は全 variant が user config / runtime input 由来なので、
-    /// HUD に表示してスキップ継続できる [`ErrorClass::Recoverable`]。
+    /// Every `ChordError` variant comes from user config / runtime input, so
+    /// all are [`ErrorClass::Recoverable`] (show in HUD, skip, continue).
     #[must_use]
     #[allow(
         clippy::unused_self,
-        reason = "method-style API を維持し将来 per-variant 分岐の余地を残す。\
-                  ChordError は `String` field を持つため by-value 化は move 化に\
-                  なり caller 影響大"
+        reason = "keep method-style API and room for per-variant branching; by-value would force a move"
     )]
     pub const fn class(&self) -> ErrorClass {
         ErrorClass::Recoverable
@@ -99,11 +94,11 @@ impl ChordError {
 }
 
 impl LineruleError {
-    /// 内部 error の `class()` に委譲。
+    /// Delegates to the inner error's `class()`.
     #[must_use]
     pub const fn class(&self) -> ErrorClass {
         match self {
-            // `CoreError: Copy` なので `*e` で deref-copy しても安全。
+            // `CoreError: Copy`, so the deref-copy `*e` is fine.
             Self::Core(e) => (*e).class(),
             Self::Chord(e) => e.class(),
         }
@@ -143,25 +138,20 @@ impl From<Severity> for Level {
     }
 }
 
-/// HRESULT が DXGI / D2D の "device-lost" 系 (= GPU パイプライン再構築が必要)
-/// に該当するかを判定する pure helper。
+/// `true` when `hr` is a DXGI / D2D "device-lost" HRESULT (GPU pipeline must be
+/// rebuilt):
 ///
-/// 一覧 (cs-port + DirectX SDK Reference):
 /// - `DXGI_ERROR_DEVICE_REMOVED` (0x887A0005): adapter removed / driver crash
 /// - `DXGI_ERROR_DEVICE_HUNG` (0x887A0006): hardware fault detected
 /// - `DXGI_ERROR_DEVICE_RESET` (0x887A0007): TDR (Timeout Detection & Recovery)
 /// - `D2DERR_RECREATE_TARGET` (0x8899000C): D2D render target lost
-///
-/// 呼び出し側 (Windows プラットフォーム) が `PlatformError::BadHr { hr, .. }`
-/// から `hr` を取り出して本関数で判定する想定。`linerule-core` に置くことで
-/// Linux 上 `cargo nextest` でも mutation baseline をカバーできる。
 #[must_use]
 pub const fn is_device_lost_hresult(hr: i32) -> bool {
-    // HRESULT は Win32 / D2D で慣例的に「最上位 bit 立ち = 失敗」の符号付き 32-bit。
-    // リテラル `0x887A_0005` は i32 範囲を超えるので `hr as u32` で比較する。
+    // HRESULT is a signed 32-bit code; the literals exceed i32 range, so compare
+    // as u32 bit patterns.
     #[allow(
         clippy::cast_sign_loss,
-        reason = "bit pattern 比較のため u32 にキャストする。値ドメインの変換ではない。"
+        reason = "u32 bit-pattern comparison, not a value-domain conversion"
     )]
     let hr_bits = hr as u32;
     matches!(
@@ -170,24 +160,21 @@ pub const fn is_device_lost_hresult(hr: i32) -> bool {
     )
 }
 
-/// `record_device_lost_failure` の結果。Retry なら `next` を新しいカウンタに
-/// 保存して 1 度 rebuild + retry、Quit ならアプリ終了を要求する。
+/// Outcome of `record_device_lost_failure`. `Retry` rebuilds and retries once,
+/// storing the new counter; `Quit` requests app shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeviceLostOutcome {
-    /// 連続失敗回数 `next` を保持して retry する (= `prev + 1`)。
+    /// Retry, carrying the new consecutive-failure count (`prev + 1`).
     Retry {
-        /// 更新後のカウンタ値。
+        /// Updated counter value.
         next: u8,
     },
-    /// 連続失敗 3 回到達。`OverlayAction::Quit` を要求する。
+    /// Third consecutive failure reached; requests `OverlayAction::Quit`.
     Quit,
 }
 
-/// device-lost 失敗を 1 回記録し、次のアクションを決定する pure 関数。
-///
-/// 連続 `prev = 2` 回まで Retry、`prev + 1 >= 3` で `Quit`。`linerule-core` 側
-/// で副作用なく決定できるため、`overlay_state.rs` の `Cell<u8>` から取得した
-/// 値を渡して結果を反映する形で使う (issue #45)。
+/// Records one device-lost failure and decides the next action: `Retry` while
+/// `prev < 2`, `Quit` once `prev + 1 >= 3`.
 #[must_use]
 pub const fn record_device_lost_failure(prev: u8) -> DeviceLostOutcome {
     if prev >= 2 {
@@ -275,14 +262,14 @@ mod tests {
         // table-driven: 4 hit + 1 miss
         #[allow(
             clippy::cast_possible_wrap,
-            reason = "bit pattern を i32 として渡すための明示キャスト"
+            reason = "explicit cast to pass the bit pattern as i32"
         )]
         let table: [(i32, bool); 5] = [
             (0x887A_0005_u32 as i32, true),  // DXGI_ERROR_DEVICE_REMOVED
             (0x887A_0006_u32 as i32, true),  // DXGI_ERROR_DEVICE_HUNG
             (0x887A_0007_u32 as i32, true),  // DXGI_ERROR_DEVICE_RESET
             (0x8899_000C_u32 as i32, true),  // D2DERR_RECREATE_TARGET
-            (0x8000_4002_u32 as i32, false), // E_NOINTERFACE (失敗だが device-lost ではない)
+            (0x8000_4002_u32 as i32, false), // E_NOINTERFACE (a failure, but not device-lost)
         ];
         for (hr, expected) in table {
             assert_eq!(
@@ -308,7 +295,7 @@ mod tests {
     #[test]
     fn record_device_lost_failure_quits_on_third_failure() {
         assert_eq!(record_device_lost_failure(2), DeviceLostOutcome::Quit);
-        // 想定外に prev が高くても Quit (上から saturate)
+        // Unexpectedly high prev still quits.
         assert_eq!(record_device_lost_failure(100), DeviceLostOutcome::Quit);
     }
 

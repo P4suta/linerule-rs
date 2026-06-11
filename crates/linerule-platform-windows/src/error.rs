@@ -1,78 +1,72 @@
-//! `linerule-platform-windows` の集約エラー型。
+//! Aggregate error type for `linerule-platform-windows`.
 //!
-//! Win32 / COM 呼び出しの失敗形に加え、[`linerule_core::ChordError`] を
-//! `#[from]` で取り込み、`?` 1 つでアプリ境界まで上げられる closed sum を作る。
-//! 実 FFI 呼び出しは `win32_ffi.rs` 側で行い、ここではエラー値の構築・整形だけ
-//! を担当する (本ファイルは `#![forbid(unsafe_code)]`)。
+//! Closed sum over Win32 / COM failure shapes plus [`linerule_core::ChordError`]
+//! via `#[from]`. FFI lives in `win32_ffi.rs`; this file only builds and formats
+//! error values.
 
 #![forbid(unsafe_code)]
 
 use linerule_core::{ChordError, ErrorClass};
 use thiserror::Error;
 
-/// `linerule-platform-windows` で扱う失敗の closed sum。
-///
-/// Win32 / COM の失敗形 4 種に加え、`linerule-core` から伝搬する
-/// [`ChordError`] を [`PlatformError::Chord`] として受け取る。
+/// Closed sum of failures handled in `linerule-platform-windows`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Error)]
 pub enum PlatformError {
-    /// HWND を返す API が null を返した（CreateWindowExW など）。
+    /// An HWND-returning API returned null.
     #[error("{operation}: HWND was null")]
     NullHandle {
-        /// 失敗した API 名（`&'static str`、heap 非依存）。
+        /// Failing API name.
         operation: &'static str,
     },
-    /// BOOL を返す API が FALSE を返し、`GetLastError` でコードを取得した。
+    /// A BOOL-returning API returned FALSE; code from `GetLastError`.
     #[error("{operation}: BOOL=FALSE (GetLastError = {code:#x} {symbol})")]
     BoolFalse {
-        /// 失敗した API 名。
+        /// Failing API name.
         operation: &'static str,
-        /// `GetLastError` の値。
+        /// `GetLastError` value.
         code: u32,
-        /// 既知の `ERROR_*` symbol（不明時は `"WIN32_ERROR(other)"`）。
+        /// Known `ERROR_*` symbol, or `"WIN32_ERROR(other)"`.
         symbol: &'static str,
     },
-    /// HRESULT を返す API が負値を返した。
+    /// An HRESULT-returning API returned a failure code.
     #[error("{operation}: HRESULT = {hr:#x}")]
     BadHr {
-        /// 失敗した API 名。
+        /// Failing API name.
         operation: &'static str,
-        /// 返ってきた HRESULT。
+        /// Returned HRESULT.
         hr: i32,
     },
-    /// 単体の `GetLastError` チェックでエラーが報告された。
+    /// A standalone `GetLastError` check reported an error.
     #[error("{operation}: GetLastError = {code:#x} {symbol}")]
     LastError {
-        /// 失敗した API 名。
+        /// Failing API name.
         operation: &'static str,
-        /// `GetLastError` の値。
+        /// `GetLastError` value.
         code: u32,
-        /// 既知の `ERROR_*` symbol。
+        /// Known `ERROR_*` symbol.
         symbol: &'static str,
     },
-    /// chord 文字列の解析に失敗した（`linerule-core::input::chord::parse`）。
+    /// Chord string parse failure, propagated from `linerule-core`.
     #[error(transparent)]
     Chord(#[from] ChordError),
 }
 
-/// `linerule-platform-windows` の Result alias。
+/// `Result` alias for `linerule-platform-windows`.
 pub type Result<T, E = PlatformError> = core::result::Result<T, E>;
 
-/// `Win32 / COM` 系 API の中で「失敗しても overlay 全体は継続できる」既知の
-/// recoverable operation 名のリスト。`PlatformError::class()` がここに当たれば
-/// [`ErrorClass::Recoverable`] を返す。
-///
-/// 現在は `RegisterHotKey` (既に他プロセスが押さえていた等の競合は HUD に
-/// notification を出してスキップ可能) と `UnregisterHotKey` (Drop で吸収) のみ。
+/// Win32 / COM operations whose failure the overlay can continue past, so
+/// `PlatformError::class()` reports [`ErrorClass::Recoverable`] for them.
+/// `RegisterHotKey` (conflicts surface a HUD notification and skip) and
+/// `UnregisterHotKey` (absorbed in `Drop`).
 const RECOVERABLE_WIN32_OPS: &[&str] = &["RegisterHotKey", "UnregisterHotKey"];
 
 impl PlatformError {
-    /// `PlatformError` の recovery class を返す。
+    /// Recovery class for this error.
     ///
-    /// - `NullHandle` / `BadHr` は HWND・COM 初期化失敗の傾向が強く [`ErrorClass::Fatal`]
-    /// - `BoolFalse` / `LastError` は `operation` 名で分岐し、`RegisterHotKey` 等
-    ///   既知の Recoverable な API なら `Recoverable`、それ以外は `Fatal`
-    /// - `Chord` は内部 [`ChordError::class()`] に委譲（実質常に `Recoverable`）
+    /// - `NullHandle` / `BadHr`: [`ErrorClass::Fatal`].
+    /// - `BoolFalse` / `LastError`: `Recoverable` if `operation` is in
+    ///   `RECOVERABLE_WIN32_OPS`, else `Fatal`.
+    /// - `Chord`: delegates to [`ChordError::class()`].
     #[must_use]
     pub fn class(&self) -> ErrorClass {
         match self {
@@ -89,8 +83,7 @@ impl PlatformError {
     }
 }
 
-/// よく出る `ERROR_*` だけ static 文字列で symbolic name を返す。
-/// 不明な値は `"WIN32_ERROR(other)"` を返してログに残せるようにする。
+/// Symbolic name for common `ERROR_*` codes; `"WIN32_ERROR(other)"` otherwise.
 #[must_use]
 pub fn decode_last_error(code: u32) -> &'static str {
     match code {
@@ -103,6 +96,17 @@ pub fn decode_last_error(code: u32) -> &'static str {
         1407 => "ERROR_CANNOT_FIND_WND_CLASS",
         1410 => "ERROR_CLASS_ALREADY_EXISTS",
         _ => "WIN32_ERROR(other)",
+    }
+}
+
+/// Build a [`PlatformError::BadHr`] tagged with `operation` from a windows-rs
+/// error. Used at the COM / `?` boundaries in the renderers and blur graph.
+// Fully-qualified `windows::core::Error` to avoid clashing with thiserror's
+// `Error` derive imported above.
+pub(crate) fn map_hr(operation: &'static str) -> impl Fn(windows::core::Error) -> PlatformError {
+    move |e| PlatformError::BadHr {
+        operation,
+        hr: e.code().0,
     }
 }
 
@@ -235,8 +239,8 @@ mod tests {
         assert_eq!(e.class(), ErrorClass::Recoverable);
     }
 
-    /// 完全な class 対称性テスト: `RECOVERABLE_WIN32_OPS` に登録された全 operation
-    /// は `BoolFalse` でも `LastError` でも Recoverable に解釈される。
+    /// Every `RECOVERABLE_WIN32_OPS` entry is Recoverable as both `BoolFalse`
+    /// and `LastError`.
     #[test]
     fn recoverable_ops_recover_in_both_bool_false_and_last_error() {
         for op in RECOVERABLE_WIN32_OPS {
@@ -264,9 +268,7 @@ mod tests {
         }
     }
 
-    /// case-sensitive: `"registerhotkey"` (小文字) は recoverable リストに
-    /// 一致しないので Fatal。Win32 API 名は PascalCase で文献にも書かれて
-    /// いるので、誤って小文字で渡されたケースは Fatal 側に倒して気付く設計。
+    /// Matching is case-sensitive: lowercase `"registerhotkey"` is Fatal.
     #[test]
     fn lowercase_register_hotkey_is_fatal_due_to_case_sensitivity() {
         let e = PlatformError::BoolFalse {
@@ -277,8 +279,7 @@ mod tests {
         assert_eq!(e.class(), ErrorClass::Fatal);
     }
 
-    /// 空文字列 operation は recoverable リストに無いので Fatal。
-    /// 防御的: `&'static str` で空文字を渡す経路は通常ないが、念のため。
+    /// Empty operation is not in the list, so Fatal.
     #[test]
     fn empty_operation_is_fatal() {
         let e = PlatformError::LastError {
@@ -289,8 +290,7 @@ mod tests {
         assert_eq!(e.class(), ErrorClass::Fatal);
     }
 
-    /// `NullHandle` は operation 名に関係なく必ず Fatal (HWND 経路で recover
-    /// する仕組みはないため)。
+    /// `NullHandle` is always Fatal regardless of operation name.
     #[test]
     fn null_handle_is_fatal_regardless_of_operation_name() {
         for op in ["CreateWindowExW", "RegisterHotKey", "", "garbage"] {

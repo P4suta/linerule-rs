@@ -8,10 +8,12 @@ pub mod action;
 pub mod delta;
 pub mod mode;
 pub mod reduce;
+pub mod surround;
 
 pub use action::OverlayAction;
 pub use delta::{RejectReason, StateDelta};
 pub use mode::{ActiveMode, Mode};
+pub use surround::SurroundEffect;
 
 use serde::{Deserialize, Serialize};
 

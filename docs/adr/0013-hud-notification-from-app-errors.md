@@ -1,34 +1,18 @@
-# 0013 — AppError::class() を消費して Recoverable を HUD notification に出す (Phase H PR-E)
+# 0013 — AppError::class() を消費して Recoverable を HUD notification に出す
 
-**Status:** Proposed (Phase η planning).
+**Status:** Accepted.
 
-**See also:** [[0008-error-class-and-app-aggregator]] (`ErrorClass` / `AppError` の型導入、本 ADR がその実消費を担当)、[[0011-phase-j-slim-down]] (本変更が「凝った OS 統合」ではなく既存基盤の活用であることを明示)、[[0012-foreground-hook-and-hud-telemetry]] (HUD frame 拡張は別 PR、本 ADR は notification 経路に focus)。
+**See also:** [[0008-error-class-and-app-aggregator]] (`ErrorClass` / `AppError` の型導入、本 ADR がその実消費を担当)、[[0012-foreground-hook-and-hud-telemetry]] (HUD frame 拡張).
 
 ## 文脈
 
-ADR-0008 (Phase H PR-C) で以下を導入した:
+ADR-0008 で以下を導入した:
 
 - `linerule-core::ErrorClass { Recoverable, Fatal, ProgrammerError }`
 - 各 error 型 (`CoreError` / `ChordError` / `LineruleError` / `PlatformError`) に `class()` method
 - `linerule-app::AppError` aggregator + `class()` method
 
-ただし `AppError` と `AppError::class()` は両方とも:
-
-```rust
-#[allow(
-    dead_code,
-    reason = "PR-E (HUD notification toast push) で消費する予定の aggregator 型..."
-)]
-```
-
-の状態で凍結されていた。**Phase H PR-E** は当初 plan に書かれていたが Phase J slim-down (ADR-0011) 後も未着手のまま、計 3 箇所の `dead_code` allow を生んでいた:
-
-1. `linerule-app/src/error.rs:32-36` — `AppError` enum 自体
-2. `linerule-app/src/error.rs:57-61` — `AppError::class()` method
-3. `linerule-app/src/logging.rs:83-89` — `tracing_subscriber::fmt::Subscriber` の future-use 抑制
-4. `linerule-platform-windows/src/overlay_state.rs:318-321` — `ChordSpec` import の future-use 抑制 (Phase H PR-E と同じ HUD 表示拡張に伴うもの)
-
-すべて Phase H PR-E が終わっていない結果として残った技術的負債。
+ただし `AppError` と `AppError::class()` は `#[allow(dead_code)]` で凍結され、消費経路が無いまま `dead_code` allow を生んでいた。本 ADR でその実消費 (Recoverable を HUD notification に出す経路) を実装する。
 
 ## 判断
 
@@ -92,7 +76,7 @@ for msg in early_recoverable.drain(..) {
 | `linerule-app/src/logging.rs:83` | future-use の `Subscriber` import は実需要が出るまで撤去 (再追加は trivial) |
 | `linerule-platform-windows/src/overlay_state.rs:318` | `ChordSpec` の HUD 表示拡張は別 issue とし、import 自体を撤去 |
 
-ChordSpec import は `chord::parse(spec).map(|c| c.to_string())` のような canonical display 化に使う計画だったが、Phase H PR-E の本筋ではないので別 PR (`HotkeyConflict` の表示強化) に分離する。
+ChordSpec import は `chord::parse(spec).map(|c| c.to_string())` のような canonical display 化に使う計画だったが、本 ADR の本筋ではないので `HotkeyConflict` の表示強化として分離する。
 
 ## 結果
 
@@ -109,7 +93,7 @@ ChordSpec import は `chord::parse(spec).map(|c| c.to_string())` のような ca
 
 ### B. HUD push を ADR-0008 で同梱
 
-却下: Phase H PR-C の責務分離 (型導入と消費の分離) に反する。PR-E が「実消費」のために独立して計画されていたことを尊重する。
+却下: ADR-0008 の責務分離 (型導入と消費の分離) に反する。型導入と実消費は別 ADR に分ける。
 
 ### C. ChordSpec を `HotkeyConflict` に parsed として格納
 

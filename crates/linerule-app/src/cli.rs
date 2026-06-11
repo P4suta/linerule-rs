@@ -1,10 +1,10 @@
-//! clap derive ベースの CLI。`linerule.exe [run|diagnostics|version]`。
+//! clap-derive CLI. `linerule.exe [run|diagnostics|version]`.
 
 #![forbid(unsafe_code)]
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-/// linerule-rs CLI。
+/// linerule-rs CLI.
 #[derive(Debug, Parser)]
 #[command(
     name = "linerule",
@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand, ValueEnum};
     disable_help_subcommand = true
 )]
 pub(crate) struct Cli {
-    /// 強制的にコンソール出力を attach する（GUI モードでも stderr が見える）。
+    /// Force-attach console output (see stderr even in GUI mode).
     #[arg(long, global = true)]
     pub(crate) cli: bool,
 
@@ -20,53 +20,55 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Command>,
 }
 
-/// 利用可能なサブコマンド。
+/// Available subcommands.
 #[derive(Debug, Subcommand, Clone)]
 pub(crate) enum Command {
-    /// オーバーレイを起動する（デフォルト）。
+    /// Start the overlay (default).
     Run {
-        /// 指定 ms 経過後に自動終了する。CI smoke test 用。`Ctrl+Alt+Q` 等の
-        /// hotkey 経由 quit と同じく `PostQuitMessage` で graceful に終わる。
-        /// 未指定なら hotkey で終了するまで動作。
+        /// Auto-quit after the given milliseconds. Exits gracefully via
+        /// `PostQuitMessage`, like a hotkey quit. Omit to run until a hotkey
+        /// quit.
         #[arg(long, value_name = "MILLIS")]
         duration_ms: Option<u64>,
-        /// 起動時の overlay mode を上書きする。デフォルト (未指定) は `Off`
-        /// (= `Ctrl+Alt+R` 押下で初めて slit が表示される本来の挙動)。CI
-        /// smoke test が起動直後から slit 描画パス (`CompositionRenderer`)
-        /// を exercise するために `horizontal` を渡す用途。
+        /// Override the initial overlay mode. Default is `Off` (a slit appears
+        /// only after pressing Ctrl+Alt+R). Pass `horizontal` to exercise the
+        /// slit render path from startup.
         #[arg(long, value_enum, value_name = "MODE")]
         initial_mode: Option<InitialMode>,
+        /// Override the initial surround effect. Default is `Dim` (`DimBlack`).
+        /// Pass `blur` to exercise the backdrop-blur path from startup.
+        #[arg(long, value_enum, value_name = "EFFECT")]
+        initial_effect: Option<InitialEffect>,
     },
-    /// `%APPDATA%\linerule\` の events.jsonl と crash-*.json を pretty-print する。
+    /// Pretty-print events.jsonl and crash-*.json from the data dir.
     Diagnostics {
-        /// data dir 列挙のみで何も書き出さない（exit 0 確認用）。
+        /// List the data dir only, write nothing (exit-0 check).
         #[arg(long)]
         dry_run: bool,
-        /// 最新の `crash-*.json` を pretty-print する。
+        /// Pretty-print the latest `crash-*.json`.
         #[arg(long)]
         last_crash: bool,
-        /// 直近 `N` 件の event を `events.jsonl.<today>` の末尾から表示する。
+        /// Show the last `N` events from `events.jsonl.<today>`.
         #[arg(long, value_name = "N")]
         recent_events: Option<usize>,
-        /// data dir の絶対 path を 1 行だけ stdout に出す (script から `xargs ls`
-        /// などで使う用)。
+        /// Print the absolute data-dir path on one line to stdout.
         #[arg(long)]
         data_dir: bool,
     },
-    /// バージョン情報を出力する。
+    /// Print version info.
     Version,
 }
 
-/// `--initial-mode` flag に渡せる値。`linerule_core::state::Mode` に対応する。
-/// app 層の boundary 型として独立に定義 (linerule-core を clap 依存にしない)。
+/// Values for `--initial-mode`. Maps to `linerule_core::state::Mode`; defined
+/// here as an app-layer boundary type to keep linerule-core off clap.
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 #[clap(rename_all = "lowercase")]
 pub(crate) enum InitialMode {
-    /// `Mode::Off` 相当 (default 挙動と同じ)。
+    /// `Mode::Off` (same as default).
     Off,
-    /// `Mode::Horizontal` 相当。
+    /// `Mode::Horizontal`.
     Horizontal,
-    /// `Mode::Vertical` 相当。
+    /// `Mode::Vertical`.
     Vertical,
 }
 
@@ -81,8 +83,33 @@ impl From<InitialMode> for linerule_core::Mode {
     }
 }
 
+/// Values for `--initial-effect`. Maps to
+/// `linerule_core::state::SurroundEffect`; app-layer boundary type to keep
+/// linerule-core off clap.
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+#[clap(rename_all = "lowercase")]
+pub(crate) enum InitialEffect {
+    /// `SurroundEffect::DimBlack` (same as default).
+    Dim,
+    /// `SurroundEffect::WhiteWash`.
+    White,
+    /// `SurroundEffect::Blur` (backdrop blur).
+    Blur,
+}
+
+#[cfg(target_os = "windows")]
+impl From<InitialEffect> for linerule_core::SurroundEffect {
+    fn from(e: InitialEffect) -> Self {
+        match e {
+            InitialEffect::Dim => Self::DimBlack,
+            InitialEffect::White => Self::WhiteWash,
+            InitialEffect::Blur => Self::Blur,
+        }
+    }
+}
+
 impl Cli {
-    /// CLI 系コマンド（=stderr / stdout に出力する）かどうか。
+    /// Whether this is a CLI command that writes to stderr/stdout.
     #[must_use]
     pub(crate) fn needs_console(&self) -> bool {
         if self.cli {
@@ -187,7 +214,8 @@ mod tests {
             parse(&["run"]).command,
             Some(Command::Run {
                 duration_ms: None,
-                initial_mode: None
+                initial_mode: None,
+                initial_effect: None
             })
         ));
     }
@@ -216,11 +244,22 @@ mod tests {
             Some(Command::Run {
                 duration_ms,
                 initial_mode,
+                ..
             }) => {
                 assert_eq!(duration_ms, Some(1000));
                 assert_eq!(initial_mode, Some(InitialMode::Vertical));
             },
             other => panic!("expected Run with both flags, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_run_with_initial_effect_blur() {
+        match parse(&["run", "--initial-effect", "blur"]).command {
+            Some(Command::Run { initial_effect, .. }) => {
+                assert_eq!(initial_effect, Some(InitialEffect::Blur));
+            },
+            other => panic!("expected Run with initial_effect blur, got {other:?}"),
         }
     }
 
@@ -267,9 +306,9 @@ mod tests {
         assert!(parse(&["--cli"]).needs_console());
     }
 
-    // ---- error path (Cli::try_parse_from が Err を返すケース) ----------------
+    // ---- error path (Cli::try_parse_from returns Err) -----------------------
 
-    /// 未知の subcommand は `UnknownArgument` 系の error で reject される。
+    /// An unknown subcommand is rejected.
     #[test]
     fn rejects_unknown_subcommand() {
         let err = Cli::try_parse_from(["linerule", "bogus-subcommand"])
@@ -281,7 +320,7 @@ mod tests {
         );
     }
 
-    /// 未知の global flag (`--bogus`) は reject される。
+    /// An unknown global flag is rejected.
     #[test]
     fn rejects_unknown_global_flag() {
         let err = Cli::try_parse_from(["linerule", "--bogus-flag"])
@@ -293,7 +332,7 @@ mod tests {
         );
     }
 
-    /// `--duration-ms` に整数として parse できない値を渡すと reject。
+    /// A non-integer `--duration-ms` value is rejected.
     #[test]
     fn rejects_non_numeric_duration_ms() {
         let err = Cli::try_parse_from(["linerule", "run", "--duration-ms", "abc"])
@@ -305,17 +344,17 @@ mod tests {
         );
     }
 
-    /// `--duration-ms` に負値を渡すと reject (型が u64 のため "-100" は parse 失敗)。
+    /// A negative `--duration-ms` is rejected (the type is u64).
     #[test]
     fn rejects_negative_duration_ms() {
         let err = Cli::try_parse_from(["linerule", "run", "--duration-ms", "-100"])
             .expect_err("negative duration should fail (u64)");
         let msg = err.to_string();
-        // clap が `-100` を別の flag と解釈して fail することもあるので寛容に check
+        // clap may instead read `-100` as a flag; check leniently.
         assert!(!msg.is_empty(), "expected non-empty error message");
     }
 
-    /// `--recent-events` に非整数を渡すと reject。
+    /// A non-integer `--recent-events` value is rejected.
     #[test]
     fn rejects_non_numeric_recent_events() {
         let err = Cli::try_parse_from(["linerule", "diagnostics", "--recent-events", "abc"])
@@ -327,7 +366,7 @@ mod tests {
         );
     }
 
-    /// subcommand 直後の余計な positional 引数は reject (subcommand は値を取らない)。
+    /// An extra positional after a subcommand is rejected (none take a value).
     #[test]
     fn rejects_extra_positional_after_subcommand() {
         let err = Cli::try_parse_from(["linerule", "version", "extra-positional"])
@@ -336,25 +375,20 @@ mod tests {
         assert!(!msg.is_empty(), "expected non-empty error message");
     }
 
-    /// `--duration-ms` だけ subcommand なし は reject (Run subcommand の flag)。
+    /// `--duration-ms` without the Run subcommand is rejected.
     #[test]
     fn rejects_duration_ms_without_run_subcommand() {
-        // duration-ms は Run subcommand 側にしかない flag なので、
-        // top-level で渡すと unknown global flag として reject される。
+        // duration-ms exists only on Run, so at top level it is an unknown
+        // global flag.
         let err = Cli::try_parse_from(["linerule", "--duration-ms", "1000"])
             .expect_err("duration-ms outside Run subcommand should fail");
         let msg = err.to_string();
         assert!(!msg.is_empty(), "expected non-empty error message");
     }
 
-    /// `version` は `--help` flag を持たない (`disable_help_subcommand` のため)。
-    /// ただし `--help` global flag は parse 可能 (clap 標準)。これは reject では
-    /// なく `DisplayHelp` で正常終了する系統 — error path とは別カテゴリ。
-    /// ここでは "help" subcommand が定義されていないことを確認する。
+    /// No `help` subcommand exists (`disable_help_subcommand = true`).
     #[test]
     fn rejects_help_as_subcommand() {
-        // `disable_help_subcommand = true` のため `help` という名前の
-        // subcommand は存在しない (`linerule help` は Run の bogus arg 相当)。
         let err =
             Cli::try_parse_from(["linerule", "help"]).expect_err("help subcommand is disabled");
         let msg = err.to_string();
