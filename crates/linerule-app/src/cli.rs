@@ -31,7 +31,7 @@ pub(crate) enum Command {
         #[arg(long, value_name = "MILLIS")]
         duration_ms: Option<u64>,
         /// Override the initial overlay mode. Default is `Off` (a slit appears
-        /// only after pressing Ctrl+Alt+R). Pass `horizontal` to exercise the
+        /// only after pressing Ctrl+Alt+H). Pass `horizontal` to exercise the
         /// slit render path from startup.
         #[arg(long, value_enum, value_name = "MODE")]
         initial_mode: Option<InitialMode>,

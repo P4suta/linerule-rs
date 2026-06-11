@@ -21,6 +21,10 @@ pub enum Brush {
     Blur {
         /// Gaussian blur σ (logical px) for the backdrop.
         amount: BlurAmount,
+        /// Master-envelope opacity byte (`255` = fully shown). Applied by the
+        /// platform layer at the visual level (not baked into the effect
+        /// brush), so show/hide fades never rebuild the sprite pool.
+        opacity: u8,
     },
 }
 

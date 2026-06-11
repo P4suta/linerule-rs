@@ -123,9 +123,46 @@ impl WinrtHudRenderer {
             })
             .collect();
 
+        // Rules (divider lines etc.) translate to surface-local coordinates
+        // the same way as the rows.
+        let rules: Vec<dwrite::HudDrawRule> = frame
+            .rules
+            .iter()
+            .map(|rule| {
+                let local_x = rule.left - frame.panel_left;
+                let local_y = rule.top - frame.panel_top;
+                dwrite::HudDrawRule {
+                    rect: D2D_RECT_F {
+                        left: local_x,
+                        top: local_y,
+                        right: local_x + rule.width,
+                        bottom: local_y + rule.height,
+                    },
+                    color: rule.color,
+                }
+            })
+            .collect();
+        // The background fills the whole surface as a rounded panel; the area
+        // outside the corners stays transparent.
+        let panel = D2D_RECT_F {
+            left: 0.0,
+            top: 0.0,
+            right: frame.panel_width,
+            bottom: frame.panel_height,
+        };
+
         let surface = self.surface.as_ref().expect("just created");
         let (dc, offset) = begin_surface_draw(surface)?;
-        let draw = dwrite::draw_hud_rows(&dc, offset, frame.background, frame.opacity, &drawn);
+        let draw = dwrite::draw_hud_rows(
+            &dc,
+            offset,
+            frame.background,
+            panel,
+            frame.corner_radius,
+            frame.opacity,
+            &rules,
+            &drawn,
+        );
         end_surface_draw(surface)?;
         draw?;
 

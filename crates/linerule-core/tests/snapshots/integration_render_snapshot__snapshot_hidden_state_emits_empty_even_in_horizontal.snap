@@ -1,7 +1,0 @@
----
-source: crates/linerule-core/tests/integration_render_snapshot.rs
-expression: f
----
-OverlayFrame {
-    layers: [],
-}

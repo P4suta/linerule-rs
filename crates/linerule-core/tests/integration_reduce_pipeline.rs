@@ -5,7 +5,8 @@
 //! "press Ctrl+Alt+R three times in a row" without the OS layer.
 
 use linerule_core::{
-    Mode, OverlayAction, Point, ScreenRect, State, SurroundEffect, frame, state::reduce,
+    Mode, OverlayAction, OverlaySample, Point, ScreenRect, State, SurroundEffect, frame,
+    state::reduce,
 };
 
 fn run(actions: &[OverlayAction]) -> State {
@@ -22,30 +23,74 @@ const fn monitor() -> ScreenRect<linerule_core::Logical> {
 }
 
 #[test]
-fn cycle_mode_three_times_returns_to_off() {
+fn cycle_mode_while_off_is_rejected_and_stays_off() {
     let s = run(&[
         OverlayAction::CycleMode,
         OverlayAction::CycleMode,
         OverlayAction::CycleMode,
     ]);
-    assert_eq!(s.mode, Mode::Off);
+    assert_eq!(
+        s.mode,
+        Mode::Off,
+        "CycleMode must never turn the overlay on"
+    );
 }
 
 #[test]
-fn cycle_mode_then_frame_has_layers() {
-    let s = run(&[OverlayAction::CycleMode]);
+fn cycle_mode_twice_while_on_is_the_identity() {
+    let s = run(&[
+        OverlayAction::ToggleOnOff, // Off → Horizontal
+        OverlayAction::CycleMode,   // Horizontal → Vertical
+        OverlayAction::CycleMode,   // Vertical → Horizontal
+    ]);
     assert_eq!(s.mode, Mode::Horizontal);
-    let f = frame(s, Point::new(960, 540), monitor());
+}
+
+#[test]
+fn toggle_on_then_frame_has_layers() {
+    let s = run(&[OverlayAction::ToggleOnOff]);
+    assert_eq!(s.mode, Mode::Horizontal);
+    let f = frame(
+        s.mode,
+        s.config,
+        Point::new(960, 540),
+        monitor(),
+        OverlaySample::settled(s.config),
+    );
     assert!(!f.is_empty(), "Horizontal mode should produce layers");
 }
 
 #[test]
-fn toggle_visible_then_frame_is_empty_even_in_active_mode() {
-    let s = run(&[OverlayAction::CycleMode, OverlayAction::ToggleVisible]);
-    assert_eq!(s.mode, Mode::Horizontal);
-    assert!(!s.visible);
-    let f = frame(s, Point::new(960, 540), monitor());
-    assert!(f.is_empty(), "invisible state must produce an empty frame");
+fn toggle_on_off_after_cycle_turns_off_and_frame_is_empty() {
+    let s = run(&[
+        OverlayAction::ToggleOnOff, // Off → Horizontal
+        OverlayAction::CycleMode,   // Horizontal → Vertical
+        OverlayAction::ToggleOnOff, // Vertical → Off
+    ]);
+    assert_eq!(s.mode, Mode::Off);
+    let f = frame(
+        s.mode,
+        s.config,
+        Point::new(960, 540),
+        monitor(),
+        OverlaySample::settled(s.config),
+    );
+    assert!(f.is_empty(), "Off must produce an empty frame");
+}
+
+#[test]
+fn toggle_on_off_twice_restores_the_active_mode() {
+    let s = run(&[
+        OverlayAction::ToggleOnOff, // Off → Horizontal
+        OverlayAction::CycleMode,   // Horizontal → Vertical
+        OverlayAction::ToggleOnOff, // Vertical → Off (remembers Vertical)
+        OverlayAction::ToggleOnOff, // Off → Vertical
+    ]);
+    assert_eq!(
+        s.mode,
+        Mode::Vertical,
+        "restore must target the last active mode"
+    );
 }
 
 #[test]
@@ -66,11 +111,10 @@ fn bump_thickness_accumulates_with_repeated_application() {
 
 #[test]
 fn bump_then_undo_returns_to_starting_thickness() {
-    let start = State {
-        mode: Mode::Horizontal,
-        ..State::DEFAULT
-    };
+    let start = State::with_mode(Mode::Horizontal);
+    // ToggleOnOff first: bumps are rejected while Off, so enter an active mode.
     let s = run(&[
+        OverlayAction::ToggleOnOff,
         OverlayAction::BumpThickness(8),
         OverlayAction::BumpThickness(-8),
     ]);

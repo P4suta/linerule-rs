@@ -1,25 +1,25 @@
-//! Overlay smoke test。
+//! Overlay smoke test.
 //!
-//! `cargo run --example overlay_smoke` (Windows host) で起動すると、
-//! プライマリモニタ全面を覆う透明 click-through オーバーレイが立ち上がり、
-//! `WM_QUIT` を受信するまでメッセージポンプがブロックする。タスクマネージャ
-//! から `linerule-platform-windows.exe` を選んで終了させる、または `DestroyWindow`
-//! を発火させて `PostQuitMessage` を流せばクリーンに抜ける。
+//! `cargo run --example overlay_smoke` (Windows host) raises a transparent
+//! click-through overlay covering the primary monitor and blocks in the
+//! message pump until `WM_QUIT`. Exit cleanly by killing
+//! `linerule-platform-windows.exe` from Task Manager, or by triggering
+//! `DestroyWindow` so `PostQuitMessage` flows.
 //!
-//! 期待する動作:
-//! - 画面に「何も見えない」が、Spy++ で `linerule-rs-overlay` クラスの HWND が
-//!   見える
-//! - 他のウィンドウのクリックがオーバーレイを貫通する
-//! - Alt+Tab に当オーバーレイが表示されない (`WS_EX_TOOLWINDOW` の効果)
-//! - 故意の panic を `WndProc` に挿しても overlay は生き続ける (`catch_unwind` の効果)
+//! Expected behavior:
+//! - Nothing is visible, but Spy++ shows an HWND of class `linerule-rs-overlay`
+//! - Clicks on other windows pass through the overlay
+//! - The overlay does not appear in Alt+Tab (`WS_EX_TOOLWINDOW`)
+//! - A deliberate panic planted in `WndProc` does not kill the overlay
+//!   (`catch_unwind`)
 //!
-//! hotkey + tick 結線は `linerule.exe run` 側で検証する。本 example は最小構成
-//! （HWND + dcomp attach のみ）で `WndProc` の生存性を見る目的。
+//! Hotkey + tick wiring is verified by `linerule.exe run`; this example checks
+//! `WndProc` survivability with the minimal setup (HWND + compositor attach).
 
 #![forbid(unsafe_code)]
 #![allow(
     clippy::print_stderr,
-    reason = "smoke example が non-windows ターゲットで実行された場合のガイド出力"
+    reason = "guidance output when the smoke example runs on a non-windows target"
 )]
 
 #[cfg(windows)]
@@ -39,7 +39,11 @@ fn main() -> anyhow::Result<()> {
         "creating overlay"
     );
 
-    let _overlay = OverlayWindow::new(monitor, HudConfig::DEFAULT)?;
+    let _overlay = OverlayWindow::new(
+        monitor,
+        HudConfig::DEFAULT,
+        linerule_core::AnimConfig::DEFAULT,
+    )?;
     run_message_pump()?;
     Ok(())
 }

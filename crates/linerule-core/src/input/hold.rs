@@ -254,10 +254,11 @@ pub(crate) const fn classify(action: OverlayAction) -> Classification {
     match action {
         A::BumpThickness(_) | A::BumpOpacity(_) => Classification::AccelRepeat,
         A::CycleMode | A::CycleEffect => Classification::SlowRepeat,
-        A::ToggleVisible => Classification::AwaitRelease {
-            undo_on_long_press: A::ToggleVisible,
+        A::ToggleOnOff => Classification::AwaitRelease {
+            undo_on_long_press: A::ToggleOnOff,
         },
-        A::Quit => Classification::OneShot,
+        // A discrete toggle like Quit/Cycle: one fire per press, no repeat.
+        A::ToggleHudDetail | A::Quit => Classification::OneShot,
     }
 }
 
@@ -266,7 +267,7 @@ pub(crate) const fn with_magnitude(action: OverlayAction, magnitude: i32) -> Ove
     match action {
         A::BumpThickness(d) => A::BumpThickness(d.saturating_mul(magnitude)),
         A::BumpOpacity(d) => A::BumpOpacity(d.saturating_mul(magnitude)),
-        A::CycleMode | A::CycleEffect | A::ToggleVisible | A::Quit => action,
+        A::CycleMode | A::CycleEffect | A::ToggleOnOff | A::ToggleHudDetail | A::Quit => action,
     }
 }
 
@@ -342,7 +343,7 @@ mod tests {
             HoldState::Idle,
             HoldInput::Fired {
                 chord: chord(),
-                action: OverlayAction::ToggleVisible,
+                action: OverlayAction::ToggleOnOff,
                 now_ms: 0,
             },
             RepeatConfig::DEFAULT,
@@ -422,7 +423,7 @@ mod tests {
     fn long_press_release_emits_undo() {
         let state = HoldState::AwaitingRelease {
             chord: chord(),
-            undo_on_long_press: OverlayAction::ToggleVisible,
+            undo_on_long_press: OverlayAction::ToggleOnOff,
             started_at_ms: 0,
         };
         let (next, effects) = step(
@@ -438,7 +439,7 @@ mod tests {
         assert_eq!(
             effects,
             vec![
-                HoldEffect::Enqueue(OverlayAction::ToggleVisible),
+                HoldEffect::Enqueue(OverlayAction::ToggleOnOff),
                 HoldEffect::Halt,
             ]
         );
@@ -448,7 +449,7 @@ mod tests {
     fn short_press_release_just_halts() {
         let state = HoldState::AwaitingRelease {
             chord: chord(),
-            undo_on_long_press: OverlayAction::ToggleVisible,
+            undo_on_long_press: OverlayAction::ToggleOnOff,
             started_at_ms: 0,
         };
         let (next, effects) = step(
@@ -520,10 +521,10 @@ mod tests {
     }
 
     #[test]
-    fn classify_toggle_visible_awaits_release_and_undoes_with_self() {
-        match classify(OverlayAction::ToggleVisible) {
+    fn classify_toggle_on_off_awaits_release_and_undoes_with_self() {
+        match classify(OverlayAction::ToggleOnOff) {
             Classification::AwaitRelease { undo_on_long_press } => {
-                assert_eq!(undo_on_long_press, OverlayAction::ToggleVisible);
+                assert_eq!(undo_on_long_press, OverlayAction::ToggleOnOff);
             },
             other => panic!("expected AwaitRelease, got {other:?}"),
         }
@@ -532,6 +533,22 @@ mod tests {
     #[test]
     fn classify_quit_is_one_shot() {
         assert_eq!(classify(OverlayAction::Quit), Classification::OneShot);
+    }
+
+    #[test]
+    fn classify_cycle_effect_is_slow_repeat() {
+        assert_eq!(
+            classify(OverlayAction::CycleEffect),
+            Classification::SlowRepeat
+        );
+    }
+
+    #[test]
+    fn classify_toggle_hud_detail_is_one_shot() {
+        assert_eq!(
+            classify(OverlayAction::ToggleHudDetail),
+            Classification::OneShot
+        );
     }
 
     // ---- with_magnitude --------------------------------------------------
@@ -568,7 +585,9 @@ mod tests {
     fn with_magnitude_leaves_non_bump_actions_unchanged() {
         for a in [
             OverlayAction::CycleMode,
-            OverlayAction::ToggleVisible,
+            OverlayAction::CycleEffect,
+            OverlayAction::ToggleOnOff,
+            OverlayAction::ToggleHudDetail,
             OverlayAction::Quit,
         ] {
             assert_eq!(with_magnitude(a, 99), a);

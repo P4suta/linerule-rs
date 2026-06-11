@@ -27,8 +27,6 @@ impl Opacity {
 
     /// Default overlay-mask opacity (`0xAA`, ~67% perceptual).
     pub const DEFAULT: Self = Self(0xAA);
-    /// Default indicator-bar opacity (`0x80`, ~50% perceptual).
-    pub const INDICATOR_DEFAULT: Self = Self(0x80);
 
     /// Construct from a raw byte.
     ///
@@ -247,7 +245,6 @@ mod tests {
     #[test]
     fn opacity_get_returns_constructor_byte() {
         assert_eq!(Opacity::DEFAULT.get(), 0xAA);
-        assert_eq!(Opacity::INDICATOR_DEFAULT.get(), 0x80);
         assert_eq!(Opacity::MIN.get(), 1);
         assert_eq!(Opacity::MAX.get(), 255);
         assert_eq!(Opacity::try_new(42).unwrap().get(), 42);

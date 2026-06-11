@@ -60,6 +60,18 @@ impl SurroundEffect {
         matches!(self, Self::Blur)
     }
 
+    /// Style-crossfade target for the renderer's `style_mix` channel:
+    /// `DimBlack` = `0`, `WhiteWash` = `255`. `Blur` maps to `0`: it carries no
+    /// color veil, so the surround does not consume `style_mix` while blurred
+    /// (flat ⇄ blur switches ride the master envelope instead).
+    #[must_use]
+    pub const fn mix_target(self) -> u8 {
+        match self {
+            Self::DimBlack | Self::Blur => 0,
+            Self::WhiteWash => u8::MAX,
+        }
+    }
+
     /// Indicator color that contrasts against this effect's mask. White on a
     /// dim (black) mask or blur; near-black on a white wash so the corner
     /// indicator never vanishes into the surround.
@@ -127,6 +139,15 @@ mod tests {
         assert!(!SurroundEffect::DimBlack.is_blur());
         let ind = e.indicator_color();
         assert_eq!((ind.r, ind.g, ind.b), (0xFF, 0xFF, 0xFF));
+    }
+
+    /// Pin the `mix_target` mapping: `DimBlack` = 0 / `WhiteWash` = 255 /
+    /// `Blur` = 0 (no color veil under blur).
+    #[test]
+    fn mix_target_mapping_is_pinned() {
+        assert_eq!(SurroundEffect::DimBlack.mix_target(), 0);
+        assert_eq!(SurroundEffect::WhiteWash.mix_target(), 255);
+        assert_eq!(SurroundEffect::Blur.mix_target(), 0);
     }
 
     #[test]

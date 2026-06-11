@@ -11,7 +11,7 @@
 use linerule_core::Rgba;
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_DRAW_TEXT_OPTIONS_NONE, ID2D1DeviceContext, ID2D1SolidColorBrush,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ROUNDED_RECT, ID2D1DeviceContext, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -94,20 +94,50 @@ pub struct HudDrawRow<'a> {
     pub color: Rgba,
 }
 
-/// Issues "clear background + draw rows" on an `ID2D1DeviceContext` whose drawing
-/// session is already open, applying the surface tile `offset` via
-/// `SetTransform`. begin/end are the caller's responsibility.
+/// One non-text fill rect (divider etc.) draw instruction.
+pub struct HudDrawRule {
+    /// Surface-local fill rect (logical px, from the surface origin).
+    pub rect: D2D_RECT_F,
+    /// Fill color (straight alpha).
+    pub color: Rgba,
+}
+
+/// Issues "transparent clear + rounded panel fill + rule fills + text rows" on
+/// an `ID2D1DeviceContext` whose drawing session is already open, applying the
+/// surface tile `offset` via `SetTransform`. begin/end are the caller's
+/// responsibility.
+///
+/// The background is painted as a rounded fill of the `panel` rect (not a
+/// full-surface `Clear`): the area outside the corners stays transparent, so
+/// the overlay shows through (Fluent style).
+///
+/// `opacity` (0.0–1.0) multiplies into the alpha of the background, rules, and
+/// every row color.
 ///
 /// # Errors
 /// When brush creation fails.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one draw call per HUD frame; the args mirror the HudFrame fields \
+              and a grouping struct would just restate them"
+)]
 pub fn draw_hud_rows(
     dc: &ID2D1DeviceContext,
     offset: windows::Win32::Foundation::POINT,
     background: Rgba,
+    panel: D2D_RECT_F,
+    corner_radius: f32,
     opacity: f32,
+    rules: &[HudDrawRule],
     rows: &[HudDrawRow<'_>],
 ) -> Result<()> {
     let opacity = opacity.clamp(0.0, 1.0);
+    let transparent = D2D1_COLOR_F {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 0.0,
+    };
     let bg = color_to_premultiplied_f(scale_alpha(background, opacity));
     // SAFETY: caller passes dc with its drawing session already open.
     unsafe {
@@ -123,7 +153,33 @@ pub fn draw_hud_rows(
             M31: offset.x as f32,
             M32: offset.y as f32,
         });
-        dc.Clear(Some(&bg));
+        dc.Clear(Some(&transparent));
+
+        let bg_brush: ID2D1SolidColorBrush =
+            dc.CreateSolidColorBrush(&bg, None)
+                .map_err(|e| PlatformError::BadHr {
+                    operation: "ID2D1DeviceContext::CreateSolidColorBrush (HUD bg)",
+                    hr: e.code().0,
+                })?;
+        dc.FillRoundedRectangle(
+            &D2D1_ROUNDED_RECT {
+                rect: panel,
+                radiusX: corner_radius,
+                radiusY: corner_radius,
+            },
+            &bg_brush,
+        );
+
+        for rule in rules {
+            let rule_color = color_to_premultiplied_f(scale_alpha(rule.color, opacity));
+            let brush: ID2D1SolidColorBrush =
+                dc.CreateSolidColorBrush(&rule_color, None)
+                    .map_err(|e| PlatformError::BadHr {
+                        operation: "ID2D1DeviceContext::CreateSolidColorBrush (HUD rule)",
+                        hr: e.code().0,
+                    })?;
+            dc.FillRectangle(&rule.rect, &brush);
+        }
 
         for row in rows {
             let brush_color = color_to_premultiplied_f(scale_alpha(row.color, opacity));

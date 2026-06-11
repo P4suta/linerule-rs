@@ -24,7 +24,7 @@ const MOD_NOREPEAT: u32 = 0x4000;
 /// Safe wrapper over `RegisterHotKey(hwnd, id, modifiers, vk)`.
 ///
 /// `repeatable = false` auto-adds `MOD_NOREPEAT` to suppress repeat firing while
-/// held — for toggle actions (CycleMode / ToggleVisible / Quit).
+/// held — for toggle actions (CycleMode / ToggleOnOff / Quit).
 ///
 /// `repeatable = true` omits `MOD_NOREPEAT`, so `WM_HOTKEY` repeats at the key
 /// repeat rate — for continuous-adjust actions (BumpThickness / BumpOpacity).

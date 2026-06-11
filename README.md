@@ -4,22 +4,41 @@ Rust 製の Windows 用 reading ruler（読書補助オーバーレイ）。透�
 
 実機での操作:
 
-- `Ctrl+Alt+R`: モード切替（Off → Horizontal → Vertical → Off）
+- `Ctrl+Alt+H`: ON/OFF トグル（Off ⇄ 直前のアクティブモード。最後に使った向きを覚えている）。
+  表示の出し入れはこのキー専任で、表示してから下のキーで調整する
+- `Ctrl+Alt+R`: 軸切替（Horizontal ⇄ Vertical）
 - `Ctrl+Alt+E`: 周囲効果切替（Dim（暗幕）→ White（白マスク）→ Blur（背後ぼかし）→ Dim）
-- `Ctrl+Alt+H`: 表示／非表示トグル
 - `Ctrl+Alt+Up` / `Ctrl+Alt+Down`: スリット厚さ ±（長押しで連続調整）
 - `Ctrl+Alt+Right` / `Ctrl+Alt+Left`: 不透明度 ±（長押しで連続調整）。`Blur` 効果中は
-  代わりに **ぼかし量（Gaussian σ, px）** を増減する（Blur では不透明度の tint 明暗は
-  固定で、調整対象はぼかし量に切り替わる）
+  代わりに **ぼかし量（Gaussian σ, px）** を増減する（Blur では不透明度は inert で、
+  調整対象はぼかし量に切り替わる）
+- `Ctrl+Alt+K`: HUD 表示切替（常駐チップ ⇄ ホットキーガイドつきフルパネル）
 - `Ctrl+Alt+Q`: 終了
 
-Bump 系（厚さ・不透明度／ぼかし量）は長押しで連続発火する。Mode 切替・表示トグル・終了は誤連打を
-避けるため 1 押下 1 発火に固定。割り当てが OEM 系キー（`[`/`]`/`=`/`-`）ではなく Arrow
-キーなのは、Windows の IME / keyboard layout で OEM キーの VK が化けて `RegisterHotKey`
-がキャプチャを取り逃すケースがあったため（JIS keyboard × ENG IME で再現）。
+「非表示」は `Mode::Off` ただ一つ。Off 中に軸・厚さ・不透明度・効果のキーを押しても
+設定は変更されず、HUD に「Overlay is off — Ctrl+Alt+H to show」の toast が出る
+（見えない状態がこっそり変わるサプライズを排除）。
 
-HUD パネル（画面右上）に Mode / Thickness / Opacity / Effect / Refresh Hz と上記の操作一覧が
-常時表示される（`Blur` 効果中は Opacity 行が `Blur: N px`（ぼかし量）に切り替わる）。multi-monitor 環境では virtual screen 全体に overlay が広がる。
+Bump 系（厚さ・不透明度／ぼかし量）は長押しで連続発火する。軸切替・ON/OFF トグル・
+効果切替・終了は誤連打を避けるため 1 押下 1 発火に固定。割り当てが OEM 系キー（`[`/`]`/`=`/`-`）
+ではなく Arrow キーなのは、Windows の IME / keyboard layout で OEM キーの VK が化けて
+`RegisterHotKey` がキャプチャを取り逃すケースがあったため（JIS keyboard × ENG IME で再現）。
+
+表示・軸切替・効果切替・厚さ / 不透明度の変更は、すべて 200ms 未満の ease-out
+トランジションで滑らかに遷移する（長押し中の連続調整は retarget で 1 つの連続モーションに
+合流する）。Dim ⇄ White はマスク色の RGB クロスフェード、flat ⇄ Blur はブラシ種が変わる
+（スプライトプール再構築）ためマスター包絡によるソフトカットで切り替わる。
+
+**HUD は二段階表示**: 普段は画面右上に極小の常駐チップだけが出る。チップが出すのは
+フルパネルへの導線のみ — 表示中は `Ctrl+Alt+K`、Off 中は `Off · Ctrl+Alt+H`（軸・効果・
+数値は画面を見れば分かるのでチップには出さない）。起動直後の数秒はホットキーガイドつきの
+フルパネルが表示され、その後チップへ自動的に畳まれる。操作を忘れたら `Ctrl+Alt+K` で
+いつでもフルパネル（Mode / Thickness / Opacity / Effect / Refresh Hz とホットキー一覧）に
+展開できる（`Blur` 効果中は Opacity 行が `Blur: N px`（ぼかし量）に切り替わる）。
+フルパネルのホットキー一覧は**いま押して意味のあるキーだけ**を出す — Off 中は
+On/Off・HUD 表示切替・終了の 3 つに絞られ、表示中は全キーが並ぶ。スリットやカーソルが
+HUD に近づくと譲ってフェードアウトする。multi-monitor 環境では virtual screen 全体に
+overlay が広がる。
 
 ### Blur 効果と composition backend
 
@@ -131,6 +150,7 @@ by the caller as arguments.
 
 #### Modules
 
+- [`anim`] — integer-endpoint timed transitions (`Transition<T>`) and easing
 - [`color`] — `Rgba` / `Opacity` / `DimLevel` / `Thickness` / `BlurAmount` and perceptual curves
 - [`config`] — `UserConfig` tree (`OverlayConfig` / `HudConfig` / ...)
 - [`diagnostics`] — `LineruleError` / `Severity`

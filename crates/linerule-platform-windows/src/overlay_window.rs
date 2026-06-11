@@ -10,7 +10,9 @@ use core::ptr::NonNull;
 
 use linerule_core::input::chord;
 use linerule_core::input::win32_vk::chord_to_win32;
-use linerule_core::{HotkeyMap, HudConfig, Logical, OverlayAction, ScreenRect, TapStepConfig};
+use linerule_core::{
+    AnimConfig, HotkeyMap, HudConfig, Logical, OverlayAction, ScreenRect, TapStepConfig,
+};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
     WINDOW_EX_STYLE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
@@ -56,10 +58,15 @@ impl OverlayWindow {
     ///
     /// # Errors
     /// If `RegisterClassExW` / `CreateWindowExW` / `GetModuleHandleW` fail.
-    pub fn new(monitor: ScreenRect<Logical>, hud_config: HudConfig) -> Result<Self> {
+    pub fn new(
+        monitor: ScreenRect<Logical>,
+        hud_config: HudConfig,
+        anim_config: AnimConfig,
+    ) -> Result<Self> {
         Self::new_with_initial_world(
             monitor,
             hud_config,
+            anim_config,
             linerule_core::input::tick::TickWorld::INITIAL,
         )
     }
@@ -72,6 +79,7 @@ impl OverlayWindow {
     pub fn new_with_initial_world(
         monitor: ScreenRect<Logical>,
         hud_config: HudConfig,
+        anim_config: AnimConfig,
         initial_world: linerule_core::input::tick::TickWorld,
     ) -> Result<Self> {
         let _atom = window_class::ensure_registered()?;
@@ -80,6 +88,7 @@ impl OverlayWindow {
             tracing::info_span!("overlay_window", class = "linerule-rs-overlay"),
             monitor,
             hud_config,
+            anim_config,
             initial_world,
         ));
         let state_ptr = Box::into_raw(state_box);
@@ -162,14 +171,9 @@ impl OverlayWindow {
         let bumps = (tap_step.thickness, tap_step.opacity);
         // The `repeatable` field is `true` only for Bump actions (drops
         // `MOD_NOREPEAT`) to allow hold-to-repeat; Toggle actions stay `false`.
-        let pairs: [(i32, &'static str, OverlayAction, bool); 8] = [
+        let pairs: [(i32, &'static str, OverlayAction, bool); 9] = [
             (1, hotkeys.cycle_mode, OverlayAction::CycleMode, false),
-            (
-                2,
-                hotkeys.toggle_visible,
-                OverlayAction::ToggleVisible,
-                false,
-            ),
+            (2, hotkeys.toggle_on_off, OverlayAction::ToggleOnOff, false),
             (
                 3,
                 hotkeys.thicker,
@@ -195,7 +199,10 @@ impl OverlayWindow {
                 true,
             ),
             (7, hotkeys.quit, OverlayAction::Quit, false),
+            // Effect cycle is a discrete toggle ⇒ non-repeatable (MOD_NOREPEAT).
             (8, hotkeys.cycle_effect, OverlayAction::CycleEffect, false),
+            // HUD detail (chip ⇄ full) is a discrete toggle ⇒ non-repeatable.
+            (9, hotkeys.toggle_hud, OverlayAction::ToggleHudDetail, false),
         ];
         for (id, spec, action, repeatable) in pairs {
             self.register_one(id, spec, action, repeatable);

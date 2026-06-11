@@ -15,8 +15,8 @@
 use linerule_core::input::hud_fade;
 use linerule_core::input::tick::{TickEffect, TickInput, step};
 use linerule_core::{
-    DeviceLostOutcome, HudFrame, Logical, OverlayAction, OverlayFrame, Point, ScreenRect, State,
-    hud_frame, is_device_lost_hresult, record_device_lost_failure, render,
+    DeviceLostOutcome, HudFrame, Logical, OverlayAction, OverlayFrame, Point, RejectReason,
+    ScreenRect, hud_frame, is_device_lost_hresult, record_device_lost_failure, render,
 };
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -34,6 +34,10 @@ use crate::win32_ffi;
 /// Asserts `WM_APP_TICK` is in the `WM_APP` band; also keeps the `WM_APP`
 /// import used.
 const _: () = assert!(WM_APP_TICK >= WM_APP);
+
+/// `NotifyRejected` toast lifetime (ms). While a repeatable hotkey is held the
+/// dedup keeps refreshing the same toast's lifetime; it fades 3 s after release.
+const REJECT_TOAST_MS: i64 = 3_000;
 
 /// Dispatch a message other than WM_NCCREATE / WM_NCDESTROY.
 ///
@@ -140,13 +144,16 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
         },
         WM_APP_REASSERT_TOPMOST => {
             // Posted by the ForegroundHook callback; the actual
-            // SetWindowPos(HWND_TOPMOST) must run on the UI thread, so do it here.
+            // SetWindowPos(HWND_TOPMOST) must run on the UI thread, so do it
+            // here. When the window already sits in the topmost band,
+            // reassert_topmost returns as a no-op (avoids z-order churn /
+            // flicker from redundant SetWindowPos calls).
             if let Err(e) = win32_ffi::accessibility::reassert_topmost(hwnd) {
                 tracing::warn!(parent: state.span(), error = %e,
                     "reassert_topmost failed (foreground hook)");
             } else {
                 tracing::trace!(parent: state.span(),
-                    "topmost re-asserted after foreground change");
+                    "topmost ensured after foreground change");
             }
             Some(LRESULT(0))
         },
@@ -188,7 +195,7 @@ fn apply_tick(state: &OverlayWndState) -> Result<()> {
     };
     let world = state.tick_world_snapshot();
     let telemetry_refresh = state.hud_config().telemetry_refresh;
-    let (next_world, effects) = step(world, &input, telemetry_refresh);
+    let (next_world, effects) = step(world, &input, telemetry_refresh, state.anim_config());
     state.store_tick_world(next_world);
     let result = apply_effects(state, &effects);
     let elapsed = tick_start.elapsed();
@@ -250,16 +257,9 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                 mode,
                 cursor,
                 config,
+                sample,
             } => {
-                let frame = render::frame(
-                    State {
-                        mode,
-                        visible: true,
-                        config,
-                    },
-                    cursor,
-                    state.monitor(),
-                );
+                let frame = render::frame(mode, config, cursor, state.monitor(), sample);
                 with_device_lost_recovery(state, "DrawOverlay", &|s| {
                     apply_overlay_frame(s, &frame)
                 })?;
@@ -269,7 +269,7 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                     apply_overlay_frame(s, &OverlayFrame::EMPTY)
                 })?;
             },
-            TickEffect::RefreshHud(s) => {
+            TickEffect::RefreshHud { state: s, tier } => {
                 let hz = crate::render_timing::refresh_rate_hz();
                 let notifications = build_notifications(state);
                 let telemetry = state.frame_timing().borrow().snapshot();
@@ -281,33 +281,51 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                     &notifications,
                     state.hotkeys(),
                     telemetry,
+                    tier,
                 );
+                // Cache the panel rect actually applied so `SetHudOpacity`'s
+                // distance fade works against the bounds of whichever tier
+                // (chip or full) is currently on screen.
+                state.set_hud_panel_rect(panel_rect_of(&frame));
                 with_device_lost_recovery(state, "RefreshHud", &|st| apply_hud_frame(st, &frame))?;
             },
-            TickEffect::SetHudOpacity { state: s, cursor } => {
-                // Compute fade opacity from cursor distance and apply it via
-                // `SpriteVisual::SetOpacity`; cursor moves alone don't redraw the
-                // surface (the baked color alpha is handled by RefreshHud).
-                let opacity = hud_fade::compute_opacity(
+            TickEffect::SetHudOpacity {
+                state: s,
+                cursor,
+                envelope,
+            } => {
+                // Compute fade opacity from cursor distance (pure function),
+                // multiply in the HUD fade envelope (startup / chip ⇄ full
+                // swap), and apply it via `SpriteVisual::SetOpacity`; cursor
+                // moves and envelope progress alone don't redraw the surface
+                // (the baked color alpha is handled by RefreshHud).
+                let distance = hud_fade::compute_opacity(
                     s,
                     cursor,
-                    hud_panel_rect(state),
+                    state.hud_panel_rect(),
                     state.hud_config().fade_decay_px,
                 );
-                apply_hud_opacity(state, opacity)?;
+                apply_hud_opacity(state, hud_fade::apply_envelope(distance, envelope))?;
             },
-            TickEffect::LogStateChanged {
-                action,
-                mode,
-                visible,
-            } => {
+            TickEffect::LogStateChanged { action, mode } => {
                 tracing::info!(
                     parent: state.span(),
                     ?action,
                     ?mode,
-                    visible,
                     "state changed"
                 );
+            },
+            TickEffect::NotifyRejected { reason } => match reason {
+                RejectReason::AdjustWhileOff => {
+                    // Core carries only the semantic reason; the configured
+                    // chord string is formatted here (the HotkeyMap owner).
+                    let chord = state.hotkeys().toggle_on_off;
+                    state.push_notification(
+                        linerule_core::NotificationClass::Info,
+                        format!("Overlay is off — {chord} to show"),
+                        REJECT_TOAST_MS,
+                    );
+                },
             },
         }
     }
@@ -445,30 +463,31 @@ fn build_notifications(state: &OverlayWndState) -> Vec<linerule_core::HudNotific
     out
 }
 
-/// HUD panel bounds (logical px), computed like `hud_frame` and rounded to
-/// `ScreenRect<Logical>` for `compute_opacity`.
-fn hud_panel_rect(state: &OverlayWndState) -> ScreenRect<Logical> {
-    let hud = state.hud_config();
-    let monitor = state.monitor();
-    let width = hud.geometry.width;
-    let height = hud.geometry.height;
-    let margin = hud.geometry.margin;
+/// Round an applied `HudFrame`'s actual panel rect to `ScreenRect<Logical>`
+/// (i32). Cached on `OverlayWndState` as the distance-fade target for
+/// `compute_opacity` (the panel size differs between chip and full tier, so
+/// recomputing from config is not enough).
+fn panel_rect_of(frame: &HudFrame) -> ScreenRect<Logical> {
     #[allow(
-        clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
         reason = "screen-space px fit the f32 mantissa; rounded result stays in i32 range"
     )]
-    let monitor_right = monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX);
+    let left = frame.panel_left.round() as i32;
+    #[allow(clippy::cast_possible_truncation, reason = "ditto")]
+    let top = frame.panel_top.round() as i32;
     #[allow(
-        clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "panel dimensions are positive screen-space px"
+    )]
+    let w = frame.panel_width.round().max(0.0) as u32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
         reason = "ditto"
     )]
-    let panel_left = monitor_right - (margin + width).round() as i32;
-    let panel_top = monitor.top() + margin.round() as i32;
-    let w = width.round() as u32;
-    let h = height.round() as u32;
-    ScreenRect::new(Point::<Logical>::new(panel_left, panel_top), w, h)
+    let h = frame.panel_height.round().max(0.0) as u32;
+    ScreenRect::new(Point::<Logical>::new(left, top), w, h)
 }
 
 #[cfg(test)]
@@ -496,12 +515,12 @@ mod tests {
     }
 
     proptest! {
-        /// The result always lies in `[0, i32::MAX]`.
+        /// The result is never negative (the `i32::MAX` upper bound holds by
+        /// type).
         #[test]
         fn wparam_to_id_stays_in_i32_positive_range(raw in any::<usize>()) {
             let id = wparam_as_hotkey_id(WPARAM(raw));
             prop_assert!(id >= 0);
-            prop_assert!(id <= i32::MAX);
         }
 
         /// Values up to `i32::MAX` are preserved exactly.

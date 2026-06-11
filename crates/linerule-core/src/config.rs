@@ -72,7 +72,7 @@ impl Default for TapStepConfig {
 pub struct RepeatConfig {
     /// Delay before the first repeat fires after the initial press.
     pub initial_delay: Duration,
-    /// Hold time beyond which `ToggleVisible` is treated as a long-press undo.
+    /// Hold time beyond which `ToggleOnOff` is treated as a long-press undo.
     pub long_press_threshold: Duration,
     /// Steady interval for the `Slow` cadence.
     pub slow_repeat_interval: Duration,
@@ -252,14 +252,15 @@ pub struct HudColors {
 impl HudColors {
     /// Default dark palette.
     ///
-    /// `background.alpha` is `0xFF` (fully opaque): the HUD panel sits on top of
-    /// the overlay mask in composition z-order, and a translucent background would let
-    /// that mask bleed through and darken the panel further. Per-frame fade is
-    /// still applied via [`HudConfig::base_opacity`] / `compute_opacity`, so the
-    /// HUD can still ease out near the cursor without baking translucency into
-    /// the palette itself.
+    /// `background.alpha` is `0xEB` (≈ 92%): a slight translucency lets the
+    /// desktop / overlay mask breathe through the panel (Fluent-style acrylic
+    /// feel) while staying dark enough that text contrast is unaffected. The
+    /// HUD sits on top of the overlay mask in composition z-order, so the mask
+    /// darkens the panel marginally when active — intended. Per-frame fade is
+    /// still applied via [`HudConfig::base_opacity`] / `compute_opacity` on
+    /// top of this.
     pub const DEFAULT: Self = Self {
-        background: Rgba::new(0x10, 0x12, 0x18, 0xFF),
+        background: Rgba::new(0x10, 0x12, 0x18, 0xEB),
         foreground: Rgba::new(0xE6, 0xE9, 0xEF, 0xFF),
         subtle: Rgba::new(0x9A, 0xA0, 0xAE, 0xFF),
         accent: Rgba::new(0x6C, 0x9F, 0xFF, 0xFF),
@@ -274,6 +275,35 @@ impl Default for HudColors {
     }
 }
 
+/// Geometry of the persistent status chip (the default, low-key HUD tier).
+///
+/// The chip is a one-line mono status (`H · 28px · 67%`) anchored top-right;
+/// the full guide panel only appears at startup or via the HUD-detail hotkey.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct HudChip {
+    /// Chip text size (logical pt, mono family).
+    pub font_size: f32,
+    /// Horizontal padding around the text.
+    pub pad_x: f32,
+    /// Vertical padding around the text.
+    pub pad_y: f32,
+}
+
+impl HudChip {
+    /// Default chip metrics.
+    pub const DEFAULT: Self = Self {
+        font_size: 13.0,
+        pad_x: 10.0,
+        pad_y: 6.0,
+    };
+}
+
+impl Default for HudChip {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 /// HUD configuration root.
 //
 // `Deserialize` is omitted; see [`HudFonts`].
@@ -283,9 +313,11 @@ pub struct HudConfig {
     pub base_opacity: f32,
     /// Distance (logical pixels) at which the HUD fades by `1 - 1/e`.
     pub fade_decay_px: f32,
+    /// Panel corner radius (logical pixels, Fluent-style rounding).
+    pub corner_radius: f32,
     /// Interval for refreshing telemetry rows.
     pub telemetry_refresh: Duration,
-    /// HUD bounding rectangle.
+    /// HUD bounding rectangle (full tier).
     pub geometry: HudGeometry,
     /// HUD panel padding.
     pub padding: HudPadding,
@@ -293,6 +325,8 @@ pub struct HudConfig {
     pub fonts: HudFonts,
     /// HUD palette.
     pub colors: HudColors,
+    /// Persistent status chip metrics (chip tier).
+    pub chip: HudChip,
 }
 
 impl HudConfig {
@@ -300,15 +334,57 @@ impl HudConfig {
     pub const DEFAULT: Self = Self {
         base_opacity: 0.875,
         fade_decay_px: 120.0,
+        corner_radius: 8.0,
         telemetry_refresh: Duration::from_millis(200),
         geometry: HudGeometry::DEFAULT,
         padding: HudPadding::DEFAULT,
         fonts: HudFonts::DEFAULT,
         colors: HudColors::DEFAULT,
+        chip: HudChip::DEFAULT,
     };
 }
 
 impl Default for HudConfig {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Transition timing tunables (milliseconds).
+///
+/// The design constraint is "fast, subtle, never sluggish": every duration is
+/// a short ease-out glide well under 200 ms, so motion reads as
+/// responsiveness rather than decoration. `0` disables a transition
+/// (instant), which doubles as the CI / determinism escape hatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "the `_ms` suffix spells out the unit at every call site"
+)]
+pub struct AnimConfig {
+    /// Show/hide, mode switch, and style crossfade duration.
+    pub overlay_fade_ms: u16,
+    /// Thickness / opacity bump glide duration (held keys retarget mid-glide,
+    /// so repeats merge into one continuous motion).
+    pub value_glide_ms: u16,
+    /// HUD chip ⇄ full presentation swap fade duration.
+    pub hud_swap_ms: u16,
+    /// How long the full HUD (hotkey guide) stays up after startup before
+    /// collapsing to the chip.
+    pub startup_full_hud_ms: u32,
+}
+
+impl AnimConfig {
+    /// Default transition timings.
+    pub const DEFAULT: Self = Self {
+        overlay_fade_ms: 160,
+        value_glide_ms: 130,
+        hud_swap_ms: 140,
+        startup_full_hud_ms: 5_000,
+    };
+}
+
+impl Default for AnimConfig {
     fn default() -> Self {
         Self::DEFAULT
     }
@@ -328,6 +404,8 @@ pub struct UserConfig {
     pub hud: HudConfig,
     /// Render-budget tunables.
     pub render: RenderConfig,
+    /// Transition timings.
+    pub anim: AnimConfig,
 }
 
 impl UserConfig {
@@ -338,6 +416,7 @@ impl UserConfig {
         input: InputConfig::DEFAULT,
         hud: HudConfig::DEFAULT,
         render: RenderConfig::DEFAULT,
+        anim: AnimConfig::DEFAULT,
     };
 }
 
@@ -363,10 +442,44 @@ mod tests {
     }
 
     #[test]
+    fn hud_default_corner_radius_is_pinned_at_fluent_8px() {
+        assert!((HudConfig::DEFAULT.corner_radius - 8.0).abs() < f32::EPSILON);
+    }
+
+    /// The HUD background is slightly translucent (0xEB ≈ 92%). Fully opaque
+    /// (0xFF) loses the Fluent airiness; dropping toward 0x80 lets the
+    /// overlay curtain bleed through and hurts readability. The pin catches
+    /// accidents in either direction.
+    #[test]
+    fn hud_default_background_alpha_is_pinned_slightly_translucent() {
+        assert_eq!(HudColors::DEFAULT.background.a, 0xEB);
+    }
+
+    #[test]
     fn hud_default_telemetry_refresh_is_pinned_at_200ms() {
         assert_eq!(
             HudConfig::DEFAULT.telemetry_refresh,
             Duration::from_millis(200)
         );
+    }
+
+    #[test]
+    fn overlay_default_effect_is_dim_black_with_default_blur() {
+        use crate::color::BlurAmount;
+        use crate::state::SurroundEffect;
+        assert_eq!(OverlayConfig::DEFAULT.effect, SurroundEffect::DimBlack);
+        assert_eq!(OverlayConfig::DEFAULT.blur, BlurAmount::DEFAULT);
+    }
+
+    /// Pin the animation defaults. Design constraint "fast, subtle": every
+    /// transition stays under 200 ms; catches changes that drift sluggish.
+    #[test]
+    fn anim_defaults_are_pinned_under_200ms() {
+        let a = AnimConfig::DEFAULT;
+        assert_eq!(a.overlay_fade_ms, 160);
+        assert_eq!(a.value_glide_ms, 130);
+        assert_eq!(a.hud_swap_ms, 140);
+        assert_eq!(a.startup_full_hud_ms, 5_000);
+        assert!(a.overlay_fade_ms < 200 && a.value_glide_ms < 200 && a.hud_swap_ms < 200);
     }
 }

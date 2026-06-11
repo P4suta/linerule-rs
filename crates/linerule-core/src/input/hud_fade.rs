@@ -12,9 +12,10 @@ use crate::{
 
 /// Returns the HUD opacity in `[0, 1]` for the current frame.
 ///
-/// - When the overlay is not visible, the HUD shows in full (`1.0`).
 /// - When the slit is far from the HUD bounds, opacity approaches `1.0`.
 /// - When the slit overlaps the HUD bounds, opacity is `0.0`.
+/// - While `Mode::Off` there is no slit; the cursor itself (as a 1-px rect)
+///   drives the distance, so the HUD still yields to the pointer.
 #[must_use]
 pub fn compute_opacity(
     state: State,
@@ -22,9 +23,6 @@ pub fn compute_opacity(
     hud: ScreenRect<Logical>,
     fade_decay_px: f32,
 ) -> f32 {
-    if !state.visible {
-        return 1.0;
-    }
     let cx = px(cursor.x);
     let cy = px(cursor.y);
     let hl = px(hud.left());
@@ -45,6 +43,17 @@ pub fn compute_opacity(
     };
     let linear = 1.0 - (-distance / fade_decay_px.max(1.0)).exp();
     perceptual::smooth(linear)
+}
+
+/// Multiplies the distance-fade result ([`compute_opacity`]) by the HUD fade
+/// envelope.
+///
+/// The envelope byte goes through the perceptual curve
+/// ([`perceptual::smooth`]) so the ramp-up looks visually natural.
+/// `envelope == 255` is the identity (steady-state opacity unchanged).
+#[must_use]
+pub fn apply_envelope(distance_opacity: f32, envelope: u8) -> f32 {
+    distance_opacity * perceptual::smooth(f32::from(envelope) / 255.0)
 }
 
 pub(crate) fn slit_range(center: f32, thickness: Thickness) -> (f32, f32) {
@@ -91,20 +100,7 @@ mod tests {
     }
 
     fn h_state() -> State {
-        State {
-            mode: Mode::Horizontal,
-            ..State::DEFAULT
-        }
-    }
-
-    #[test]
-    fn hidden_state_yields_full_opacity() {
-        let s = State {
-            visible: false,
-            ..h_state()
-        };
-        let v = compute_opacity(s, Point::new(0, 0), hud_rect(), 120.0);
-        assert!((v - 1.0).abs() < 1e-6);
+        State::with_mode(Mode::Horizontal)
     }
 
     #[test]
@@ -131,6 +127,23 @@ mod tests {
         let inside = compute_opacity(s, Point::new(1500, 200), hud_rect(), 120.0);
         assert!(far > 0.9);
         assert!(inside.abs() < 1e-3);
+    }
+
+    // ---- apply_envelope ---------------------------------------------------
+
+    /// `envelope == 255` is identity, `0` fully invisible; intermediate
+    /// values are monotone.
+    #[test]
+    fn apply_envelope_endpoints_and_monotonicity() {
+        let base = 0.8_f32;
+        assert!(
+            (apply_envelope(base, 255) - base).abs() < 1e-6,
+            "255 = identity"
+        );
+        assert!(apply_envelope(base, 0).abs() < 1e-6, "0 = invisible");
+        let mid_lo = apply_envelope(base, 64);
+        let mid_hi = apply_envelope(base, 192);
+        assert!(mid_lo > 0.0 && mid_lo < mid_hi && mid_hi < base);
     }
 
     // ---- axis_gap --------------------------------------------------------

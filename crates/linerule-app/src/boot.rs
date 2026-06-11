@@ -118,13 +118,11 @@ fn run_overlay(
     // HWND can draw slits across monitor boundaries.
     let monitor = monitor_info::virtual_screen_bounds()?;
 
-    // Override the initial TickWorld state when initial_mode/initial_effect are
-    // given.
+    // Override the initial TickWorld state when initial_mode/initial_effect
+    // are given (CI smoke). `State::with_mode` keeps the mode/last_active
+    // invariant.
     let initial_world = if initial_mode.is_some() || initial_effect.is_some() {
-        let mut state = State::DEFAULT;
-        if let Some(m) = initial_mode {
-            state.mode = m.into();
-        }
+        let mut state = initial_mode.map_or(State::DEFAULT, |m| State::with_mode(m.into()));
         if let Some(e) = initial_effect {
             state.config.effect = e.into();
         }
@@ -137,7 +135,8 @@ fn run_overlay(
     // `_foreground_hook` callback may `PostMessageW` to the overlay HWND, so
     // they must be torn down before it. Declared overlay → _foreground_hook →
     // _clock → _auto_quit to get the right reverse-order Drop.
-    let mut overlay = OverlayWindow::new_with_initial_world(monitor, config.hud, initial_world)?;
+    let mut overlay =
+        OverlayWindow::new_with_initial_world(monitor, config.hud, config.anim, initial_world)?;
     overlay.attach_compositor()?;
     overlay.register_hotkeys(&config.hotkeys, config.input.tap_step)?;
     // Keep the overlay topmost after other apps come to the foreground (e.g.
@@ -165,12 +164,12 @@ fn run_overlay(
     tracing::info!(
         cycle_mode = config.hotkeys.cycle_mode,
         cycle_effect = config.hotkeys.cycle_effect,
-        toggle_visible = config.hotkeys.toggle_visible,
+        toggle_on_off = config.hotkeys.toggle_on_off,
         quit = config.hotkeys.quit,
         duration_ms = duration_ms.unwrap_or(0),
         initial_mode = ?initial_mode,
         initial_effect = ?initial_effect,
-        "overlay running; press Ctrl+Alt+R to cycle modes, Ctrl+Alt+E to cycle effects, Ctrl+Alt+Q to quit"
+        "overlay running; press Ctrl+Alt+H to show, Ctrl+Alt+R to flip the axis, Ctrl+Alt+E to cycle effects, Ctrl+Alt+Q to quit"
     );
     run_message_pump()?;
     Ok(())

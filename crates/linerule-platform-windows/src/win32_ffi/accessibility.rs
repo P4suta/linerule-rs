@@ -26,6 +26,7 @@ use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWi
 use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_SYSTEM_FOREGROUND, HWND_TOPMOST, PostMessageW, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    WS_EX_TOPMOST,
 };
 
 use crate::error::{PlatformError, Result};
@@ -81,10 +82,26 @@ pub fn unhook_win_event(hook: HWINEVENTHOOK) -> Result<()> {
     Ok(())
 }
 
+/// Whether `GWL_EXSTYLE` has the `WS_EX_TOPMOST` bit. The OS keeps the bit
+/// while the window sits in the topmost band, so it answers "does the z-order
+/// need re-asserting?".
+#[must_use]
+pub fn is_topmost(hwnd: HWND) -> bool {
+    let bits = u32::try_from(crate::win32_ffi::get_ex_style(hwnd)).unwrap_or(u32::MAX);
+    bits & WS_EX_TOPMOST.0 != 0
+}
+
 /// `SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
 /// SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)`. Restores the overlay's topmost
 /// z-order without stealing focus or changing position/size.
+///
+/// Early-returns as a no-op when `WS_EX_TOPMOST` is already set: calling
+/// `SetWindowPos` unconditionally on every foreground change causes a brief
+/// flicker from DWM z-order churn, so it runs only when needed.
 pub fn reassert_topmost(hwnd: HWND) -> Result<()> {
+    if is_topmost(hwnd) {
+        return Ok(());
+    }
     let flags: SET_WINDOW_POS_FLAGS = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
     // SAFETY: hwnd is a valid OverlayWindow HWND. HWND_TOPMOST is a WinAPI constant.
     unsafe { SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, flags) }.map_err(|e| {

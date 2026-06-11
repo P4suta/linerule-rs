@@ -13,8 +13,8 @@ pub struct HotkeyMap {
     pub cycle_mode: &'static str,
     /// Chord that triggers `OverlayAction::CycleEffect`.
     pub cycle_effect: &'static str,
-    /// Chord that triggers `OverlayAction::ToggleVisible`.
-    pub toggle_visible: &'static str,
+    /// Chord that triggers `OverlayAction::ToggleOnOff`.
+    pub toggle_on_off: &'static str,
     /// Chord that bumps thickness up.
     pub thicker: &'static str,
     /// Chord that bumps thickness down.
@@ -23,6 +23,8 @@ pub struct HotkeyMap {
     pub more_opaque: &'static str,
     /// Chord that bumps opacity down.
     pub less_opaque: &'static str,
+    /// Chord that triggers `OverlayAction::ToggleHudDetail` (chip ⇄ full HUD).
+    pub toggle_hud: &'static str,
     /// Chord that triggers `OverlayAction::Quit`.
     pub quit: &'static str,
 }
@@ -36,11 +38,12 @@ impl HotkeyMap {
     pub const DEFAULT: Self = Self {
         cycle_mode: "Ctrl+Alt+R",
         cycle_effect: "Ctrl+Alt+E",
-        toggle_visible: "Ctrl+Alt+H",
+        toggle_on_off: "Ctrl+Alt+H",
         thicker: "Ctrl+Alt+Up",
         thinner: "Ctrl+Alt+Down",
         more_opaque: "Ctrl+Alt+Right",
         less_opaque: "Ctrl+Alt+Left",
+        toggle_hud: "Ctrl+Alt+K",
         quit: "Ctrl+Alt+Q",
     };
 }

@@ -16,7 +16,10 @@
 
 use linerule_core::input::chord::{ChordSpec, Direction, KeyCode, Letter, Modifiers};
 use linerule_core::input::win32_vk::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, chord_to_win32};
-use linerule_core::{Mode, Opacity, OverlayAction, State, Thickness, input::chord, state::reduce};
+use linerule_core::{
+    ActiveMode, Mode, Opacity, OverlayAction, RejectReason, State, Thickness, input::chord,
+    state::reduce,
+};
 use proptest::prelude::*;
 
 fn any_mode() -> impl Strategy<Value = Mode> {
@@ -27,44 +30,103 @@ fn any_mode() -> impl Strategy<Value = Mode> {
     ]
 }
 
+fn any_active_mode() -> impl Strategy<Value = ActiveMode> {
+    prop_oneof![Just(ActiveMode::Horizontal), Just(ActiveMode::Vertical)]
+}
+
+/// Invariant-respecting state generator: when `mode` is active,
+/// `last_active` must agree with it; only while `Off` is it free.
 fn any_state() -> impl Strategy<Value = State> {
-    (any_mode(), any::<bool>()).prop_map(|(mode, visible)| State {
+    (any_mode(), any_active_mode()).prop_map(|(mode, generated_last)| State {
         mode,
-        visible,
+        last_active: mode.active().unwrap_or(generated_last),
         ..State::DEFAULT
     })
 }
 
 proptest! {
-    /// `CycleMode` applied three times is the identity on the mode field.
+    /// `CycleMode` applied twice is the identity on the mode field: an axis
+    /// toggle while on, a rejected no-op while off.
     #[test]
-    fn cycle_mode_has_period_three(mode in any_mode()) {
+    fn cycle_mode_has_period_two(mode in any_mode()) {
         let s = State { mode, ..State::DEFAULT };
         let (a, _) = reduce::apply(s, OverlayAction::CycleMode);
         let (b, _) = reduce::apply(a, OverlayAction::CycleMode);
-        let (c, _) = reduce::apply(b, OverlayAction::CycleMode);
-        prop_assert_eq!(c.mode, mode);
+        prop_assert_eq!(b.mode, mode);
     }
 
-    /// `ToggleVisible` applied twice is the identity on the visibility field.
+    /// `ToggleOnOff` applied twice is the identity on the *full* state.
+    /// (Valid because `any_state()` respects the mode/last_active invariant.)
     #[test]
-    fn toggle_visible_is_involutive(state in any_state()) {
-        let (a, _) = reduce::apply(state, OverlayAction::ToggleVisible);
-        let (b, _) = reduce::apply(a, OverlayAction::ToggleVisible);
-        prop_assert_eq!(b.visible, state.visible);
+    fn toggle_on_off_twice_is_identity(state in any_state()) {
+        let (a, _) = reduce::apply(state, OverlayAction::ToggleOnOff);
+        let (b, _) = reduce::apply(a, OverlayAction::ToggleOnOff);
+        prop_assert_eq!(b, state);
     }
 
-    /// `BumpThickness` is a no-op while the mode is `Off`.
+    /// Every action preserves the invariant: when `mode` is active,
+    /// `last_active` agrees with it.
     #[test]
-    fn bump_thickness_is_inert_in_off_mode(delta in -1024_i32..1024) {
+    fn invariant_preserved_by_every_action(state in any_state(), action in any_action()) {
+        let (next, _) = reduce::apply(state, action);
+        if let Some(active) = next.mode.active() {
+            prop_assert_eq!(next.last_active, active);
+        }
+    }
+
+    /// `BumpThickness` while `Off` leaves the state untouched and reports a
+    /// rejection (never a state delta).
+    #[test]
+    fn bump_thickness_is_rejected_in_off_mode(delta in -1024_i32..1024) {
         let s = State { mode: Mode::Off, ..State::DEFAULT };
         let (next, d) = reduce::apply(s, OverlayAction::BumpThickness(delta));
         prop_assert_eq!(next, s);
         prop_assert!(!d.is_any());
+        prop_assert_eq!(d.rejected, Some(RejectReason::AdjustWhileOff));
+    }
+
+    /// Every adjustment action (bumps, effect cycle, axis flip) is rejected
+    /// while `Off`, for any Off-state `last_active`.
+    #[test]
+    fn off_adjustments_are_rejected(
+        last in any_active_mode(),
+        delta in -1024_i32..1024,
+        which in 0_u8..4,
+    ) {
+        let s = State { mode: Mode::Off, last_active: last, ..State::DEFAULT };
+        let action = match which {
+            0 => OverlayAction::BumpThickness(delta),
+            1 => OverlayAction::BumpOpacity(delta),
+            2 => OverlayAction::CycleEffect,
+            _ => OverlayAction::CycleMode,
+        };
+        let (next, d) = reduce::apply(s, action);
+        prop_assert_eq!(next, s);
+        prop_assert_eq!(d.rejected, Some(RejectReason::AdjustWhileOff));
+    }
+
+    /// In an active mode no action is ever rejected.
+    #[test]
+    fn active_adjustments_never_rejected(state in any_state(), action in any_action()) {
+        if matches!(state.mode, Mode::Off) {
+            return Ok(());
+        }
+        let (_, d) = reduce::apply(state, action);
+        prop_assert_eq!(d.rejected, None);
+    }
+
+    /// A rejection never changes state.
+    #[test]
+    fn rejected_implies_state_unchanged(state in any_state(), action in any_action()) {
+        let (next, d) = reduce::apply(state, action);
+        if d.rejected.is_some() {
+            prop_assert_eq!(next, state, "rejected action must leave state untouched");
+            prop_assert!(!d.is_any(), "rejection and state delta are mutually exclusive");
+        }
     }
 
     /// `BumpThickness` in an active mode either changes thickness or saturates
-    /// — never returns a different mode or visibility.
+    /// — never returns a different mode or restore target.
     #[test]
     fn bump_thickness_only_touches_config(state in any_state(), delta in -1024_i32..1024) {
         if matches!(state.mode, Mode::Off) {
@@ -72,9 +134,23 @@ proptest! {
         }
         let (next, _) = reduce::apply(state, OverlayAction::BumpThickness(delta));
         prop_assert_eq!(next.mode, state.mode);
-        prop_assert_eq!(next.visible, state.visible);
+        prop_assert_eq!(next.last_active, state.last_active);
         prop_assert_eq!(next.config.opacity, state.config.opacity);
         prop_assert_eq!(next.config.effect, state.config.effect);
+    }
+
+    /// Cycling to `Off` then toggling restores the mode that was active just
+    /// before `Off` — the "last active" semantics, end to end.
+    #[test]
+    fn flip_then_toggle_restores_the_flipped_axis(start in any_active_mode()) {
+        let s = State::with_mode(Mode::from(start));
+        // Flip the axis, toggle off, toggle back on: the restored mode must be
+        // the flipped axis (last_active follows the flip).
+        let (flipped, _) = reduce::apply(s, OverlayAction::CycleMode);
+        let (off, _) = reduce::apply(flipped, OverlayAction::ToggleOnOff);
+        prop_assert_eq!(off.mode, Mode::Off);
+        let (restored, _) = reduce::apply(off, OverlayAction::ToggleOnOff);
+        prop_assert_eq!(restored.mode, flipped.mode);
     }
 
     /// Opacity saturating arithmetic is monotonic and stays in range.
@@ -150,10 +226,16 @@ proptest! {
         x in 0_i32..1920,
         y in 100_i32..980,
     ) {
-        use linerule_core::{frame, render::Geometry, ScreenRect, Point};
-        let s = State { mode: Mode::Horizontal, ..State::DEFAULT };
+        use linerule_core::{frame, render::Geometry, OverlayConfig, OverlaySample, ScreenRect, Point};
         let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
-        let f = frame(s, Point::new(x, y), monitor);
+        let config = OverlayConfig::DEFAULT;
+        let f = frame(
+            Mode::Horizontal,
+            config,
+            Point::new(x, y),
+            monitor,
+            OverlaySample::settled(config),
+        );
         let any_full_width = f.layers().iter().any(|l| match l.geometry {
             Geometry::Rect(r) => r.left() == 0 && r.right() == 1920,
         });
@@ -196,9 +278,10 @@ fn any_action() -> impl Strategy<Value = OverlayAction> {
     prop_oneof![
         Just(OverlayAction::CycleMode),
         Just(OverlayAction::CycleEffect),
-        Just(OverlayAction::ToggleVisible),
+        Just(OverlayAction::ToggleOnOff),
         (-1024_i32..1024).prop_map(OverlayAction::BumpThickness),
         (-1024_i32..1024).prop_map(OverlayAction::BumpOpacity),
+        Just(OverlayAction::ToggleHudDetail),
         Just(OverlayAction::Quit),
     ]
 }

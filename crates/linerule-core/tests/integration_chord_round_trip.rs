@@ -15,14 +15,15 @@ use linerule_core::input::win32_vk::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, c
 #[test]
 fn every_default_chord_parses_and_produces_nonzero_vk() {
     let map = HotkeyMap::DEFAULT;
-    let cases: [(&str, &str); 8] = [
+    let cases: [(&str, &str); 9] = [
         ("cycle_mode", map.cycle_mode),
         ("cycle_effect", map.cycle_effect),
-        ("toggle_visible", map.toggle_visible),
+        ("toggle_on_off", map.toggle_on_off),
         ("thicker", map.thicker),
         ("thinner", map.thinner),
         ("more_opaque", map.more_opaque),
         ("less_opaque", map.less_opaque),
+        ("toggle_hud", map.toggle_hud),
         ("quit", map.quit),
     ];
     for (name, spec) in cases {
@@ -61,11 +62,12 @@ fn every_default_chord_display_round_trips() {
     for spec in [
         map.cycle_mode,
         map.cycle_effect,
-        map.toggle_visible,
+        map.toggle_on_off,
         map.thicker,
         map.thinner,
         map.more_opaque,
         map.less_opaque,
+        map.toggle_hud,
         map.quit,
     ] {
         let parsed = chord::parse(spec).unwrap_or_else(|e| panic!("parse `{spec}`: {e}"));
@@ -119,11 +121,12 @@ fn default_chords_are_pairwise_distinct() {
     let labeled = [
         ("cycle_mode", map.cycle_mode),
         ("cycle_effect", map.cycle_effect),
-        ("toggle_visible", map.toggle_visible),
+        ("toggle_on_off", map.toggle_on_off),
         ("thicker", map.thicker),
         ("thinner", map.thinner),
         ("more_opaque", map.more_opaque),
         ("less_opaque", map.less_opaque),
+        ("toggle_hud", map.toggle_hud),
         ("quit", map.quit),
     ];
     let mut keys: Vec<(&str, (u32, u32))> = labeled

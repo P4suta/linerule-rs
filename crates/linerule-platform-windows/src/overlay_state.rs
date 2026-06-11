@@ -23,8 +23,8 @@ use std::time::Instant;
 
 use linerule_core::input::tick::TickWorld;
 use linerule_core::{
-    ChordError, HotkeyMap, HudConfig, HudNotification, Logical, NotificationClass, OverlayAction,
-    ScreenRect,
+    AnimConfig, ChordError, HotkeyMap, HudConfig, HudNotification, Logical, NotificationClass,
+    OverlayAction, Point, ScreenRect,
 };
 use tracing::Span;
 use windows::Win32::Foundation::HWND;
@@ -96,6 +96,13 @@ pub struct OverlayWndState {
     monitor: RefCell<ScreenRect<Logical>>,
     /// HUD look / timing config.
     hud_config: HudConfig,
+    /// Transition timing config, passed to `tick::step` every tick.
+    anim_config: AnimConfig,
+    /// HUD panel rect actually applied by the last `RefreshHud`. The panel
+    /// size differs between chip and full tier, so the `SetHudOpacity`
+    /// distance fade computes against this cache (recomputing from config
+    /// would only ever yield the fixed full-tier size).
+    hud_panel_rect: Cell<ScreenRect<Logical>>,
     /// Short-lived runtime toasts (device-lost rebuild / DPI change), evicted on
     /// expiry by `live_notifications`.
     notifications: RefCell<Vec<HudNotification>>,
@@ -113,8 +120,19 @@ pub struct OverlayWndState {
 impl OverlayWndState {
     /// New instance state initialized with `TickWorld::INITIAL` (mode = Off).
     #[must_use]
-    pub fn new(log_span: Span, monitor: ScreenRect<Logical>, hud_config: HudConfig) -> Self {
-        Self::new_with_initial_world(log_span, monitor, hud_config, TickWorld::INITIAL)
+    pub fn new(
+        log_span: Span,
+        monitor: ScreenRect<Logical>,
+        hud_config: HudConfig,
+        anim_config: AnimConfig,
+    ) -> Self {
+        Self::new_with_initial_world(
+            log_span,
+            monitor,
+            hud_config,
+            anim_config,
+            TickWorld::INITIAL,
+        )
     }
 
     /// New instance state initialized with an explicit `TickWorld`, used to
@@ -124,6 +142,7 @@ impl OverlayWndState {
         log_span: Span,
         monitor: ScreenRect<Logical>,
         hud_config: HudConfig,
+        anim_config: AnimConfig,
         initial_world: TickWorld,
     ) -> Self {
         let (sender, inbox) = channel::<OverlayAction>();
@@ -144,7 +163,9 @@ impl OverlayWndState {
                 conflicts: RefCell::new(Vec::new()),
             },
             monitor: RefCell::new(monitor),
+            hud_panel_rect: Cell::new(initial_hud_panel_rect(&hud_config, monitor)),
             hud_config,
+            anim_config,
             notifications: RefCell::new(Vec::new()),
             frame_timing: RefCell::new(crate::frame_timing::FrameTimingTracker::new()),
             device_lost_count: Cell::new(0),
@@ -161,9 +182,16 @@ impl OverlayWndState {
 
     /// Queue a toast, evicted by `live_notifications` after `lifetime_ms`.
     /// Pass `i64::MAX` to persist it.
+    ///
+    /// If a toast with the same `(class, message)` already exists, its
+    /// lifetime is refreshed instead of stacking a duplicate (holding a
+    /// repeatable hotkey would otherwise pile up the same rejection toast on
+    /// every key repeat).
     pub fn push_notification(&self, class: NotificationClass, message: String, lifetime_ms: i64) {
         let until_ms = self.now_ms().saturating_add(lifetime_ms);
-        self.notifications.borrow_mut().push(HudNotification {
+        let mut q = self.notifications.borrow_mut();
+        q.retain(|n| !(n.class == class && n.message == message));
+        q.push(HudNotification {
             class,
             message,
             until_ms,
@@ -296,6 +324,23 @@ impl OverlayWndState {
         &self.hud_config
     }
 
+    /// The transition timing config (`Copy`), passed to `tick::step`.
+    #[must_use]
+    pub fn anim_config(&self) -> AnimConfig {
+        self.anim_config
+    }
+
+    /// The HUD panel rect applied by the last `RefreshHud`.
+    #[must_use]
+    pub fn hud_panel_rect(&self) -> ScreenRect<Logical> {
+        self.hud_panel_rect.get()
+    }
+
+    /// Cache the actual panel rect when `RefreshHud` is applied.
+    pub fn set_hud_panel_rect(&self, rect: ScreenRect<Logical>) {
+        self.hud_panel_rect.set(rect);
+    }
+
     /// Store the chord map shown in the HUD hotkey-help rows.
     pub fn record_hotkeys(&self, hotkeys: HotkeyMap) {
         *self.hotkeys.display_map.borrow_mut() = hotkeys;
@@ -332,6 +377,33 @@ impl OverlayWndState {
     }
 }
 
+/// Fallback rect right after startup (before the first `RefreshHud` lands),
+/// sized for the full panel. The first tick's `RefreshHud` always overwrites
+/// it, so a plausible initial value matters more than precision.
+fn initial_hud_panel_rect(hud: &HudConfig, monitor: ScreenRect<Logical>) -> ScreenRect<Logical> {
+    let monitor_right = monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX);
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "screen-space px; rounded result fits in i32"
+    )]
+    let panel_left = monitor_right - (hud.geometry.margin + hud.geometry.width).round() as i32;
+    #[allow(clippy::cast_possible_truncation, reason = "ditto")]
+    let panel_top = monitor.top() + hud.geometry.margin.round() as i32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "panel dimensions are positive screen-space px"
+    )]
+    let w = hud.geometry.width.round() as u32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "ditto"
+    )]
+    let h = hud.geometry.height.round() as u32;
+    ScreenRect::new(Point::<Logical>::new(panel_left, panel_top), w, h)
+}
+
 impl core::fmt::Debug for OverlayWndState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("OverlayWndState")
@@ -356,7 +428,12 @@ mod tests {
 
     fn fresh_state() -> OverlayWndState {
         let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
-        OverlayWndState::new(Span::none(), monitor, HudConfig::DEFAULT)
+        OverlayWndState::new(
+            Span::none(),
+            monitor,
+            HudConfig::DEFAULT,
+            AnimConfig::DEFAULT,
+        )
     }
 
     #[test]
@@ -462,6 +539,24 @@ mod tests {
             conflicts[0].reason,
             HotkeyFailure::ChordParse(ChordError::Empty)
         ));
+    }
+
+    /// A toast with the same `(class, message)` doesn't stack; only its
+    /// lifetime refreshes. Pins that holding a repeatable hotkey doesn't
+    /// duplicate the rejection toast on every key repeat.
+    #[test]
+    fn push_notification_dedups_same_class_and_message() {
+        let s = fresh_state();
+        s.push_notification(NotificationClass::Info, "Overlay is off".to_string(), 3_000);
+        s.push_notification(NotificationClass::Info, "Overlay is off".to_string(), 3_000);
+        assert_eq!(
+            s.live_notifications().len(),
+            1,
+            "duplicate toast must not stack"
+        );
+        // A different class coexists as a separate toast.
+        s.push_notification(NotificationClass::Warn, "Overlay is off".to_string(), 3_000);
+        assert_eq!(s.live_notifications().len(), 2);
     }
 
     #[test]

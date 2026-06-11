@@ -46,26 +46,5 @@ OverlayFrame {
                 },
             ),
         },
-        Layer {
-            geometry: Rect(
-                ScreenRect {
-                    origin: Point {
-                        x: 1890,
-                        y: 12,
-                        _space: PhantomData<fn() -> linerule_core::geometry::Logical>,
-                    },
-                    width: 18,
-                    height: 4,
-                },
-            ),
-            brush: Solid(
-                Rgba {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 194,
-                },
-            ),
-        },
     ],
 }

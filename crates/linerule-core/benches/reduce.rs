@@ -12,18 +12,15 @@ use std::hint::black_box;
 fn bench_reduce(c: &mut Criterion) {
     let mut group = c.benchmark_group("reduce::apply");
     group.bench_function("cycle_mode", |b| {
-        b.iter(|| {
-            reduce::apply(
-                black_box(State::DEFAULT),
-                black_box(OverlayAction::CycleMode),
-            )
-        });
+        // Axis flip only acts while on; measure the active path, not a reject.
+        let on = State::with_mode(Mode::Horizontal);
+        b.iter(|| reduce::apply(black_box(on), black_box(OverlayAction::CycleMode)));
     });
-    group.bench_function("toggle_visible", |b| {
+    group.bench_function("toggle_on_off", |b| {
         b.iter(|| {
             reduce::apply(
                 black_box(State::DEFAULT),
-                black_box(OverlayAction::ToggleVisible),
+                black_box(OverlayAction::ToggleOnOff),
             )
         });
     });
