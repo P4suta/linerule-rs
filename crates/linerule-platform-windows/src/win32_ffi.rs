@@ -1,19 +1,26 @@
-//! ★ FFI 境界 — `linerule-platform-windows` 内で `unsafe` を含む唯一の領域。
+//! FFI boundary — the only `unsafe` area in `linerule-platform-windows`.
 //!
-//! 各サブモジュールは Win32 / COM API を薄く safe ラップする。クレート内の他
-//! ファイルは `#![forbid(unsafe_code)]` を強制し、本モジュール経由でのみ
-//! Win32/COM を触る。詳細方針は ADR-0003。
+//! Each submodule thinly safe-wraps a Win32 / COM API. Every other file in the
+//! crate is `#![forbid(unsafe_code)]` and touches Win32/COM only through here.
 //!
-//! - [`core`] — Window / message pump / instance state (Phase C)
-//! - [`graphics`] — D3D11 + DXGI + D2D + DComposition pipeline (Phase D)
-//! - [`hotkey`] — `RegisterHotKey` (Phase E)
-//! - [`pacer`] — `DwmFlush` + `PostMessageW` (Phase F)
-//! - [`dwrite`] — DirectWrite text formats + DrawText (Phase G, ADR-0006)
+//! - [`core`] — Window / message pump / instance state
+//! - [`graphics`] — D3D11 + DXGI + D2D device stack
+//! - [`composition`] — WinRT `Windows.UI.Composition` host (overlay + HUD)
+//! - [`blur_effect`] — backdrop Gaussian-blur effect for the `Blur` surround
+//! - [`hotkey`] — `RegisterHotKey`
+//! - [`pacer`] — `DwmFlush` + `PostMessageW`
+//! - [`dwrite`] — DirectWrite text formats + DrawText
 
 pub mod core;
 
 #[cfg(any(doc, target_os = "windows"))]
 pub mod accessibility;
+
+#[cfg(any(doc, target_os = "windows"))]
+pub mod blur_effect;
+
+#[cfg(any(doc, target_os = "windows"))]
+pub mod composition;
 
 #[cfg(any(doc, target_os = "windows"))]
 pub mod dwrite;

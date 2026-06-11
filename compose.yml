@@ -32,7 +32,9 @@ services:
       # is baked into the dev image (see Dockerfile), so the first
       # `just cross-check` is instant. Volume-mounting here would shadow the
       # image content with an empty volume and re-trigger the download.
-      - npm-cache:/workspace/node_modules
+      # No node_modules volume either — it lives on the bind mount, owned by
+      # the host user. A named volume here is created root-owned and would
+      # need a chown before `bun install`.
     init: true
     stdin_open: true
     tty: true
@@ -40,7 +42,6 @@ services:
 volumes:
   cargo-registry:
   cargo-git:
-  npm-cache:
 
 # GITHUB_TOKEN is mounted as a build secret (never baked into the image)
 # so cargo-binstall can authenticate to api.github.com and skip the

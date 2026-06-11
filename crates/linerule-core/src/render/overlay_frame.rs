@@ -1,11 +1,11 @@
 //! Render-output data: an immutable list of geometry × brush layers.
 //!
 //! `OverlayFrame` is produced by [`crate::render::frame`] and consumed by the
-//! platform layer (`linerule-platform-windows::composition_renderer`). It is
+//! platform layer (`linerule-platform-windows::winrt_composition_renderer`). It is
 //! pure data; the platform layer translates it to D2D draw calls.
 
 use crate::{
-    color::Rgba,
+    color::{BlurAmount, Rgba},
     geometry::{Logical, ScreenRect},
 };
 
@@ -14,27 +14,17 @@ use crate::{
 pub enum Brush {
     /// Fill the shape with a single sRGB color.
     Solid(Rgba),
-    /// Reserved: blur the content *behind* the shape, then overlay `tint`.
+    /// Pure backdrop blur behind the shape, no color veil.
     ///
-    /// The renderer does not emit this variant yet — the cheap surround styles
-    /// (`Dim` / `Bright`) are expressed as [`Brush::Solid`]. It exists so the
-    /// follow-up Gaussian-blur surround (screen capture → D2D
-    /// `CLSID_D2D1GaussianBlur` → tinted overlay) is a render-only change with
-    /// the ADT already in place. The platform layer falls back to filling with
-    /// `tint` until that path lands.
-    ///
-    /// `radius_px` is an integer (logical pixels) so `Brush` keeps deriving
-    /// `Eq`/`Hash` (an `f32` radius would forfeit both).
+    /// `amount` is an integer newtype (not `f32`) so `Brush` keeps its `Eq`/`Hash`
+    /// derives; the platform layer converts it to a float σ at the brush boundary.
     Blur {
-        /// Gaussian blur radius in logical pixels.
-        radius_px: u16,
-        /// Color overlaid on top of the blurred content (e.g. a faint dim).
-        tint: Rgba,
+        /// Gaussian blur σ (logical px) for the backdrop.
+        amount: BlurAmount,
     },
 }
 
-/// Shape of a layer. Currently axis-aligned rectangles in logical space; new
-/// variants would be added here (e.g. rounded rect for indicator pills).
+/// Shape of a layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Geometry {
     /// Axis-aligned rectangle in logical pixels.
@@ -52,8 +42,7 @@ pub struct Layer {
 }
 
 impl Layer {
-    /// Convenience constructor for the most common case (axis-aligned
-    /// filled rect).
+    /// Construct a solid-filled axis-aligned rect layer.
     #[must_use]
     pub const fn solid_rect(bounds: ScreenRect<Logical>, fill: Rgba) -> Self {
         Self {
@@ -65,8 +54,7 @@ impl Layer {
 
 /// Immutable composition frame.
 ///
-/// Stored as a `Vec<Layer>` — the per-frame allocation cost (3 layers × 60 Hz
-/// ≈ 9 KiB/s) is negligible and lets the crate stay strictly
+/// A plain `Vec<Layer>`: per-frame allocation is negligible and keeps the crate
 /// `#![forbid(unsafe_code)]` without pulling in `smallvec`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct OverlayFrame {

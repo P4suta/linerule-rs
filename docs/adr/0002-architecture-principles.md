@@ -6,9 +6,9 @@
 
 ## 文脈
 
-`linerule-rs` の最重要事項は **アーキテクチャの美しさ** である ([[0001-port-from-csharp]])。
-動けば良い・移植網羅性が高ければ良い、ではなく、モダン・スマート・クリーンな実装を
-優先する。本 ADR は「美しさ」を機械的に検証可能な原則に分解する。
+`linerule-rs` の最重要事項は **アーキテクチャの美しさ** である。動けば良いではなく、
+モダン・スマート・クリーンな実装を優先する。本 ADR は「美しさ」を機械的に検証可能な
+原則に分解する。
 
 ## 決定
 
@@ -34,9 +34,8 @@ core 内では一切のグローバルアクセスを行わない。
 ### 原則 3 — 抽象の遅延
 
 trait / generic を予防的に作らない。**最低 2 実装が現れてから** 抽象に昇格する。
-`IOverlaySurface` / `IHotkeyHost` / `IMouseTracker` 風の port-and-adapter trait は
-作らない (`linerule-cs` の `Linerule.Platform` の経験から、テスト用 mock は trait
-よりも `cfg(test)` の別実装か closure 注入で書く方が読みやすい)。
+port-and-adapter trait は作らず、テスト用 mock は `cfg(test)` の別実装か closure
+注入で書く。
 
 ### 原則 4 — RAII 徹底
 
@@ -111,5 +110,3 @@ prelude モジュールを作らない (例外: `linerule_core::prelude` を作�
 - 新規モジュール追加時に原則を見直す
 - 原則の追加・削除・変更は ADR 改訂を必須とする (本 ADR のメンテナンスが原則一覧の
   source of truth)
-- C# 由来の dead pattern (`ComLifetime`、`IPathfulSink`、`Phase<TIn,TOut>`、`static mut`)
-  を翻訳せず、Rust の慣行で書き直す

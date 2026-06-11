@@ -3,26 +3,19 @@
 
 #![forbid(unsafe_code)]
 
-/// `WM_NCHITTEST` で「クリックは下層に貫通させる」と答えるための戻り値。
-/// `LRESULT(-1)` を `i32` で持つ。
+/// `WM_NCHITTEST` return that lets clicks pass through to windows below
+/// (`LRESULT(-1)` as `i32`).
 pub const HTTRANSPARENT: i32 = -1;
 
-/// `WM_APP` 帯 (0x8000–0xBFFF) のカスタムメッセージ。pacer thread（Phase F）が
-/// UI thread に vsync tick を通知するために使う。Phase C ではまだ送信側がいない
-/// ので定数だけ置く。
+/// `WM_APP` band message: pacer thread notifies the UI thread of a vsync tick.
 pub const WM_APP_TICK: u32 = 0x8001;
 
-/// CI smoke test 用の auto-quit message。`--duration <millis>` が指定されたとき、
-/// boot.rs が別 thread で `thread::sleep(duration)` 後に `PostMessageW(hwnd,
-/// WM_APP_QUIT_TIMER, 0, 0)` を発行し、wndproc が受信して `PostQuitMessage(0)`
-/// に変換する。これにより `Ctrl+Alt+Q` 押下時と同じ graceful な終了 flow を
-/// 自動化できる (Phase α GUI smoke test、ADR-0004 系)。
+/// Auto-quit message for the CI smoke test. The wndproc converts it to
+/// `PostQuitMessage(0)`, matching the `Ctrl+Alt+Q` graceful shutdown.
 pub const WM_APP_QUIT_TIMER: u32 = 0x8002;
 
-/// `ForegroundHook` (SetWinEventHook) が前景アプリ変更を検出したときに UI
-/// thread へ通知するメッセージ。hook の callback は OS の hook thread から
-/// 呼ばれるので、UI thread 側で `SetWindowPos(HWND_TOPMOST)` を実行するため
-/// `PostMessageW` 経由でディスパッチする (ADR-0012)。
+/// Posted from the `ForegroundHook` callback (which runs on the OS hook thread)
+/// so the UI thread runs `SetWindowPos(HWND_TOPMOST)` on a foreground change.
 pub const WM_APP_REASSERT_TOPMOST: u32 = 0x8003;
 
 #[cfg(test)]

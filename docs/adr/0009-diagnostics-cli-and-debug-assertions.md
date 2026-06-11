@@ -1,19 +1,19 @@
 # 0009 — `linerule diagnostics` CLI 拡張と `debug_assertions` 哨戒
 
-**Status:** Accepted (Phase H, 2026-05-20).
+**Status:** Accepted (2026-05-20).
 
-**See also:** [[0004-coverage-policy]], [[0007-debug-build-and-panic-strategy]], [[0008-error-class-and-app-aggregator]]、Phase H plan の PR-E2。
+**See also:** [[0004-coverage-policy]], [[0007-debug-build-and-panic-strategy]], [[0008-error-class-and-app-aggregator]].
 
 ## 文脈
 
-Phase H の前半 PR-A〜E1 までで:
+これまでに:
 
-- `crash-<run_id>-*.json` に panic location + backtrace + `recent_events` tail (PR-D #52) が同梱されるようになり、
-- `events.jsonl` に `run_id` span field (PR-B #49) が乗るようになった。
+- `crash-<run_id>-*.json` に panic location + backtrace + `recent_events` tail が同梱されるようになり、
+- `events.jsonl` に `run_id` span field が乗るようになった。
 
 しかし開発者が「最新の crash を見たい」「直近の event tail を grep したい」とするとき、いまだに `%APPDATA%\linerule\` を手で開いて `jq` でパースする手数が要る。`just crash-latest` / `just logs-pretty` の helper はあるが、これは Windows host から呼ぶには WSL 経由などで不便。
 
-加えて `linerule-rs` には `#[cfg(debug_assertions)]` の使用が **ゼロ件** だった。Debug Build profile (`dist-dev`, PR-A #48) を `panic = "unwind"` にして `catch_unwind` 経路を実機検証可能にしたのに、その debug build で強化される invariant チェックが何もない。
+加えて `linerule-rs` には `#[cfg(debug_assertions)]` の使用が **ゼロ件** だった。debug build で強化される invariant チェックが何もない。
 
 ## 判断
 
@@ -59,7 +59,6 @@ Diagnostics {
 - `linerule-app/src/boot.rs`: `DiagnosticsArgs` struct + `print_last_crash` / `print_recent_events` 実装 (~130 LOC)
 - `linerule-platform-windows/src/overlay_state.rs::record_hotkey`: `debug_assert!` 追加 (~5 LOC)
 - `linerule-core/src/input/tick.rs::step`: `debug_assert!` 2 件追加 (~15 LOC)
-- Phase H の PR-E2 スコープ
 
 `linerule.exe diagnostics --last-crash` / `--recent-events 20` / `--data-dir` がローカルで使えるようになり、`just crash-latest` / `just logs-tail` の Windows host 等価機能が CLI に内製化される。
 
@@ -71,7 +70,7 @@ Diagnostics {
 
 ### B. JSON Lines を tail せず ring buffer を永続化
 
-却下: PR-D の `event_ring` は in-memory ring buffer で、プロセス再起動で消える。永続化は別 PR の責務 (将来 `event_ring::flush_to_file` を生やす余地)。`--recent-events` は当面 `events.jsonl.<today>` を tail する方が確実。
+却下: `event_ring` は in-memory ring buffer で、プロセス再起動で消える。永続化は別途の責務 (将来 `event_ring::flush_to_file` を生やす余地)。`--recent-events` は当面 `events.jsonl.<today>` を tail する方が確実。
 
 ### C. `debug_assert!` の代わりに `tracing::error!` で記録するだけ
 

@@ -5,11 +5,11 @@
 //! - [`perceptual`]: gamma-2.2 and CIE L\* curves used when mapping a stored
 //!   linear opacity to its on-screen alpha byte.
 //! - [`units`]: bounded numeric newtypes ([`Opacity`], [`DimLevel`],
-//!   [`Thickness`]).
+//!   [`Thickness`], [`BlurAmount`]).
 
 pub mod perceptual;
 pub mod rgba;
 pub mod units;
 
 pub use rgba::Rgba;
-pub use units::{DimLevel, Opacity, Thickness};
+pub use units::{BlurAmount, DimLevel, Opacity, Thickness};

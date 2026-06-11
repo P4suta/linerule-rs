@@ -154,6 +154,62 @@ impl Thickness {
     }
 }
 
+/// Backdrop-blur amount, stored as a perceptual *level* in `[1, 255]` and mapped
+/// to a Gaussian σ (logical px) on output via [`BlurAmount::to_std_dev`].
+///
+/// The stored byte is a level, not σ. Perceived blur follows Weber–Fechner
+/// (≈ `log σ`), so [`BlurAmount::to_std_dev`] spaces σ geometrically across the
+/// range, making uniform level steps feel uniform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct BlurAmount(u8);
+
+impl BlurAmount {
+    /// Smallest legal level (maps to the minimum σ, ~2 logical px — a
+    /// barely-there frosting).
+    pub const MIN: Self = Self(1);
+    /// Largest legal level (maps to the maximum σ, ~64 logical px — heavy
+    /// frosted glass).
+    pub const MAX: Self = Self(255);
+
+    /// Default level — `to_std_dev` ≈ 9 px.
+    pub const DEFAULT: Self = Self(111);
+
+    /// σ (logical px) at [`MIN`](Self::MIN) — a barely-there frosting.
+    const SIGMA_MIN_PX: f32 = 2.0;
+    /// σ (logical px) at [`MAX`](Self::MAX) — heavy frosted glass.
+    const SIGMA_MAX_PX: f32 = 64.0;
+    // Spell px values out in public docs: `SIGMA_*_PX` are private and rustdoc
+    // `-D warnings` rejects public→private intra-doc links.
+
+    /// Inner level byte in `[1, 255]` (a perceptual index, *not* σ — use
+    /// [`to_std_dev`](Self::to_std_dev) for the pixel radius).
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+
+    /// Add `delta` (signed) saturating against `[MIN, MAX]`. The delta is in
+    /// level units; geometric σ spacing makes equal deltas feel equal.
+    #[must_use]
+    pub fn saturating_add(self, delta: i32) -> Self {
+        let next = i32::from(self.0)
+            .saturating_add(delta)
+            .clamp(i32::from(Self::MIN.0), i32::from(Self::MAX.0));
+        u8::try_from(next).map_or(self, Self)
+    }
+
+    /// Gaussian σ in logical pixels for this level. σ is interpolated
+    /// *geometrically* between the σ bounds (~2 px at [`MIN`](Self::MIN) and
+    /// ~64 px at [`MAX`](Self::MAX)), so uniform level steps land on a
+    /// Weber–Fechner-uniform (constant-ratio) σ progression.
+    #[must_use]
+    pub fn to_std_dev(self) -> f32 {
+        let span = f32::from(Self::MAX.0 - Self::MIN.0);
+        let t = f32::from(self.0 - Self::MIN.0) / span; // [0, 1]
+        Self::SIGMA_MIN_PX * (Self::SIGMA_MAX_PX / Self::SIGMA_MIN_PX).powf(t)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,9 +242,6 @@ mod tests {
         assert_eq!(Thickness::DEFAULT.saturating_add(-99_999), Thickness::MIN);
     }
 
-    /// `Opacity::get` が constructor で渡した byte をそのまま返すことを pin
-    /// する。`saturating_add` 経由でしか間接的に踏まれていなかったので
-    /// `get -> u8 with 0/1` mutation が逃げていた (Phase ε mutation baseline)。
     #[test]
     fn opacity_get_returns_constructor_byte() {
         assert_eq!(Opacity::DEFAULT.get(), 0xAA);
@@ -197,7 +250,6 @@ mod tests {
         assert_eq!(Opacity::try_new(42).unwrap().get(), 42);
     }
 
-    /// 同上で `DimLevel::get`。`DEFAULT = 0xCC` を pin する。
     #[test]
     fn dim_level_get_returns_constructor_byte() {
         assert_eq!(DimLevel::DEFAULT.get(), 0xCC);
@@ -206,12 +258,69 @@ mod tests {
         assert_eq!(DimLevel::new(42).get(), 42);
     }
 
-    /// 同上で `Thickness::get`。
     #[test]
     fn thickness_get_returns_constructor_value() {
         assert_eq!(Thickness::DEFAULT.get(), 28);
         assert_eq!(Thickness::MIN.get(), 1);
         assert_eq!(Thickness::MAX.get(), 2048);
         assert_eq!(Thickness::try_new(100).unwrap().get(), 100);
+    }
+
+    #[test]
+    fn blur_amount_constants_are_pinned() {
+        assert_eq!(BlurAmount::MIN.get(), 1);
+        assert_eq!(BlurAmount::MAX.get(), 255);
+        assert_eq!(BlurAmount::DEFAULT.get(), 111);
+    }
+
+    #[test]
+    fn blur_amount_saturating_add_clamps() {
+        assert_eq!(BlurAmount::DEFAULT.saturating_add(8).get(), 119);
+        assert_eq!(BlurAmount::DEFAULT.saturating_add(-8).get(), 103);
+        assert_eq!(BlurAmount::DEFAULT.saturating_add(99_999), BlurAmount::MAX);
+        assert_eq!(BlurAmount::DEFAULT.saturating_add(-99_999), BlurAmount::MIN);
+    }
+
+    /// `DEFAULT` σ is ≈ 9 px.
+    #[test]
+    fn blur_amount_default_std_dev_reproduces_legacy_9px() {
+        let sigma = BlurAmount::DEFAULT.to_std_dev();
+        assert!(
+            (sigma - 9.0).abs() < 0.5,
+            "DEFAULT σ should be ≈ 9 px, got {sigma}"
+        );
+    }
+
+    /// Endpoint σ: MIN → 2 px, MAX → 64 px.
+    #[test]
+    fn blur_amount_endpoints_map_to_sigma_bounds() {
+        assert!((BlurAmount::MIN.to_std_dev() - 2.0).abs() < 1e-4);
+        assert!((BlurAmount::MAX.to_std_dev() - 64.0).abs() < 1e-3);
+    }
+
+    /// σ increases monotonically with level.
+    #[test]
+    fn blur_amount_std_dev_is_monotonic() {
+        let mut prev = BlurAmount::MIN.to_std_dev();
+        for lvl in 2..=255u8 {
+            let cur = BlurAmount(lvl).to_std_dev();
+            assert!(cur > prev, "σ must increase with level at {lvl}");
+            prev = cur;
+        }
+    }
+
+    /// Equal level steps yield equal σ ratios (Weber–Fechner): a +20 step has
+    /// the same σ ratio from any starting level.
+    #[test]
+    fn blur_amount_equal_steps_have_equal_sigma_ratio() {
+        let ratio =
+            |from: u8, by: u8| BlurAmount(from + by).to_std_dev() / BlurAmount(from).to_std_dev();
+        let low = ratio(40, 20);
+        let mid = ratio(120, 20);
+        let high = ratio(200, 20);
+        assert!(
+            (low - mid).abs() < 1e-3 && (mid - high).abs() < 1e-3,
+            "equal level steps must share a σ ratio: low={low} mid={mid} high={high}"
+        );
     }
 }

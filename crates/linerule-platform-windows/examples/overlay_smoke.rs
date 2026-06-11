@@ -1,4 +1,4 @@
-//! Phase C/D smoke test。
+//! Overlay smoke test。
 //!
 //! `cargo run --example overlay_smoke` (Windows host) で起動すると、
 //! プライマリモニタ全面を覆う透明 click-through オーバーレイが立ち上がり、
@@ -13,8 +13,8 @@
 //! - Alt+Tab に当オーバーレイが表示されない (`WS_EX_TOOLWINDOW` の効果)
 //! - 故意の panic を `WndProc` に挿しても overlay は生き続ける (`catch_unwind` の効果)
 //!
-//! Phase E/F の hotkey + tick 結線は `linerule.exe run` 側で検証する。本 example
-//! は最小構成（HWND + dcomp attach のみ）で `WndProc` の生存性を見る目的。
+//! hotkey + tick 結線は `linerule.exe run` 側で検証する。本 example は最小構成
+//! （HWND + dcomp attach のみ）で `WndProc` の生存性を見る目的。
 
 #![forbid(unsafe_code)]
 #![allow(

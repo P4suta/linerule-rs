@@ -22,7 +22,8 @@ lefthook := if inside == "1" { "lefthook" } else { docker_run + " lefthook" }
 taplo := if inside == "1" { "taplo" } else { docker_run + " taplo" }
 biome := if inside == "1" { "biome" } else { docker_run + " biome" }
 yamlfmt := if inside == "1" { "yamlfmt" } else { docker_run + " yamlfmt" }
-sh := if inside == "1" { "bash -lc" } else { docker_run + " bash -lc" }
+# Non-login shell: a login shell (`-lc`) re-inits PATH and drops cargo.
+sh := if inside == "1" { "bash -c" } else { docker_run + " bash -c" }
 bun := if inside == "1" { "bun" } else { docker_run + " bun" }
 bunx := if inside == "1" { "bunx" } else { docker_run + " bunx" }
 
@@ -202,21 +203,25 @@ machete:
 # ----- auto-generated docs (commit the output; lefthook checks drift) -----
 
 # Render dependency graph SVG (requires graphviz `dot`).
+# Plain `cargo`/`dot` inside `{{sh}}` — the sh wrapper already enters the
+# container; nesting `{{cargo}}` would double-exec.
 docs-dep-graph:
-    {{sh}} "{{cargo}} depgraph --workspace-only | dot -Tsvg > docs/dep-graph.svg"
+    {{sh}} "cargo depgraph --workspace-only | dot -Tsvg > docs/dep-graph.svg"
 
-# Render module tree to ASCII for each in-house crate.
+# Render module tree to ASCII for each in-house crate. NO_COLOR keeps the
+# committed files free of ANSI escapes (deterministic for the drift check).
+# linerule-platform-windows is cfg(windows) so it yields a minimal tree on Linux.
 docs-modules:
-    {{sh}} "{{cargo}} modules structure --package linerule-core > docs/modules/linerule-core.txt"
-    {{sh}} "{{cargo}} modules structure --package linerule-platform-windows > docs/modules/linerule-platform-windows.txt 2>/dev/null || true"
-    {{sh}} "{{cargo}} modules structure --package linerule-app > docs/modules/linerule-app.txt 2>/dev/null || true"
-    {{sh}} "{{cargo}} modules structure --package xtask > docs/modules/xtask.txt"
+    {{sh}} "NO_COLOR=1 cargo modules structure --package linerule-core > docs/modules/linerule-core.txt"
+    {{sh}} "NO_COLOR=1 cargo modules structure --package linerule-platform-windows > docs/modules/linerule-platform-windows.txt 2>/dev/null || true"
+    {{sh}} "NO_COLOR=1 cargo modules structure --package linerule-app > docs/modules/linerule-app.txt 2>/dev/null || true"
+    {{sh}} "NO_COLOR=1 cargo modules structure --package xtask > docs/modules/xtask.txt"
 
-# Sync `linerule-core` crate-level doc → README.md (marker block).
-# cargo-rdme reads `[package.metadata.cargo-rdme]` in the crate's Cargo.toml
-# to locate the README, so we just `cd` into the crate.
+# Sync `linerule-core` crate-level doc → README.md (marker block). The
+# `-r` path is passed explicitly; cargo-rdme 1.5 does not honor the
+# `readme-path` metadata key reliably.
 docs-readme:
-    {{sh}} "cd crates/linerule-core && {{cargo}} rdme --force"
+    {{sh}} "cd crates/linerule-core && cargo rdme --force -r ../../README.md"
 
 # Generate all the auto-docs in one go.
 docs: docs-dep-graph docs-modules docs-readme
@@ -263,7 +268,7 @@ cross-check:
     @echo "==> cargo xwin check --workspace --all-targets --target x86_64-pc-windows-msvc"
     {{cargo}} xwin check --workspace --all-targets --target x86_64-pc-windows-msvc
 
-# Iteration-quality cross build (NOT shippable — see ADR-0001 deployment notes).
+# Iteration-quality cross build (NOT shippable; native artifacts come from CI).
 publish-windows-cross:
     {{cargo}} xwin build --release --target x86_64-pc-windows-msvc -p linerule-app
 
@@ -333,7 +338,7 @@ _hook-xtask-dep-graph:
 
 _hook-docs-drift:
     just docs
-    {{sh}} "git diff --quiet docs/ README.md || (echo 'docs drift detected — run \\`just docs\\` and commit' >&2; exit 1)"
+    {{sh}} "git diff --quiet docs/ README.md || (echo 'docs drift detected — run: just docs, then stage docs/ and README.md' >&2; exit 1)"
 
 _hook-commitlint msg_path:
     {{bunx}} commitlint --edit {{msg_path}}

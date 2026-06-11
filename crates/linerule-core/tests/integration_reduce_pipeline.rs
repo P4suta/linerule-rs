@@ -5,7 +5,8 @@
 //! "press Ctrl+Alt+R three times in a row" without the OS layer.
 
 use linerule_core::{
-    Mode, OverlayAction, OverlaySample, Point, ScreenRect, State, frame, state::reduce,
+    Mode, OverlayAction, OverlaySample, Point, ScreenRect, State, SurroundEffect, frame,
+    state::reduce,
 };
 
 fn run(actions: &[OverlayAction]) -> State {
@@ -104,6 +105,30 @@ fn bump_then_undo_returns_to_starting_thickness() {
         start.config.thickness.get(),
         "bump + reverse bump should be an identity on thickness"
     );
+}
+
+#[test]
+fn cycle_effect_walks_surround_then_returns_when_mode_is_active() {
+    // CycleEffect only acts while a mode is on (mirrors the bump actions).
+    let start = State {
+        mode: Mode::Horizontal,
+        ..State::DEFAULT
+    };
+    assert_eq!(start.config.effect, SurroundEffect::DimBlack);
+    let (after_one, _) = reduce::apply(start, OverlayAction::CycleEffect);
+    assert_eq!(after_one.config.effect, SurroundEffect::WhiteWash);
+    let (after_two, _) = reduce::apply(after_one, OverlayAction::CycleEffect);
+    assert_eq!(after_two.config.effect, SurroundEffect::Blur);
+    let (after_three, _) = reduce::apply(after_two, OverlayAction::CycleEffect);
+    assert_eq!(after_three.config.effect, SurroundEffect::DimBlack);
+}
+
+#[test]
+fn cycle_effect_is_inert_in_off_mode() {
+    let before = State::DEFAULT; // mode Off
+    let (after, delta) = reduce::apply(before, OverlayAction::CycleEffect);
+    assert_eq!(before, after);
+    assert!(!delta.is_any());
 }
 
 #[test]

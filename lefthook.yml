@@ -63,6 +63,12 @@ pre-commit:
       glob: "{**/Cargo.toml,Cargo.lock}"
       run: just _hook-xtask-dep-graph
 
+    # Regenerate docs/ + README and fail if they drift from the source.
+    docs-drift:
+      tags: docs
+      glob: "{*.rs,**/Cargo.toml,Cargo.lock}"
+      run: just _hook-docs-drift
+
     # Rust ファイルが staged されているコミットでは clippy + rustdoc-check
     # + cross-check を走らせる。workspace の incremental compile が効くため
     # 通常は数秒で完了する。CI と同じゲートをローカル commit 時にも適用し、

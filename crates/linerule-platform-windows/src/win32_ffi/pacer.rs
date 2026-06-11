@@ -1,11 +1,11 @@
-//! `DwmFlush` + `PostMessageW` の薄い safe wrapper。
+//! Safe wrappers over `DwmFlush` + `PostMessageW`.
 //!
-//! Phase F の `render_clock.rs` から別 thread で `DwmFlush` を呼んで vsync を
-//! 待ち、`PostMessageW(target_hwnd, WM_APP_TICK, 0, 0)` で UI thread を起こす。
+//! `render_clock.rs` calls `DwmFlush` on a separate thread to wait for vsync,
+//! then `PostMessageW(target_hwnd, WM_APP_TICK, 0, 0)` to wake the UI thread.
 
 #![allow(
     unsafe_code,
-    reason = "FFI 境界。DwmFlush / PostMessageW は windows crate でも unsafe。ADR-0003。"
+    reason = "FFI boundary; DwmFlush/PostMessageW are unsafe in the windows crate."
 )]
 
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
@@ -14,21 +14,21 @@ use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
 use crate::error::{PlatformError, Result};
 
-/// `DwmFlush()` の薄い safe wrapper。次の vsync まで block する。
+/// Safe wrapper over `DwmFlush()`. Blocks until the next vsync.
 pub fn dwm_flush() -> Result<()> {
-    // SAFETY: DwmFlush は引数なしの blocking call。
+    // SAFETY: DwmFlush is an argument-free blocking call.
     unsafe { DwmFlush() }.map_err(|e| PlatformError::BadHr {
         operation: "DwmFlush",
         hr: e.code().0,
     })
 }
 
-/// `PostMessageW(hwnd, msg, 0, 0)` の薄い safe wrapper。
+/// Safe wrapper over `PostMessageW(hwnd, msg, 0, 0)`.
 ///
 /// # Errors
-/// `PostMessageW` が FALSE を返したとき。
+/// When `PostMessageW` returns FALSE.
 pub fn post_message(hwnd: HWND, msg: u32) -> Result<()> {
-    // SAFETY: hwnd valid (overlay window or hotkey host), msg は WM_APP_*
+    // SAFETY: hwnd valid (overlay window or hotkey host); msg is a WM_APP_*.
     unsafe { PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(0)) }.map_err(|e| {
         PlatformError::BadHr {
             operation: "PostMessageW",

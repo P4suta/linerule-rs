@@ -17,12 +17,12 @@ fn every_default_chord_parses_and_produces_nonzero_vk() {
     let map = HotkeyMap::DEFAULT;
     let cases: [(&str, &str); 9] = [
         ("cycle_mode", map.cycle_mode),
+        ("cycle_effect", map.cycle_effect),
         ("toggle_on_off", map.toggle_on_off),
         ("thicker", map.thicker),
         ("thinner", map.thinner),
         ("more_opaque", map.more_opaque),
         ("less_opaque", map.less_opaque),
-        ("style_cycle", map.style_cycle),
         ("toggle_hud", map.toggle_hud),
         ("quit", map.quit),
     ];
@@ -61,12 +61,12 @@ fn every_default_chord_display_round_trips() {
     let map = HotkeyMap::DEFAULT;
     for spec in [
         map.cycle_mode,
+        map.cycle_effect,
         map.toggle_on_off,
         map.thicker,
         map.thinner,
         map.more_opaque,
         map.less_opaque,
-        map.style_cycle,
         map.toggle_hud,
         map.quit,
     ] {
@@ -120,12 +120,12 @@ fn default_chords_are_pairwise_distinct() {
     let map = HotkeyMap::DEFAULT;
     let labeled = [
         ("cycle_mode", map.cycle_mode),
+        ("cycle_effect", map.cycle_effect),
         ("toggle_on_off", map.toggle_on_off),
         ("thicker", map.thicker),
         ("thinner", map.thinner),
         ("more_opaque", map.more_opaque),
         ("less_opaque", map.less_opaque),
-        ("style_cycle", map.style_cycle),
         ("toggle_hud", map.toggle_hud),
         ("quit", map.quit),
     ];

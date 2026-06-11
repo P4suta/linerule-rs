@@ -1,18 +1,14 @@
-//! WndProc dispatch ロジック (forbid(unsafe_code))。
+//! WndProc dispatch logic.
 //!
-//! 実 FFI 入口 `unsafe extern "system" fn overlay_wnd_proc` は `win32_ffi.rs`
-//! 側にあり、本ファイルは `dispatch()` 関数として呼び出される。WM_NCCREATE で
-//! `GWLP_USERDATA` に Box を仕込む処理も `win32_ffi.rs` 側にあるため、本
-//! ファイルでは取り出した state ref を使うだけで `unsafe` は出現しない。
+//! The FFI entry point `overlay_wnd_proc` lives in `win32_ffi.rs` and calls
+//! `dispatch()` here with an already-recovered state ref, so this file needs no
+//! `unsafe`.
 //!
-//! ## RefCell borrow ルール
-//!
-//! `OverlayWndState` の `RefCell` フィールドは本ファイル内でのみ
-//! `borrow_mut()` する。borrow 中に Win32 API の **同期再入**（`SendMessageW`
-//! / `DestroyWindow` / `MessageBoxW` 系）を呼ばないこと。`PostMessageW` /
-//! `PostQuitMessage` は async なので OK。違反時は `RefCell::borrow_mut` が
-//! panic し、`win32_ffi::overlay_wnd_proc` の `catch_unwind` が拾って
-//! `DefWindowProcW` にフォールバックする。
+//! RefCell rule: while a `borrow_mut()` is held, do NOT call a synchronously
+//! re-entrant Win32 API (`SendMessageW` / `DestroyWindow` / `MessageBoxW`);
+//! `PostMessageW` / `PostQuitMessage` are async and safe. A violation panics in
+//! `borrow_mut`, caught by `win32_ffi::overlay_wnd_proc`'s `catch_unwind`, which
+//! falls back to `DefWindowProcW`.
 
 #![forbid(unsafe_code)]
 
@@ -28,28 +24,25 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_RBUTTONDOWN,
 };
 
-use crate::composition_renderer::CompositionRenderer;
 use crate::cursor_tracker;
 use crate::error::{PlatformError, Result};
-use crate::hud_renderer::HudRenderer;
 use crate::messages::{HTTRANSPARENT, WM_APP_QUIT_TIMER, WM_APP_REASSERT_TOPMOST, WM_APP_TICK};
 use crate::monitor_info;
 use crate::overlay_state::OverlayWndState;
 use crate::win32_ffi;
 
-/// `WM_APP_TICK` の数値が `WM_APP` 帯にあることを const にしてリンカへ示す
-/// （`WM_APP` import 未使用警告を抑える兼ねた sanity check）。
+/// Asserts `WM_APP_TICK` is in the `WM_APP` band; also keeps the `WM_APP`
+/// import used.
 const _: () = assert!(WM_APP_TICK >= WM_APP);
 
-/// `NotifyRejected` toast の表示時間 (ms)。長押し repeat 中は dedup により
-/// 同一 toast の寿命が更新され続け、離してから 3 秒で消える。
+/// `NotifyRejected` toast lifetime (ms). While a repeatable hotkey is held the
+/// dedup keeps refreshing the same toast's lifetime; it fades 3 s after release.
 const REJECT_TOAST_MS: i64 = 3_000;
 
-/// WM_NCCREATE / WM_NCDESTROY 以外のメッセージを dispatch する純粋関数。
+/// Dispatch a message other than WM_NCCREATE / WM_NCDESTROY.
 ///
-/// 戻り値:
-/// - `Some(LRESULT)`: 当該メッセージを処理した。返り値はそのまま `WndProc` の戻り値になる。
-/// - `None`: 処理せず `DefWindowProcW` にフォールバックすることを呼び出し側に依頼。
+/// `Some(LRESULT)` is the WndProc result; `None` asks the caller to fall back
+/// to `DefWindowProcW`.
 #[must_use]
 pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     let state_ptr = win32_ffi::get_userdata(hwnd)?;
@@ -103,21 +96,14 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             Some(LRESULT(0))
         },
         WM_APP_QUIT_TIMER => {
-            // CI smoke test 用の auto-quit message (boot.rs の duration thread
-            // から発行)。`Ctrl+Alt+Q` 経由の Quit と同等の挙動として
-            // `PostQuitMessage(0)` を呼ぶ。
+            // Auto-quit timer (`--duration-ms`); same effect as a Quit hotkey.
             tracing::info!(parent: state.span(), "auto-quit timer fired (--duration-ms)");
             win32_ffi::post_quit(0);
             Some(LRESULT(0))
         },
         WM_DPICHANGED => {
-            // Per-Monitor DPI Aware V2 で受信。`lparam` は `RECT*` (OS が推奨
-            // する新 window rect、physical px ベースだが Win32 が logical 換算
-            // 済みで渡す)。`wparam` HIWORD/LOWORD は新 Y/X DPI (通常同値)。
-            // overlay は virtual-screen 全体に張られていて、DComp が compositor
-            // 側で per-monitor DPI を適用するため font/HUD layout の再計算は
-            // 不要 (DWrite text format は DIPs 入力, HudConfig は logical px)。
-            // ここでは OS 推奨 rect で SetWindowPos するだけ (issue #44)。
+            // Apply the OS-suggested rect; no font/HUD recalc needed since DComp
+            // applies per-monitor DPI in the compositor.
             let new_rect = win32_ffi::rect_from_wm_dpichanged_lparam(lparam);
             let width = new_rect.right.saturating_sub(new_rect.left);
             let height = new_rect.bottom.saturating_sub(new_rect.top);
@@ -145,10 +131,8 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             Some(LRESULT(0))
         },
         WM_DISPLAYCHANGE => {
-            // 解像度や monitor 構成が変化した。active monitor cache は
-            // `apply_tick::follow_active_monitor` (issue #46) で per-tick に
-            // 再解決されるため invalidate 不要。event の可観測性のため log
-            // だけ残し DefWindowProcW にフォールバックする。
+            // No cache to invalidate; the active monitor is re-resolved per tick
+            // by `follow_active_monitor`. Log only, then fall back.
             let bpp = u32::try_from(wparam.0 & 0xFFFF).unwrap_or(0);
             tracing::info!(
                 target: "monitor.displaychange",
@@ -159,11 +143,11 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             None
         },
         WM_APP_REASSERT_TOPMOST => {
-            // ForegroundHook の callback (OS hook thread) から PostMessage で
-            // 届く。実 SetWindowPos(HWND_TOPMOST) は UI thread 必須なのでここで
-            // 実行する (ADR-0012)。
-            // 既に topmost バンドに居る場合は reassert_topmost が no-op で
-            // 帰る (不要な SetWindowPos による z-order churn / チラつき防止)。
+            // Posted by the ForegroundHook callback; the actual
+            // SetWindowPos(HWND_TOPMOST) must run on the UI thread, so do it
+            // here. When the window already sits in the topmost band,
+            // reassert_topmost returns as a no-op (avoids z-order churn /
+            // flicker from redundant SetWindowPos calls).
             if let Err(e) = win32_ffi::accessibility::reassert_topmost(hwnd) {
                 tracing::warn!(parent: state.span(), error = %e,
                     "reassert_topmost failed (foreground hook)");
@@ -174,9 +158,7 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             Some(LRESULT(0))
         },
         WM_PAINT => {
-            // dcomp が描画を駆動するので WM_PAINT で paint する必要はない。
-            // DefWindowProcW が ValidateRect 相当の処理をしてくれるが、明示的に
-            // 0 を返してログ noise を避ける。
+            // DComp drives drawing; return 0 to validate without painting.
             Some(LRESULT(0))
         },
         WM_DESTROY => {
@@ -184,8 +166,7 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             Some(LRESULT(0))
         },
         WM_NCDESTROY => {
-            // `Box<OverlayWndState>` を取り戻して drop。win32_ffi 側で
-            // GWLP_USERDATA を 0 に戻し Box::from_raw する。
+            // Reclaim and drop the `Box<OverlayWndState>` (clears GWLP_USERDATA).
             let _ = win32_ffi::take_userdata(hwnd);
             None
         },
@@ -193,15 +174,14 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
     }
 }
 
-/// `WM_HOTKEY` の `wparam` は hotkey ID（`RegisterHotKey` で渡した `i32`）。
-/// usize → i32 への lossy 変換を 1 箇所に閉じ込める。
+/// The `WM_HOTKEY` `wparam` is the hotkey id; confines the lossy usize → i32
+/// conversion to one place.
 fn wparam_as_hotkey_id(wparam: WPARAM) -> i32 {
     i32::try_from(wparam.0).unwrap_or(i32::MAX)
 }
 
-/// 1 tick 分の処理: cursor poll → hotkey drain → `tick::step` → `apply_effects`。
-/// frame timing は先頭で `Instant::now()` を取り、末尾の elapsed を
-/// `FrameTimingTracker::record_tick` に流す (HUD telemetry の p99 / drops 用)。
+/// One tick: cursor poll → hotkey drain → `tick::step` → `apply_effects`. The
+/// elapsed time is fed to `FrameTimingTracker::record_tick` for HUD telemetry.
 fn apply_tick(state: &OverlayWndState) -> Result<()> {
     let tick_start = std::time::Instant::now();
     let polled_cursor = cursor_tracker::poll();
@@ -227,10 +207,9 @@ fn apply_tick(state: &OverlayWndState) -> Result<()> {
     result
 }
 
-/// cursor 位置から active monitor を解決し、現 cache と異なれば
-/// `state.set_monitor` で更新する (issue #46)。`bounds_for_point` は
-/// `MonitorFromPoint(MONITOR_DEFAULTTONEAREST)` 経由で remote desktop 等の
-/// 画面外 cursor にも fallback する。失敗時は warn だけ出して現状維持。
+/// Resolve the active monitor from the cursor and update `state` if it changed.
+/// `bounds_for_point` uses `MONITOR_DEFAULTTONEAREST`, so an off-screen cursor
+/// still maps to a monitor. On error, warn and keep the previous monitor.
 fn follow_active_monitor(state: &OverlayWndState, polled_cursor: Option<Point<Logical>>) {
     let Some(cursor) = polled_cursor else {
         return;
@@ -257,8 +236,8 @@ fn follow_active_monitor(state: &OverlayWndState, polled_cursor: Option<Point<Lo
     }
 }
 
-/// elapsed が `RenderConfig::DEFAULT.warn_ratio * (1000 / refresh_hz)` を
-/// 超えたら over-budget と判定する。値は HUD の `drops` カウンタに反映される。
+/// True if `elapsed` exceeds `warn_ratio * (1000 / refresh_hz)` ms; counts
+/// toward the HUD `drops` counter.
 fn is_over_budget(elapsed: std::time::Duration, refresh_hz: u32) -> bool {
     let hz = refresh_hz.max(1);
     let warn_ratio = linerule_core::RenderConfig::DEFAULT.warn_ratio;
@@ -266,7 +245,7 @@ fn is_over_budget(elapsed: std::time::Duration, refresh_hz: u32) -> bool {
     elapsed.as_secs_f64() * 1000.0 > budget_ms
 }
 
-/// `TickEffect` を順に platform へ反映する。
+/// Apply each `TickEffect` to the platform in order.
 fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> {
     for effect in effects {
         match *effect {
@@ -315,12 +294,11 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                 cursor,
                 envelope,
             } => {
-                // cursor 距離から fade opacity を pure 関数で計算し、HUD の
-                // フェードエンベロープ (起動 / チップ⇄フル切替) を乗算して
-                // `IDCompositionVisual3::SetOpacity2` で multiplicative に
-                // 適用する (issue #47)。`frame.opacity` の bake (色 alpha) は
-                // RefreshHud 側で別軸として保持されるので、cursor 移動や
-                // エンベロープ進行だけでは surface 再描画は走らない。
+                // Compute fade opacity from cursor distance (pure function),
+                // multiply in the HUD fade envelope (startup / chip ⇄ full
+                // swap), and apply it via `SpriteVisual::SetOpacity`; cursor
+                // moves and envelope progress alone don't redraw the surface
+                // (the baked color alpha is handled by RefreshHud).
                 let distance = hud_fade::compute_opacity(
                     s,
                     cursor,
@@ -368,9 +346,8 @@ fn apply_hud_frame(state: &OverlayWndState, frame: &HudFrame) -> Result<()> {
     Ok(())
 }
 
-/// `HudRenderer::set_opacity` の wndproc-side wrapper。`RefCell` の `borrow_mut`
-/// を 1 箇所に閉じ込め、renderer 未 attach の起動直後 (Phase D 前) でも no-op
-/// で済むようにする。
+/// Wndproc-side wrapper for `WinrtHudRenderer::set_opacity`; no-op before the
+/// renderer is attached.
 fn apply_hud_opacity(state: &OverlayWndState, opacity: f32) -> Result<()> {
     if let Some(renderer) = state.hud_renderer().borrow_mut().as_mut() {
         renderer.set_opacity(opacity)?;
@@ -378,14 +355,12 @@ fn apply_hud_opacity(state: &OverlayWndState, opacity: f32) -> Result<()> {
     Ok(())
 }
 
-/// `apply_overlay_frame` / `apply_hud_frame` を device-lost rebuild で wrap する
-/// (issue #45)。失敗 HRESULT が DXGI/D2D の device-lost 系なら一度 renderer を
-/// 作り直して 1 度だけ retry する。連続 3 回で `OverlayAction::Quit` を要求。
+/// Wrap a render op with device-lost recovery: on a device-lost HRESULT,
+/// rebuild the renderers and retry once; Quit after 3 consecutive failures.
 ///
-/// `op` は `Fn(&OverlayWndState) -> Result<()>` で、`apply_*_frame` ヘルパーを
-/// 渡す。closure 内で `borrow_mut` を `if let` scope に閉じ込めているので、
-/// Err 復帰時には borrow は drop 済み → `install_renderer` で再 borrow しても
-/// `BorrowMutError` にならない (overlay_state.rs の RefCell 不変条件)。
+/// `op` must release its `borrow_mut` before returning Err (the `apply_*_frame`
+/// helpers scope it to an `if let`), so the rebuild can re-borrow without a
+/// `BorrowMutError` (see overlay_state.rs RefCell rule).
 fn with_device_lost_recovery(
     state: &OverlayWndState,
     operation: &'static str,
@@ -393,7 +368,6 @@ fn with_device_lost_recovery(
 ) -> Result<()> {
     match op(state) {
         Ok(()) => {
-            // 成功で連続失敗カウンタを reset。
             state.device_lost_count().set(0);
             Ok(())
         },
@@ -428,8 +402,8 @@ fn with_device_lost_recovery(
                         tracing::error!(parent: state.span(), error = %send_err,
                             "failed to send Quit after device-lost exhaustion");
                     }
-                    // Quit 経路は async (次 tick で drain される) なので、この
-                    // tick の Err は propagate して caller に通知する。
+                    // Quit is async (drained next tick); still propagate this
+                    // tick's Err to the caller.
                     Err(e)
                 },
             }
@@ -437,7 +411,7 @@ fn with_device_lost_recovery(
     }
 }
 
-/// `PlatformError::BadHr` を分解して、device-lost 系 HRESULT であれば値を返す。
+/// The HRESULT from a `PlatformError::BadHr`, if it is a device-lost code.
 fn device_lost_hr(e: &PlatformError) -> Option<i32> {
     match e {
         PlatformError::BadHr { hr, .. } if is_device_lost_hresult(*hr) => Some(*hr),
@@ -445,28 +419,25 @@ fn device_lost_hr(e: &PlatformError) -> Option<i32> {
     }
 }
 
-/// CompositionRenderer + HudRenderer を新規構築して state に install し直す
-/// (issue #45)。古い renderer は `install_*` で差し替えられた時点で Drop され、
-/// 古い COM オブジェクト (pipeline / visual / surface) は RAII で Release される。
+/// Rebuild the overlay + HUD renderers and reinstall them. The old renderers
+/// Drop on replacement, releasing their COM objects.
 fn rebuild_renderers(state: &OverlayWndState) -> Result<()> {
     let hwnd = state.hwnd().ok_or(PlatformError::NullHandle {
         operation: "rebuild_renderers: HWND unset",
     })?;
-    let new_renderer = CompositionRenderer::new(hwnd)?;
-    let new_hud = HudRenderer::new(new_renderer.pipeline(), state.hud_config())?;
-    state.install_renderer(new_renderer);
-    state.install_hud_renderer(new_hud);
+    let (overlay, hud) = crate::renderer_backend::build_backends(hwnd, state.hud_config())?;
+    state.install_renderer(overlay);
+    state.install_hud_renderer(hud);
     tracing::info!(
         target: "renderer.device_lost",
         parent: state.span(),
+        backend = "winrt",
         "renderers rebuilt successfully"
     );
     Ok(())
 }
 
-/// `OverlayWndState` の hotkey 競合一覧 + 即時 toast を `HudNotification` の
-/// 列に変換する。`hud_frame()` 側でレイアウト計算する純粋関数フローに統合
-/// する (旧 `append_conflict_rows` の責務移譲、ADR-0009)。
+/// Build the `HudNotification` list from hotkey conflicts plus live toasts.
 fn build_notifications(state: &OverlayWndState) -> Vec<linerule_core::HudNotification> {
     let conflicts = state.hotkey_conflicts();
     let mut out = Vec::with_capacity(conflicts.len() + 1);
@@ -488,19 +459,18 @@ fn build_notifications(state: &OverlayWndState) -> Vec<linerule_core::HudNotific
             });
         }
     }
-    // 短寿命 runtime notifications (push_notification 経由) は OverlayWndState 側
-    // で expire 済みを除去した snapshot を取得して結合する。
     out.extend(state.live_notifications());
     out
 }
 
-/// 適用済み `HudFrame` の実パネル矩形を `ScreenRect<Logical>` (i32) に丸める。
-/// `compute_opacity` の距離フェード対象として `OverlayWndState` にキャッシュ
-/// される (チップ / フルでサイズが変わるため、config からの再計算では足りない)。
+/// Round an applied `HudFrame`'s actual panel rect to `ScreenRect<Logical>`
+/// (i32). Cached on `OverlayWndState` as the distance-fade target for
+/// `compute_opacity` (the panel size differs between chip and full tier, so
+/// recomputing from config is not enough).
 fn panel_rect_of(frame: &HudFrame) -> ScreenRect<Logical> {
     #[allow(
         clippy::cast_possible_truncation,
-        reason = "screen-space px; round の結果は i32 範囲内"
+        reason = "screen-space px fit the f32 mantissa; rounded result stays in i32 range"
     )]
     let left = frame.panel_left.round() as i32;
     #[allow(clippy::cast_possible_truncation, reason = "ditto")]
@@ -508,7 +478,7 @@ fn panel_rect_of(frame: &HudFrame) -> ScreenRect<Logical> {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "パネル寸法は正の screen-space px"
+        reason = "panel dimensions are positive screen-space px"
     )]
     let w = frame.panel_width.round().max(0.0) as u32;
     #[allow(
@@ -530,13 +500,11 @@ mod tests {
     fn wparam_to_id_truncates_safely() {
         assert_eq!(wparam_as_hotkey_id(WPARAM(1)), 1);
         assert_eq!(wparam_as_hotkey_id(WPARAM(7)), 7);
-        // usize::MAX を渡しても i32::MAX に潰れて panic しない
+        // usize::MAX saturates to i32::MAX without panicking.
         assert_eq!(wparam_as_hotkey_id(WPARAM(usize::MAX)), i32::MAX);
     }
 
-    /// `wparam_as_hotkey_id` の境界条件: `i32::MAX` 以下の usize は完全保存、
-    /// それを超える値は `i32::MAX` に saturate。負値はそもそも usize なので
-    /// 起こらない。proptest で全範囲を網羅する。
+    /// Boundary: `i32::MAX` passes through exactly.
     #[test]
     fn wparam_to_id_at_i32_max_boundary_is_preserved() {
         assert_eq!(
@@ -547,7 +515,7 @@ mod tests {
     }
 
     proptest! {
-        /// 任意の usize 入力に対し、戻り値が `[0, i32::MAX]` の範囲に必ず収まる。
+        /// The result always lies in `[0, i32::MAX]`.
         #[test]
         fn wparam_to_id_stays_in_i32_positive_range(raw in any::<usize>()) {
             let id = wparam_as_hotkey_id(WPARAM(raw));
@@ -555,14 +523,14 @@ mod tests {
             prop_assert!(id <= i32::MAX);
         }
 
-        /// `i32::MAX` 以下の値は完全保存される (lossless round-trip)。
+        /// Values up to `i32::MAX` are preserved exactly.
         #[test]
         fn wparam_to_id_preserves_small_values(small in 0i32..=i32::MAX) {
             let id = wparam_as_hotkey_id(WPARAM(small as usize));
             prop_assert_eq!(id, small);
         }
 
-        /// `i32::MAX` を超える値はすべて `i32::MAX` に saturate する。
+        /// Values above `i32::MAX` saturate to `i32::MAX`.
         #[test]
         fn wparam_to_id_saturates_above_i32_max(huge in (i32::MAX as usize + 1)..=usize::MAX) {
             let id = wparam_as_hotkey_id(WPARAM(huge));

@@ -6,80 +6,33 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::color::{Opacity, Rgba, Thickness};
+use crate::color::{BlurAmount, Opacity, Rgba, Thickness};
+use crate::state::SurroundEffect;
 
-/// How the area *outside* the slit is rendered.
-///
-/// The canonical cycle is `Dim → Bright → Dim`. `Blur` is reserved for a
-/// future Gaussian-blur surround; it is intentionally left out of [`cycle`]
-/// and is not yet drawn by the platform layer (the renderer falls back to a
-/// tinted solid). The planned blur path (screen capture → D2D
-/// `CLSID_D2D1GaussianBlur` → tinted overlay) is described on
-/// [`crate::render::Brush::Blur`] and in the README.
-///
-/// [`cycle`]: SurroundStyle::cycle
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SurroundStyle {
-    /// Darken the surround (the original behavior): a translucent dark mask.
-    #[default]
-    Dim,
-    /// Wash the surround in a light/near-white veil instead of darkening it.
-    Bright,
-    /// Reserved: blur the surround. Not part of [`SurroundStyle::cycle`] yet
-    /// and not implemented in the renderer (falls back to a solid tint).
-    Blur,
-}
-
-impl SurroundStyle {
-    /// Advance to the next *implemented* style (`Dim → Bright → Dim`).
-    ///
-    /// `Blur` is reserved and excluded from the cycle until its render path
-    /// lands; if a config somehow holds `Blur`, cycling normalizes it back to
-    /// `Dim`. Enabling blur later is a one-line change here.
-    #[must_use]
-    pub const fn cycle(self) -> Self {
-        match self {
-            Self::Dim => Self::Bright,
-            Self::Bright | Self::Blur => Self::Dim,
-        }
-    }
-
-    /// Style crossfade target for the renderer's `style_mix` channel:
-    /// `Dim` = `0`, `Bright` = `255`. The reserved `Blur` falls back to the
-    /// dim mask (= `0`), matching the solid-tint fallback in the renderer.
-    #[must_use]
-    pub const fn mix_target(self) -> u8 {
-        match self {
-            Self::Dim | Self::Blur => 0,
-            Self::Bright => u8::MAX,
-        }
-    }
-}
-
-/// Mask color + thickness + opacity + surround style. Composed into a
+/// Surround effect + thickness + opacity + blur amount. Composed into a
 /// [`crate::state::State`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OverlayConfig {
-    /// Color of the dim layers above and below (or beside) the slit.
-    pub mask_color: Rgba,
+    /// Treatment of the region around the slit (mask color is derived from it).
+    pub effect: SurroundEffect,
     /// Slit width in logical pixels.
     pub thickness: Thickness,
-    /// Mask opacity (perceptual-mapped on output).
+    /// Mask opacity (perceptual-mapped on output). Inert under the `Blur`
+    /// effect — see [`blur`](Self::blur).
     pub opacity: Opacity,
-    /// How the surround (everything but the slit) is rendered.
-    #[serde(default)]
-    pub surround_style: SurroundStyle,
+    /// Backdrop-blur amount (Gaussian σ, logical px). Only meaningful under the
+    /// `Blur` effect, where the opacity hotkeys retarget onto it.
+    pub blur: BlurAmount,
 }
 
 impl OverlayConfig {
-    /// Default mask: `DEFAULT_MASK` × `Thickness::DEFAULT` × `Opacity::DEFAULT`
-    /// × `SurroundStyle::Dim`.
+    /// Default surround: `DimBlack` × `Thickness::DEFAULT` × `Opacity::DEFAULT`
+    /// × `BlurAmount::DEFAULT`.
     pub const DEFAULT: Self = Self {
-        mask_color: Rgba::DEFAULT_MASK,
+        effect: SurroundEffect::DimBlack,
         thickness: Thickness::DEFAULT,
         opacity: Opacity::DEFAULT,
-        surround_style: SurroundStyle::Dim,
+        blur: BlurAmount::DEFAULT,
     };
 }
 
@@ -302,7 +255,7 @@ impl HudColors {
     /// `background.alpha` is `0xEB` (≈ 92%): a slight translucency lets the
     /// desktop / overlay mask breathe through the panel (Fluent-style acrylic
     /// feel) while staying dark enough that text contrast is unaffected. The
-    /// HUD sits on top of the overlay mask in `DComp` z-order, so the mask
+    /// HUD sits on top of the overlay mask in composition z-order, so the mask
     /// darkens the panel marginally when active — intended. Per-frame fade is
     /// still applied via [`HudConfig::base_opacity`] / `compute_opacity` on
     /// top of this.
@@ -406,7 +359,7 @@ impl Default for HudConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(
     clippy::struct_field_names,
-    reason = "ミリ秒単位を field 名で明示する (`_ms` suffix) 方が呼び出し側の誤用を防ぐ"
+    reason = "the `_ms` suffix spells out the unit at every call site"
 )]
 pub struct AnimConfig {
     /// Show/hide, mode switch, and style crossfade duration.
@@ -437,10 +390,8 @@ impl Default for AnimConfig {
     }
 }
 
-/// Root configuration aggregate. Per ADR-0015 this is a compile-time
-/// constant; there is no runtime config-file load path.
-//
-// `Deserialize` is omitted; see [`HudFonts`].
+/// Root configuration aggregate. Compile-time constant; no runtime config-file
+/// load path. `Deserialize` is omitted; see [`HudFonts`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct UserConfig {
     /// Overlay (mask + slit) configuration.
@@ -479,12 +430,9 @@ impl Default for UserConfig {
 mod tests {
     use super::*;
 
-    // cs parity: HUD's base opacity is 0.875. Pinning this default closes a
-    // mutation-gate hole — `HudConfig::DEFAULT.base_opacity` is otherwise only
-    // sampled by the platform layer's render path, which mutation testing can
-    // perturb without any in-process test catching the regression.
+    // base_opacity is otherwise only read by the platform render path; pin it here.
     #[test]
-    fn hud_default_base_opacity_is_pinned_at_cs_value() {
+    fn hud_default_base_opacity_is_pinned() {
         assert!((HudConfig::DEFAULT.base_opacity - 0.875).abs() < f32::EPSILON);
     }
 
@@ -515,19 +463,15 @@ mod tests {
     }
 
     #[test]
-    fn surround_style_default_is_dim() {
-        assert_eq!(SurroundStyle::default(), SurroundStyle::Dim);
-        assert_eq!(OverlayConfig::DEFAULT.surround_style, SurroundStyle::Dim);
+    fn overlay_default_effect_is_dim_black_with_default_blur() {
+        use crate::color::BlurAmount;
+        use crate::state::SurroundEffect;
+        assert_eq!(OverlayConfig::DEFAULT.effect, SurroundEffect::DimBlack);
+        assert_eq!(OverlayConfig::DEFAULT.blur, BlurAmount::DEFAULT);
     }
 
-    #[test]
-    fn surround_style_cycle_toggles_dim_and_bright() {
-        assert_eq!(SurroundStyle::Dim.cycle(), SurroundStyle::Bright);
-        assert_eq!(SurroundStyle::Bright.cycle(), SurroundStyle::Dim);
-    }
-
-    /// アニメ既定値を pin する。「速く・控えめ」の設計制約: 全トランジション
-    /// 200ms 未満。値が伸びる方向の変更 (もたつき) を検知する。
+    /// Pin the animation defaults. Design constraint "fast, subtle": every
+    /// transition stays under 200 ms; catches changes that drift sluggish.
     #[test]
     fn anim_defaults_are_pinned_under_200ms() {
         let a = AnimConfig::DEFAULT;
@@ -536,33 +480,5 @@ mod tests {
         assert_eq!(a.hud_swap_ms, 140);
         assert_eq!(a.startup_full_hud_ms, 5_000);
         assert!(a.overlay_fade_ms < 200 && a.value_glide_ms < 200 && a.hud_swap_ms < 200);
-    }
-
-    /// `mix_target` の対応を pin する: Dim=0 / Bright=255 / Blur=0 (dim fallback)。
-    #[test]
-    fn surround_style_mix_target_mapping_is_pinned() {
-        assert_eq!(SurroundStyle::Dim.mix_target(), 0);
-        assert_eq!(SurroundStyle::Bright.mix_target(), 255);
-        assert_eq!(SurroundStyle::Blur.mix_target(), 0);
-    }
-
-    #[test]
-    fn surround_style_cycle_normalizes_reserved_blur_to_dim() {
-        // `Blur` is reserved and not part of the user-facing cycle yet.
-        assert_eq!(SurroundStyle::Blur.cycle(), SurroundStyle::Dim);
-    }
-
-    #[test]
-    fn overlay_config_deserializes_without_surround_style_field() {
-        // `#[serde(default)]` keeps older payloads (pre-surround_style) loadable.
-        // Build the payload by stripping the key from a serialized DEFAULT so the
-        // test stays agnostic to the inner field representations.
-        let mut value = serde_json::to_value(OverlayConfig::DEFAULT).expect("serialize");
-        value
-            .as_object_mut()
-            .expect("config serializes as a JSON object")
-            .remove("surround_style");
-        let cfg: OverlayConfig = serde_json::from_value(value).expect("legacy config loads");
-        assert_eq!(cfg.surround_style, SurroundStyle::Dim);
     }
 }

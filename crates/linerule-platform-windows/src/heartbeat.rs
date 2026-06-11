@@ -1,5 +1,5 @@
-//! 周期的に「アプリ動いてるよ」イベントを `tracing::info!(target = "Heartbeat")`
-//! に流す bg thread。`Drop` で停止。
+//! Background thread that periodically logs a liveness event to
+//! `tracing::info!(target = "Heartbeat")`. Stops on `Drop`.
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
@@ -9,14 +9,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-/// `Drop` で停止する heartbeat thread。
+/// Heartbeat thread; stops on `Drop`.
 pub struct Heartbeat {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
 impl Heartbeat {
-    /// 5 秒ごとに heartbeat を吐く thread を起動する。
+    /// Spawn a thread that emits a heartbeat every 5 seconds.
     #[must_use]
     pub fn spawn() -> Self {
         let stop = Arc::new(AtomicBool::new(false));
@@ -43,7 +43,7 @@ fn heartbeat_loop(stop: Arc<AtomicBool>) {
     let interval = Duration::from_secs(5);
     while !stop.load(Ordering::Acquire) {
         tracing::info!(target: "Heartbeat", "alive");
-        // 1 秒刻みで stop を確認しつつ 5 秒待つ
+        // Wait 5s, checking the stop flag each second.
         for _ in 0..5 {
             if stop.load(Ordering::Acquire) {
                 break;

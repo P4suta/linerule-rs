@@ -1,28 +1,20 @@
-//! D3D11 + DXGI + D2D + DirectComposition の薄い safe wrapper。
+//! Safe wrapper over the D3D11 + DXGI + D2D device stack.
 //!
-//! Phase D で `linerule-platform-windows/composition_renderer.rs` から呼ばれる。
-//! ここで COM オブジェクト型 (windows crate の `IDCompositionDesktopDevice` 等)
-//! を保持・操作する unsafe を全部吸収し、composition_renderer は
-//! `#![forbid(unsafe_code)]` で safe な状態遷移だけ書く。
+//! The WinRT composition host (`win32_ffi::composition`) sits on this stack.
+//! Confines COM-object-creation `unsafe` here so composition / renderer code can
+//! stay `#![forbid(unsafe_code)]`.
 //!
-//! Windows-only。Linux 上では `cfg(target_os = "windows")` でビルドされない。
+//! Windows-only; not built on Linux via `cfg(target_os = "windows")`.
 
 #![allow(
     unsafe_code,
-    reason = "FFI 境界。D3D11 / DXGI / D2D / DComposition の各 COM API は\
-              windows crate でも全部 unsafe。ADR-0003 で集約。"
+    reason = "FFI boundary; D3D11/DXGI/D2D COM APIs are all unsafe in the windows crate."
 )]
 
-use linerule_core::Rgba;
-use windows::Win32::Foundation::{HMODULE, HWND};
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
-};
+use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_BITMAP_OPTIONS, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET,
-    D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext,
-    ID2D1Factory1,
+    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0,
@@ -30,78 +22,33 @@ use windows::Win32::Graphics::Direct3D::{
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device,
 };
-use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice2, IDCompositionDesktopDevice, IDCompositionDevice,
-    IDCompositionSurface, IDCompositionTarget, IDCompositionVisual2, IDCompositionVisual3,
-};
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_PREMULTIPLIED as DXGI_ALPHA_MODE_PREMULTIPLIED_BC, DXGI_FORMAT_B8G8R8A8_UNORM,
-};
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
-use windows::core::{IUnknown, Interface};
-use windows_numerics::Matrix3x2;
+use windows::core::Interface;
 
 use crate::error::{PlatformError, Result};
 
-/// D3D11 + DXGI + D2D + DComp の生 COM ハンドル束。 `CompositionRenderer` から
-/// 所有される。 各フィールドは `windows` crate の COM type で、`Drop` で
-/// 自動 Release される。
-pub struct DcompPipeline {
-    /// D3D11 デバイス。BGRA + ハードウェアドライバ。D2D とリソースを共有する。
+/// The D3D11 + DXGI + D2D device set; shared stack the WinRT composition host
+/// sits on.
+pub struct D2dStack {
+    /// D3D11 device (BGRA + hardware).
     pub d3d11: ID3D11Device,
-    /// D3D11 デバイスを `IDXGIDevice` にキャストしたもの。D2D ファクトリに渡す。
+    /// `IDXGIDevice` view.
     pub dxgi: IDXGIDevice,
-    /// D2D1 ファクトリ。シングルスレッド設定。
+    /// D2D1 factory (single-threaded).
     pub d2d_factory: ID2D1Factory1,
-    /// D2D デバイス。`d2d_factory.CreateDevice(&dxgi)` で得る。
+    /// D2D device.
     pub d2d_device: ID2D1Device,
-    /// D2D デバイスコンテキスト。`fill_surface` で `BeginDraw` / `Clear` 等を呼ぶ。
+    /// D2D device context.
     pub d2d_context: ID2D1DeviceContext,
-    /// DirectComposition デスクトップデバイス。`CreateSurface` / `CreateVisual` の主体。
-    pub dcomp: IDCompositionDesktopDevice,
-    /// HWND と紐づいた composition target。Drop で composition が切り離される。
-    pub target: IDCompositionTarget,
-    /// ルートビジュアル。直接の子は `overlay_root` と `hud_root` の 2 つだけ。
-    /// 外から触らせない (子の追加順で z-order が決まるため、ここに直接追加すると
-    /// HUD/overlay の前後関係が崩れる)。構築後は直接参照しないが、
-    /// `IDCompositionTarget::SetRoot` が AddRef しても自前で寿命を握っておく
-    /// ため pipeline と同じ寿命で保持する。
-    #[allow(
-        dead_code,
-        reason = "RAII で root visual の寿命を pipeline と同期させるための owner"
-    )]
-    pub(crate) root: IDCompositionVisual2,
-    /// overlay slit (dim + indicator) 用の中間ビジュアル。`CompositionRenderer`
-    /// がこの下にプール layer を AddVisual する。`root` 側で `hud_root` より
-    /// 先に attach されるので、内部で何枚追加しても HUD より背面に固定される。
-    pub overlay_root: IDCompositionVisual2,
-    /// HUD パネル用の中間ビジュアル。`HudRenderer` がこの下に panel visual を
-    /// AddVisual する。`root` 側で `overlay_root` より後に attach されるので、
-    /// 常に overlay の前面に表示される (HUD が暗幕に隠れない保証)。
-    pub hud_root: IDCompositionVisual2,
 }
 
-/// Overlay HWND に dcomp visual tree を attach するパイプライン生成。
+/// Creates D3D11 → DXGI → D2D factory → D2D device → D2D context.
 ///
-/// 流れ:
-/// 1. `D3D11CreateDevice(HARDWARE, BGRA_SUPPORT)` で BGRA 対応の D3D11 デバイスを得る
-/// 2. それを `IDXGIDevice` にキャスト
-/// 3. `D2D1CreateFactory::<ID2D1Factory1>()` でファクトリ
-/// 4. `factory.CreateDevice(&dxgi)` で D2D デバイス
-/// 5. `d2d_device.CreateDeviceContext(NONE)` で D2D コンテキスト
-/// 6. `DCompositionCreateDevice2::<IDCompositionDevice2>(d2d_device)` でコンポジションデバイス、
-///    `cast::<IDCompositionDesktopDevice>()` でデスクトップ機能を取得
-/// 7. `CreateTargetForHwnd(hwnd, topmost=true)` でターゲット
-/// 8. `CreateVisual()` でルートビジュアル
-/// 9. `target.SetRoot(root)` で連結
-/// 10. `overlay_root` / `hud_root` の 2 サブビジュアルを root に **固定順**
-///     (overlay → hud) で AddVisual。`AddVisual(child, false, None)` は MSDN 仕様で
-///     「全 children の前面に挿入」なので、後に attach した `hud_root` が常に
-///     前面になり、HUD が overlay 暗幕に隠されない構造的保証になる
-pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
-    // 1. D3D11
+/// # Errors
+/// When D3D11 / DXGI / D2D creation fails.
+pub fn create_d2d_stack() -> Result<D2dStack> {
     let mut d3d11: Option<ID3D11Device> = None;
-    // SAFETY: 出力は Option<>、null も許容。flags の組み合わせは MSDN documented。
+    // SAFETY: output is Option<> (null allowed); the flag combination is documented.
     unsafe {
         D3D11CreateDevice(
             None,
@@ -123,15 +70,13 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
         operation: "D3D11CreateDevice (out param null)",
     })?;
 
-    // 2. DXGI
     let dxgi: IDXGIDevice = d3d11.cast().map_err(|e| PlatformError::BadHr {
         operation: "ID3D11Device::cast::<IDXGIDevice>",
         hr: e.code().0,
     })?;
 
-    // 3. D2D factory
     let factory_options = D2D1_FACTORY_OPTIONS::default();
-    // SAFETY: factory_options は zero-init OK、戻り値は Result<ID2D1Factory1>
+    // SAFETY: factory_options is zero-init OK; returns Result<ID2D1Factory1>.
     let d2d_factory: ID2D1Factory1 = unsafe {
         D2D1CreateFactory::<ID2D1Factory1>(
             D2D1_FACTORY_TYPE_SINGLE_THREADED,
@@ -143,16 +88,14 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
         hr: e.code().0,
     })?;
 
-    // 4. D2D device
-    // SAFETY: dxgi は valid IDXGIDevice
+    // SAFETY: dxgi is a valid IDXGIDevice.
     let d2d_device: ID2D1Device =
         unsafe { d2d_factory.CreateDevice(&dxgi) }.map_err(|e| PlatformError::BadHr {
             operation: "ID2D1Factory1::CreateDevice",
             hr: e.code().0,
         })?;
 
-    // 5. D2D context
-    // SAFETY: d2d_device は valid
+    // SAFETY: d2d_device is valid.
     let d2d_context: ID2D1DeviceContext =
         unsafe { d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE) }.map_err(
             |e| PlatformError::BadHr {
@@ -161,307 +104,11 @@ pub fn create_dcomp_pipeline(hwnd: HWND) -> Result<DcompPipeline> {
             },
         )?;
 
-    // 6. DComp device → DesktopDevice
-    // SAFETY: d2d_device を rendering device として渡す
-    let dcomp_dev: IDCompositionDevice = unsafe { DCompositionCreateDevice2(&d2d_device) }
-        .map_err(|e| PlatformError::BadHr {
-            operation: "DCompositionCreateDevice2",
-            hr: e.code().0,
-        })?;
-    let dcomp: IDCompositionDesktopDevice = dcomp_dev.cast().map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionDevice::cast::<IDCompositionDesktopDevice>",
-        hr: e.code().0,
-    })?;
-
-    // 7. Target for HWND
-    // SAFETY: hwnd は valid (OverlayWindow::new で取得済み)
-    let target: IDCompositionTarget =
-        unsafe { dcomp.CreateTargetForHwnd(hwnd, true) }.map_err(|e| PlatformError::BadHr {
-            operation: "IDCompositionDesktopDevice::CreateTargetForHwnd",
-            hr: e.code().0,
-        })?;
-
-    // 8. Root visual
-    let root = create_visual(&dcomp)?;
-
-    // 9. Link target → root
-    // SAFETY: target / root は同じ device 由来で valid
-    unsafe { target.SetRoot(&root) }.map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionTarget::SetRoot",
-        hr: e.code().0,
-    })?;
-
-    // 10. 2 サブビジュアルを固定順で attach。AddVisual(child, false, None) は
-    //     「全 children の前面に挿入」なので、後に attach した hud_root が
-    //     overlay_root より構造的に前面になる。これ以降、root には直接
-    //     visual を追加しない (CompositionRenderer / HudRenderer は各々の
-    //     サブビジュアルにのみ AddVisual する)。
-    let overlay_root = create_visual(&dcomp)?;
-    root_add_visual(&root, &overlay_root)?;
-    let hud_root = create_visual(&dcomp)?;
-    root_add_visual(&root, &hud_root)?;
-
-    Ok(DcompPipeline {
+    Ok(D2dStack {
         d3d11,
         dxgi,
         d2d_factory,
         d2d_device,
         d2d_context,
-        dcomp,
-        target,
-        root,
-        overlay_root,
-        hud_root,
     })
 }
-
-/// 1 つのレイヤを表す `IDCompositionVisual2` を作る。
-pub fn create_visual(device: &IDCompositionDesktopDevice) -> Result<IDCompositionVisual2> {
-    // SAFETY: device は valid
-    unsafe { device.CreateVisual() }.map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionDesktopDevice::CreateVisual",
-        hr: e.code().0,
-    })
-}
-
-/// レイヤの平行移動を設定する。
-pub fn visual_set_offset(visual: &IDCompositionVisual2, x: f32, y: f32) -> Result<()> {
-    // SAFETY: visual は valid、引数は plain f32
-    unsafe {
-        visual.SetOffsetX2(x).map_err(|e| PlatformError::BadHr {
-            operation: "IDCompositionVisual2::SetOffsetX",
-            hr: e.code().0,
-        })?;
-        visual.SetOffsetY2(y).map_err(|e| PlatformError::BadHr {
-            operation: "IDCompositionVisual2::SetOffsetY",
-            hr: e.code().0,
-        })?;
-    }
-    Ok(())
-}
-
-/// visual の opacity を `[0.0, 1.0]` に設定する。
-///
-/// `IDCompositionVisual2` には直接 `SetOpacity(f32)` がないので
-/// `IDCompositionVisual3::SetOpacity2(f32)` (Windows 8.1+) へ QueryInterface
-/// で cast する。`HudFrame` の base opacity は引き続き
-/// `draw_hud_to_surface` 側で各色 alpha に bake されるが、本関数は cursor
-/// 距離 fade を visual tree レベルで **multiplicative** に適用する経路
-/// (issue #47) として使う — `Commit` までで反映される。
-///
-/// 値は `clamp(0.0, 1.0)` で正規化される。
-///
-/// # Errors
-/// `IDCompositionVisual3` への cast (極めて稀) または `SetOpacity2`
-/// 自身が失敗したとき。
-pub fn visual_set_opacity(visual: &IDCompositionVisual2, opacity: f32) -> Result<()> {
-    let clamped = opacity.clamp(0.0, 1.0);
-    let visual3: IDCompositionVisual3 = visual.cast().map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionVisual2::cast<IDCompositionVisual3>",
-        hr: e.code().0,
-    })?;
-    // SAFETY: visual3 は valid（cast が成功した直後）、引数は clamp 済みの f32。
-    unsafe { visual3.SetOpacity2(clamped) }.map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionVisual3::SetOpacity2",
-        hr: e.code().0,
-    })
-}
-
-/// レイヤに描画内容（`IDCompositionSurface`）を接続する。
-pub fn visual_set_content(
-    visual: &IDCompositionVisual2,
-    surface: Option<&IDCompositionSurface>,
-) -> Result<()> {
-    // `SetContent` の P0 は `Param<IUnknown>`; `IDCompositionSurface` から
-    // `IUnknown` への upcast を明示する。`cast` は QueryInterface 経由のため
-    // 形式上 fallible だが、interface 継承上ほぼ無条件に成功する。
-    let content: Option<IUnknown> =
-        surface
-            .map(|s| s.cast::<IUnknown>())
-            .transpose()
-            .map_err(|e| PlatformError::BadHr {
-                operation: "IDCompositionSurface::cast<IUnknown>",
-                hr: e.code().0,
-            })?;
-    // SAFETY: visual は valid、content は None または有効な IUnknown 参照。
-    unsafe { visual.SetContent(content.as_ref()) }.map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionVisual2::SetContent",
-        hr: e.code().0,
-    })
-}
-
-/// レイヤを root のチャイルドリストに追加する。
-pub fn root_add_visual(root: &IDCompositionVisual2, child: &IDCompositionVisual2) -> Result<()> {
-    // SAFETY: 両者とも同じ device 由来の有効ハンドル
-    unsafe { root.AddVisual(child, false, None) }.map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionVisual2::AddVisual",
-        hr: e.code().0,
-    })
-}
-
-/// レイヤを root から削除する。
-pub fn root_remove_visual(root: &IDCompositionVisual2, child: &IDCompositionVisual2) -> Result<()> {
-    // SAFETY: 両者とも有効ハンドル
-    unsafe { root.RemoveVisual(child) }.map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionVisual2::RemoveVisual",
-        hr: e.code().0,
-    })
-}
-
-/// `IDCompositionSurface` を新規作成する。`BGRA_UNORM` + premultiplied alpha 固定。
-pub fn create_surface(
-    device: &IDCompositionDesktopDevice,
-    width: u32,
-    height: u32,
-) -> Result<IDCompositionSurface> {
-    // SAFETY: device valid、width/height u32
-    unsafe {
-        device.CreateSurface(
-            width,
-            height,
-            DXGI_FORMAT_B8G8R8A8_UNORM,
-            DXGI_ALPHA_MODE_PREMULTIPLIED_BC,
-        )
-    }
-    .map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionDesktopDevice::CreateSurface",
-        hr: e.code().0,
-    })
-}
-
-/// `IDCompositionSurface::BeginDraw<T>` を `T = ID2D1DeviceContext` 固定で呼ぶ
-/// 唯一の許可された wrapper。
-///
-/// DComp surface が QueryInterface で返せる D2D IID は `ID2D1DeviceContext` の
-/// みで、`ID2D1Bitmap1` 等を渡すと E_NOINTERFACE (0x80004002) で fail し毎 tick
-/// 描画が落ちる事故が過去発生した (Phase I 実機検証時)。型を 1 箇所に固定し、
-/// 新規 caller は本関数を経由する。`clippy.toml` の `disallowed-methods` で
-/// `IDCompositionSurface::BeginDraw` 直叩きを deny しているため、本 wrapper 外
-/// からの呼び出しは `just lint` で reject される。
-///
-/// 返却される `ID2D1DeviceContext` は DComp が surface tile を render target
-/// として bind 済みかつ、**D2D drawing session も内部で開かれている状態**で返る
-/// (MS Docs: "The application does not need to call BeginDraw or EndDraw on the
-/// returned device context")。caller は `SetTransform` / `Clear` / `DrawText`
-/// 等の描画コマンドだけを発行し、最後に [`end_dcomp_draw`] を呼ぶこと。**D2D 側
-/// の `BeginDraw` / `EndDraw` は呼んではならない** — `D2DERR_WRONG_STATE`
-/// (0x88990001) → surface が "rendering in progress" のまま stuck → 次 tick で
-/// `DCOMPOSITION_ERROR_SURFACE_BEING_RENDERED` (0x88980801) のカスケード障害
-/// (PR #57 後の Phase I 続編実機検証で発覚)。`offset` は surface tile 内の左上
-/// 座標で、`SetTransform` の translation に反映すること。
-///
-/// # Errors
-/// `IDCompositionSurface::BeginDraw` が失敗したとき。`operation_tag` が
-/// `PlatformError::BadHr.operation` にそのまま使われる (caller が "HUD" /
-/// "Overlay" などのスコープを示す)。
-#[allow(
-    clippy::disallowed_methods,
-    reason = "BeginDraw を許可する唯一の場所。caller には clippy::disallowed_methods で deny。"
-)]
-pub(crate) fn begin_dcomp_draw_d2d(
-    surface: &IDCompositionSurface,
-    operation_tag: &'static str,
-) -> Result<(ID2D1DeviceContext, windows::Win32::Foundation::POINT)> {
-    let mut offset = windows::Win32::Foundation::POINT::default();
-    // SAFETY: surface は valid、offset は zero-init out param。
-    // T = ID2D1DeviceContext は DComp surface がサポートする唯一の D2D IID。
-    let dc: ID2D1DeviceContext =
-        unsafe { surface.BeginDraw(None, &mut offset) }.map_err(|e| PlatformError::BadHr {
-            operation: operation_tag,
-            hr: e.code().0,
-        })?;
-    Ok((dc, offset))
-}
-
-/// [`begin_dcomp_draw_d2d`] と pair で呼ぶ `IDCompositionSurface::EndDraw` の
-/// wrapper。 `clippy.toml` で `EndDraw` 直叩きも deny しているため、本 wrapper
-/// 外からの呼び出しは reject される。
-///
-/// # Errors
-/// `IDCompositionSurface::EndDraw` が失敗したとき。
-#[allow(
-    clippy::disallowed_methods,
-    reason = "EndDraw を許可する唯一の場所。caller には clippy::disallowed_methods で deny。"
-)]
-pub(crate) fn end_dcomp_draw(
-    surface: &IDCompositionSurface,
-    operation_tag: &'static str,
-) -> Result<()> {
-    // SAFETY: begin_dcomp_draw_d2d と pair で呼ばれる前提。surface は valid。
-    unsafe { surface.EndDraw() }.map_err(|e| PlatformError::BadHr {
-        operation: operation_tag,
-        hr: e.code().0,
-    })
-}
-
-/// 既存 surface を指定色で塗りつぶす。DComp surface の `BeginDraw` (= D2D drawing
-/// session も内部で開く) → `Clear` → DComp surface の `EndDraw` の三段。D2D
-/// context 側の `BeginDraw` / `EndDraw` は呼ばない (MS Docs 仕様、詳細は
-/// [`begin_dcomp_draw_d2d`] の doc コメント参照)。
-pub fn fill_surface(surface: &IDCompositionSurface, color: Rgba) -> Result<()> {
-    let (dc, offset) = begin_dcomp_draw_d2d(surface, "IDCompositionSurface::BeginDraw")?;
-    let f = color_to_premultiplied_f(color);
-    // SAFETY: dc / surface は valid。DComp::BeginDraw が D2D drawing session を
-    // 既に開いているので、context に描画コマンドだけを発行する。surface.EndDraw
-    // で D2D session も内部的にクローズされる。
-    unsafe {
-        // surface tile の offset を transform に反映する。
-        dc.SetTransform(&Matrix3x2 {
-            M11: 1.0,
-            M12: 0.0,
-            M21: 0.0,
-            M22: 1.0,
-            M31: offset.x as f32,
-            M32: offset.y as f32,
-        });
-        dc.Clear(Some(&f));
-    }
-    end_dcomp_draw(surface, "IDCompositionSurface::EndDraw")
-}
-
-/// `IDCompositionDesktopDevice::Commit` で visual tree をディスプレイに反映する。
-/// 本 wrapper 経由でのみ Commit を呼ぶこと (`clippy.toml::disallowed_methods`
-/// で直叩きを deny、Phase I PR #60 commit 漏れ事故の予防策)。
-#[allow(
-    clippy::disallowed_methods,
-    reason = "Commit を許可する唯一の場所。caller には clippy::disallowed_methods で deny。"
-)]
-pub fn commit(device: &IDCompositionDesktopDevice) -> Result<()> {
-    // SAFETY: device valid
-    unsafe { device.Commit() }.map_err(|e| PlatformError::BadHr {
-        operation: "IDCompositionDesktopDevice::Commit",
-        hr: e.code().0,
-    })
-}
-
-/// `[0, 255]` straight alpha の `Rgba` を D2D の premultiplied float に変換する。
-fn color_to_premultiplied_f(color: Rgba) -> D2D1_COLOR_F {
-    let a = f32::from(color.a) / 255.0;
-    let r = (f32::from(color.r) / 255.0) * a;
-    let g = (f32::from(color.g) / 255.0) * a;
-    let b = (f32::from(color.b) / 255.0) * a;
-    D2D1_COLOR_F { r, g, b, a }
-}
-
-// 警告抑止: D2D 型の一部はまだ使っていない（Phase D の発展用）
-const _: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT {
-    format: DXGI_FORMAT_B8G8R8A8_UNORM,
-    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-};
-const _: D2D1_BITMAP_PROPERTIES1 = D2D1_BITMAP_PROPERTIES1 {
-    pixelFormat: D2D1_PIXEL_FORMAT {
-        format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-    },
-    dpiX: 96.0,
-    dpiY: 96.0,
-    bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET,
-    colorContext: core::mem::ManuallyDrop::new(None),
-};
-const _: D2D_RECT_F = D2D_RECT_F {
-    left: 0.0,
-    top: 0.0,
-    right: 0.0,
-    bottom: 0.0,
-};
-const _: D2D1_BITMAP_OPTIONS = D2D1_BITMAP_OPTIONS_CANNOT_DRAW;

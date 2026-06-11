@@ -1,0 +1,50 @@
+---
+source: crates/linerule-core/tests/integration_render_snapshot.rs
+expression: f
+---
+OverlayFrame {
+    layers: [
+        Layer {
+            geometry: Rect(
+                ScreenRect {
+                    origin: Point {
+                        x: 0,
+                        y: 0,
+                        _space: PhantomData<fn() -> linerule_core::geometry::Logical>,
+                    },
+                    width: 1920,
+                    height: 526,
+                },
+            ),
+            brush: Solid(
+                Rgba {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 218,
+                },
+            ),
+        },
+        Layer {
+            geometry: Rect(
+                ScreenRect {
+                    origin: Point {
+                        x: 0,
+                        y: 554,
+                        _space: PhantomData<fn() -> linerule_core::geometry::Logical>,
+                    },
+                    width: 1920,
+                    height: 526,
+                },
+            ),
+            brush: Solid(
+                Rgba {
+                    r: 255,
+                    g: 255,
+                    b: 255,
+                    a: 218,
+                },
+            ),
+        },
+    ],
+}

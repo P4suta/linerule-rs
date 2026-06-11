@@ -1,9 +1,8 @@
-//! Pure renderer: turns the current overlay state + cursor + monitor bounds
-//! into an [`OverlayFrame`] of fillable layers. No I/O, no platform calls.
+//! Pure renderer: state + cursor + monitor bounds into an [`OverlayFrame`].
+//! No I/O, no platform calls.
 //!
-//! The submodule [`overlay_frame`] carries the data ADT ([`Layer`],
-//! [`Brush`], [`Geometry`], [`OverlayFrame`]). The [`frame`] function in
-//! this file is the only entry point.
+//! The data ADT ([`Layer`], [`Brush`], [`Geometry`], [`OverlayFrame`]) lives in
+//! [`overlay_frame`]; [`frame`] is the only entry point.
 
 pub mod hud_frame;
 pub mod overlay_frame;
@@ -23,12 +22,13 @@ use crate::{
     color::{Rgba, perceptual},
     config::OverlayConfig,
     geometry::{Logical, Point, ScreenRect},
-    state::Mode,
+    state::{Mode, SurroundEffect},
 };
 
-// 旧 C# 版から引き継いだ 18×4px のモードインジケータは廃止した。HUD の常駐
-// チップ (`crate::render::hud_frame::HudTier::Chip`) が同じ右上でモード文字 +
-// 数値を示す上位互換のため (同じ角に 2 つのモード表示はノイズ)。
+// The 18×4px corner mode indicator inherited from the C# port was dropped: the
+// persistent HUD chip (`crate::render::hud_frame::HudTier::Chip`) shows the
+// mode letter + values in the same corner and strictly supersedes it (two mode
+// readouts in one corner is noise).
 
 /// Per-tick interpolated render inputs, produced by the tick pipeline's
 /// transition channels (`crate::input::tick`). Integers only so the carrying
@@ -47,7 +47,8 @@ pub struct OverlaySample {
     /// Current mask opacity byte (pre-perceptual, same domain as
     /// [`crate::color::Opacity::get`]).
     pub mask_alpha: u8,
-    /// Style crossfade `0..=255`: `0` = Dim mask color, `255` = Bright.
+    /// Style crossfade `0..=255`: `0` = the dim mask color, `255` = the white
+    /// wash. Settled at [`SurroundEffect::mix_target`].
     pub style_mix: u8,
 }
 
@@ -60,7 +61,7 @@ impl OverlaySample {
             master: u8::MAX,
             thickness_px: config.thickness.get(),
             mask_alpha: config.opacity.get(),
-            style_mix: config.surround_style.mix_target(),
+            style_mix: config.effect.mix_target(),
         }
     }
 }
@@ -124,26 +125,40 @@ fn slit_frame(
     config: OverlayConfig,
     sample: OverlaySample,
 ) -> OverlayFrame {
-    let mask = mask_color(config, sample);
+    let brush = surround_brush(config, sample);
     let thickness = i32::from(sample.thickness_px);
     let (before, after) = split_around(axis_value(axis, cursor), thickness);
 
     let mut layers = Vec::with_capacity(2);
-    if let Some(layer) = dim_half(axis, monitor, DimSide::Before, before, mask) {
+    if let Some(layer) = dim_half(axis, monitor, DimSide::Before, before, brush) {
         layers.push(layer);
     }
-    if let Some(layer) = dim_half(axis, monitor, DimSide::After, after, mask) {
+    if let Some(layer) = dim_half(axis, monitor, DimSide::After, after, brush) {
         layers.push(layer);
     }
     OverlayFrame::from_layers(layers)
 }
 
-fn mask_color(config: OverlayConfig, sample: OverlaySample) -> Rgba {
-    // `style_mix` crossfades the *base* RGB between the configured dark mask
-    // (Dim, also the Blur fallback) and the bright wash; the alpha comes from
-    // the interpolated opacity byte, scaled by the master envelope.
-    let base = mix_rgb(config.mask_color, Rgba::BRIGHT_MASK, sample.style_mix);
-    base.with_alpha(composite_alpha(sample.mask_alpha, sample.master))
+/// Brush for the surround bands: `Solid` for dim/white-wash, `Blur` for blur.
+///
+/// For the flat effects, `style_mix` crossfades the *base* RGB between the
+/// dark dim mask and the bright white wash; the alpha comes from the
+/// interpolated opacity byte, scaled by the master envelope. Blur carries no
+/// tint, only the σ amount; under `Blur` the opacity hotkeys retarget onto
+/// [`OverlayConfig::blur`] instead.
+fn surround_brush(config: OverlayConfig, sample: OverlaySample) -> Brush {
+    if config.effect.is_blur() {
+        Brush::Blur {
+            amount: config.blur,
+        }
+    } else {
+        let base = mix_rgb(
+            SurroundEffect::DimBlack.mask_color(),
+            SurroundEffect::WhiteWash.mask_color(),
+            sample.style_mix,
+        );
+        Brush::Solid(base.with_alpha(composite_alpha(sample.mask_alpha, sample.master)))
+    }
 }
 
 /// Per-channel RGB crossfade by `mix ∈ 0..=255` (alpha is set by the caller).
@@ -204,7 +219,7 @@ fn dim_half(
     monitor: ScreenRect<Logical>,
     side: DimSide,
     slit_edge: i32,
-    fill: Rgba,
+    brush: Brush,
 ) -> Option<Layer> {
     let rect = match (axis, side) {
         (Axis::Horizontal, DimSide::Before) => {
@@ -220,7 +235,10 @@ fn dim_half(
             band(slit_edge, monitor.top(), monitor.right(), monitor.bottom())
         },
     }?;
-    Some(Layer::solid_rect(rect, fill))
+    Some(Layer {
+        geometry: Geometry::Rect(rect),
+        brush,
+    })
 }
 
 /// Construct a clipped rectangle from `(left, top, right, bottom)`, returning
@@ -238,7 +256,6 @@ pub(crate) fn band(left: i32, top: i32, right: i32, bottom: i32) -> Option<Scree
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SurroundStyle;
 
     fn monitor() -> ScreenRect<Logical> {
         ScreenRect::new(Point::new(0, 0), 1920, 1080)
@@ -297,47 +314,102 @@ mod tests {
         assert!(f.layer_count() <= 2);
     }
 
-    // ---- surround style (Dim / Bright) -----------------------------------
+    // ---- surround effect (DimBlack / WhiteWash / Blur) --------------------
 
-    fn surround_brush(mode: Mode, style: SurroundStyle) -> Rgba {
+    fn surround_color_of(mode: Mode, effect: SurroundEffect) -> Rgba {
         let config = OverlayConfig {
-            surround_style: style,
+            effect,
             ..OverlayConfig::DEFAULT
         };
         let f = settled_frame(mode, config, Point::new(960, 540));
-        // The first layer is a dim/bright surround half (cursor centered ⇒
+        // The first layer is a dim/wash surround half (cursor centered ⇒
         // two halves).
         match f.layers()[0].brush {
             Brush::Solid(c) => c,
-            Brush::Blur { .. } => panic!("surround must be a solid brush in cheap styles"),
+            Brush::Blur { .. } => panic!("surround must be a solid brush in flat effects"),
         }
     }
 
     #[test]
-    fn dim_style_keeps_the_dark_mask_color() {
-        let c = surround_brush(Mode::Horizontal, SurroundStyle::Dim);
+    fn dim_black_effect_keeps_the_dark_mask_color() {
+        let c = surround_color_of(Mode::Horizontal, SurroundEffect::DimBlack);
         assert_eq!((c.r, c.g, c.b), (0x00, 0x00, 0x00));
         assert!(c.a > 0);
     }
 
     #[test]
-    fn bright_style_washes_the_surround_white() {
-        let c = surround_brush(Mode::Horizontal, SurroundStyle::Bright);
+    fn white_wash_effect_washes_the_surround_white() {
+        let c = surround_color_of(Mode::Horizontal, SurroundEffect::WhiteWash);
         assert_eq!((c.r, c.g, c.b), (0xFF, 0xFF, 0xFF));
-        assert!(c.a > 0, "bright surround keeps the opacity-derived alpha");
+        assert!(c.a > 0, "white wash keeps the opacity-derived alpha");
     }
 
     #[test]
-    fn dim_and_bright_surrounds_differ() {
-        let dim = surround_brush(Mode::Horizontal, SurroundStyle::Dim);
-        let bright = surround_brush(Mode::Horizontal, SurroundStyle::Bright);
+    fn dim_and_white_wash_surrounds_differ() {
+        let dim = surround_color_of(Mode::Horizontal, SurroundEffect::DimBlack);
+        let wash = surround_color_of(Mode::Horizontal, SurroundEffect::WhiteWash);
         assert_ne!(
-            dim, bright,
-            "the surround fill must visibly change between styles"
+            dim, wash,
+            "the surround fill must visibly change between effects"
         );
     }
 
-    // ---- Vertical mode (was previously untested) -------------------------
+    #[test]
+    fn blur_effect_uses_blur_brush_for_every_surround_band() {
+        let config = OverlayConfig {
+            effect: SurroundEffect::Blur,
+            ..OverlayConfig::DEFAULT
+        };
+        let f = settled_frame(Mode::Horizontal, config, Point::new(960, 540));
+        assert!(!f.is_empty());
+        for layer in f.layers() {
+            assert!(
+                matches!(layer.brush, Brush::Blur { .. }),
+                "blur surround must use Brush::Blur, got {:?}",
+                layer.brush
+            );
+        }
+    }
+
+    #[test]
+    fn opacity_does_not_affect_the_blur_brush() {
+        // Blur carries no tint, so the surround brush is byte-identical at MIN
+        // and MAX opacity.
+        let blur_brush_at = |opacity| {
+            let config = OverlayConfig {
+                effect: SurroundEffect::Blur,
+                opacity,
+                ..OverlayConfig::DEFAULT
+            };
+            settled_frame(Mode::Horizontal, config, Point::new(960, 540)).layers()[0].brush
+        };
+        assert_eq!(
+            blur_brush_at(crate::color::Opacity::MAX),
+            blur_brush_at(crate::color::Opacity::MIN)
+        );
+    }
+
+    #[test]
+    fn blur_brush_carries_the_config_blur_amount() {
+        use crate::color::BlurAmount;
+        let amount = BlurAmount::DEFAULT.saturating_add(8);
+        let config = OverlayConfig {
+            effect: SurroundEffect::Blur,
+            blur: amount,
+            ..OverlayConfig::DEFAULT
+        };
+        let Brush::Blur { amount: got } =
+            settled_frame(Mode::Horizontal, config, Point::new(960, 540)).layers()[0].brush
+        else {
+            panic!("blur surround must be Brush::Blur");
+        };
+        assert_eq!(
+            got, amount,
+            "surround_brush must thread config.blur into the brush"
+        );
+    }
+
+    // ---- Vertical mode ---------------------------------------------------
 
     #[test]
     fn vertical_mode_emits_two_dim_layers() {
@@ -391,8 +463,7 @@ mod tests {
 
     #[test]
     fn split_around_negative_center_stays_consistent() {
-        // The center of the slit can move below zero on wrap-around / DPI edge.
-        // We just check internal consistency: (hi - lo) == thickness.
+        // Center can go below zero on DPI/wrap-around edges; (hi - lo) == thickness.
         let (lo, hi) = split_around(-100, 50);
         assert_eq!(hi - lo, 50);
     }

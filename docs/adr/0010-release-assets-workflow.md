@@ -1,8 +1,8 @@
 # 0010 — Release artifact auto-attach via `release-assets.yml`
 
-**Status:** **Superseded by [[0014-immutable-release-asset-flow]]** (2026-05-24)。Accepted (Phase I, 2026-05-20)。Phase J (2026-05-20, [[0011-phase-j-slim-down]]) で **PDB / `-debug.{exe,pdb}` 添付を撤廃**し、release profile の 1 binary のみ添付する形に縮退済み。2026-05-24 に GitHub の immutable releases 機能 (GA: 2025-10-28) と本 ADR の `release: types: [published]` → `gh release upload` フローが両立不能と判明し、ADR-0014 で **draft → upload → publish (= draft=false)** の 3-step に再設計。命名規則表 (`linerule-vX.Y.Z-win-x64.exe`) は維持。
+**Status:** **Superseded by [[0014-immutable-release-asset-flow]]** (2026-05-24)。Accepted (2026-05-20)。後に PDB / `-debug.{exe,pdb}` 添付を撤廃し release profile の 1 binary のみに縮退、さらに immutable releases との両立のため trigger 設計を ADR-0014 で再設計した。命名規則 (`linerule-vX.Y.Z-win-x64.exe`) は維持。
 
-**See also:** [[0007-debug-build-and-panic-strategy]] (release vs dist-dev profile、Phase J で supersede)、[[0011-phase-j-slim-down]]、[[0014-immutable-release-asset-flow]] (現行設計)、Phase I plan の PR-2、Phase H ADR の系列。
+**See also:** [[0011-phase-j-slim-down]]、[[0014-immutable-release-asset-flow]] (現行設計).
 
 ## 文脈
 
@@ -45,15 +45,13 @@ on:
 
 ### Build 戦略
 
-release profile 1 本を build する (Phase J 以降):
+release profile 1 本を build する:
 
 ```yaml
 - run: cargo build --release -p linerule-app
 ```
 
-> 旧 Phase I 設計 (Phase J で撤廃): 同 job 内で `cargo build --release` と
-> `cargo build --profile dist-dev` を順次走らせ、`-debug.exe` / `-debug.pdb`
-> を同時に添付していた。詳細は [[0011-phase-j-slim-down]]。
+> 過去には `dist-dev` profile も併走させ `-debug.exe` / `-debug.pdb` を同時添付していたが撤廃済み。詳細は [[0011-phase-j-slim-down]]。
 
 ### 命名規則
 
@@ -62,9 +60,9 @@ linerule-vX.Y.Z-win-x64.exe          (release profile: stripped, panic=abort)
 ```
 
 理由:
-- **version を file 名に埋め込む**: download 後 file 名だけでバージョンが分かる ([[linerule-rs-version-bump-cautious]] の patch bump で月 1-2 回のリリースが見込まれるため衝突回避が重要)
+- **version を file 名に埋め込む**: download 後 file 名だけでバージョンが分かる
 - **platform/arch を埋め込む**: 将来 linux build 等を追加した時に並列で扱える (本 ADR では Windows x64 のみ)
-- **`-debug` 系 (`.exe` / `.pdb`) は Phase J で撤廃**: 「薄い読書ツール」志向への回帰 ([[0011-phase-j-slim-down]])
+- **`-debug` 系 (`.exe` / `.pdb`) は撤廃**: 「薄い読書ツール」志向への回帰 ([[0011-phase-j-slim-down]])
 
 ### `--clobber` flag
 
@@ -83,7 +81,7 @@ gh release upload $tag <files> --clobber
 - 必須 check に追加すると PR が永遠に pending になる
 - merge 後の release tag タイミングで動くので、PR レビュー段階での gate は不要
 
-[[linerule-rs-branch-protection]] memory に「release event 起動 workflow は必須 check から除外」の旨を追記する。
+release event 起動の workflow は branch protection の必須 check から除外する。
 
 ## 結果
 
@@ -122,6 +120,4 @@ gh release upload $tag <files> --clobber
 ## 関連
 
 - ADR-0007 — Debug Build profile (`dist-dev`) と panic 戦略の非対称性 (本 ADR の build 戦略の前提)
-- ADR-0008 / 0009 — Phase H のエラーハンドリング系
-- `linerule-rs-version-bump-cautious` — `fix(scope):` で patch bump 維持の方針
-- `linerule-rs-branch-protection` — release event 起動 workflow は必須 check から除外する旨を追記予定
+- ADR-0014 — immutable release との asset flow 再設計 (現行設計)

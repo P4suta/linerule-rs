@@ -1,10 +1,6 @@
-//! Pipeline that turns a tick's worth of inputs (drained hotkeys, polled
-//! cursor, timestamp) into the next [`TickWorld`] and a list of [`TickEffect`]
-//! the platform layer should carry out.
-//!
-//! This is the single coordination point for "what changed this tick?" — the
-//! reducer is invoked here, log lines are scheduled here, draw / clear /
-//! HUD-refresh decisions are made here. All of it pure.
+//! Pure tick pipeline: turns a tick's inputs (drained hotkeys, polled cursor,
+//! timestamp) into the next [`TickWorld`] and a list of [`TickEffect`] for the
+//! platform layer to apply.
 
 use std::time::Duration;
 
@@ -40,7 +36,7 @@ pub struct OverlayAnim {
     pub thickness: Transition<u16>,
     /// Mask opacity byte (pre-perceptual).
     pub mask_alpha: Transition<u8>,
-    /// Style crossfade (`0` = Dim, `255` = Bright).
+    /// Style crossfade (`0` = DimBlack, `255` = WhiteWash).
     pub style_mix: Transition<u8>,
 }
 
@@ -56,7 +52,7 @@ impl OverlayAnim {
             master: Transition::settled(master),
             thickness: Transition::settled(state.config.thickness.get()),
             mask_alpha: Transition::settled(state.config.opacity.get()),
-            style_mix: Transition::settled(state.config.surround_style.mix_target()),
+            style_mix: Transition::settled(state.config.effect.mix_target()),
         }
     }
 
@@ -97,8 +93,8 @@ impl HudView {
 
 /// Tick pipeline's persistent state.
 //
-// `Deserialize` is omitted — `Point<S>` carries `PhantomData<fn() -> S>` which
-// blocks the standard `Deserialize` derive. Pure runtime state.
+// `Deserialize` omitted: `Point<S>` carries `PhantomData<fn() -> S>`, which
+// blocks the derive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct TickWorld {
     /// Last applied overlay state.
@@ -121,10 +117,9 @@ pub struct TickWorld {
 }
 
 impl TickWorld {
-    /// Initial state. `last_hud_refresh_at_ms = i64::MIN` so that the very
-    /// first tick is treated as "interval has elapsed" and refreshes the HUD
-    /// regardless of the clock origin. The HUD envelope starts at `0` and
-    /// fades in on the first tick.
+    /// Initial state. `last_hud_refresh_at_ms = i64::MIN` forces the first tick
+    /// to refresh the HUD regardless of clock origin. The HUD envelope starts
+    /// at `0` and fades in on the first tick.
     pub const INITIAL: Self = Self {
         state: State::DEFAULT,
         last_cursor: None,
@@ -135,10 +130,8 @@ impl TickWorld {
         hud_envelope: Transition::settled(0),
     };
 
-    /// Initial state with a caller-supplied [`State`]. Useful for booting
-    /// the overlay directly into a non-default mode (e.g. `--initial-mode
-    /// horizontal` for CI smoke tests that need to exercise the slit
-    /// render path without sending a synthetic `Ctrl+Alt+R`).
+    /// Initial state with a caller-supplied [`State`], for booting directly
+    /// into a non-default mode.
     #[must_use]
     pub const fn with_initial_state(state: State) -> Self {
         Self {
@@ -337,9 +330,8 @@ pub fn step(
         hud_envelope,
     };
 
-    // Debug build 限定の invariant check。`frame_seq` は `wrapping_add(1)` で常に
-    // +1 されるため u64::MAX 越えの wrap (294 兆 tick = 60Hz で 1500 万年) を
-    // 除いて単調増加する。誤って 0 や減少値を入れた場合 debug_assert! が即捕捉。
+    // Invariants: frame_seq advances by exactly 1, and last_hud_refresh_at_ms
+    // is monotonic (except the i64::MIN sentinel).
     debug_assert!(
         next_world.frame_seq == world.frame_seq.wrapping_add(1),
         "frame_seq must be wrapping_add(1) of previous: prev={}, next={}",
@@ -423,13 +415,35 @@ fn retarget_channels(
             anim.mask_alpha
                 .retarget(now_ms, next.config.opacity.get(), cfg.value_glide_ms);
     }
-    if next.config.surround_style != prev.config.surround_style {
-        anim.style_mix = anim.style_mix.retarget(
-            now_ms,
-            next.config.surround_style.mix_target(),
-            cfg.overlay_fade_ms,
-        );
+    if next.config.effect != prev.config.effect {
+        if next.config.effect.is_blur() || prev.config.effect.is_blur() {
+            // Flat ⇄ Blur: the brush kind flips Solid ⇄ Blur, which rebuilds
+            // the renderer's sprite pool — a color crossfade cannot bridge
+            // that. Ride the master envelope instead (the same soft cut as
+            // H ⇄ V) and settle the style channel immediately.
+            anim.style_mix = Transition::settled(next.config.effect.mix_target());
+            if next.mode == prev.mode {
+                anim.master = Transition {
+                    from: 0,
+                    to: u8::MAX,
+                    start_ms: now_ms,
+                    duration_ms: cfg.overlay_fade_ms,
+                };
+            }
+        } else {
+            // Flat ⇄ flat (DimBlack ⇄ WhiteWash): RGB crossfade.
+            anim.style_mix = anim.style_mix.retarget(
+                now_ms,
+                next.config.effect.mix_target(),
+                cfg.overlay_fade_ms,
+            );
+        }
     }
+    // `config.blur` (σ) deliberately has no transition channel: σ is baked
+    // into the effect brush and is part of the sprite-pool signature, so
+    // gliding it would rebuild the pool (and recompile the effect factory)
+    // every tick. `BlurAmount` steps are perceptually uniform, so stepping is
+    // already smooth enough.
     anim
 }
 

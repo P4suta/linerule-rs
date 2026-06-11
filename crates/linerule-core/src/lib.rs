@@ -1,31 +1,30 @@
 //! linerule-core
 //!
-//! 純粋ロジック層: ADT、reducer、render、parser、FSM。`#![forbid(unsafe_code)]`
-//! で `unsafe` を完全に排除し、非決定性 (時刻・乱数・I/O) は呼び出し側から引数で
-//! 受け取る。
+//! Pure logic layer: ADTs, reducer, render, parser, FSM. `#![forbid(unsafe_code)]`
+//! bans `unsafe` outright; nondeterminism (time, randomness, I/O) is passed in
+//! by the caller as arguments.
 //!
-//! ## 構成
+//! ## Modules
 //!
-//! - [`anim`] — 整数エンドポイントの時間遷移 `Transition<T>` と easing
-//! - [`color`] — `Rgba` / `Opacity` / `DimLevel` / `Thickness` と perceptual カーブ
-//! - [`config`] — `UserConfig` ツリー (`OverlayConfig` / `HudConfig` / ...)
+//! - [`anim`] — integer-endpoint timed transitions (`Transition<T>`) and easing
+//! - [`color`] — `Rgba` / `Opacity` / `DimLevel` / `Thickness` / `BlurAmount` and perceptual curves
+//! - [`config`] — `UserConfig` tree (`OverlayConfig` / `HudConfig` / ...)
 //! - [`diagnostics`] — `LineruleError` / `Severity`
-//! - [`geometry`] — 座標空間タグ付き `Point<S>` / `ScreenRect<S>`
+//! - [`geometry`] — coordinate-space-tagged `Point<S>` / `ScreenRect<S>`
 //! - [`input`] — chord parser / hold FSM / tick pipeline / HUD fade / hotkey map
-//! - [`render`] — `OverlayFrame` ADT と純粋関数 `render::frame`
-//! - [`state`] — `State` / `OverlayAction` / `StateDelta` と `state::reduce::apply`
+//! - [`render`] — `OverlayFrame` ADT and the pure `render::frame`
+//! - [`state`] — `State` / `OverlayAction` / `StateDelta` and `state::reduce::apply`
 //!
-//! ## 短い public path
+//! ## Short public paths
 //!
-//! 主要型は `lib.rs` で再エクスポートしているので、consumer は
-//! `linerule_core::Rgba` / `linerule_core::frame(...)` のような短い path で
-//! 書ける。internal 実装は `linerule_core::color::rgba::Rgba` などの長い
-//! path で書き、リファクタの自由度を残す。
+//! Key types are re-exported here, so consumers write short paths like
+//! `linerule_core::Rgba` / `linerule_core::frame(...)`. Internal code uses the
+//! long paths (`linerule_core::color::rgba::Rgba`), leaving room to refactor.
 //!
-//! ## 依存方向
+//! ## Dependency direction
 //!
-//! `linerule-app` → `linerule-platform-windows` → `linerule-core`。本クレートは
-//! 他の linerule-rs クレートに依存しない。
+//! `linerule-app` → `linerule-platform-windows` → `linerule-core`. This crate
+//! depends on no other linerule-rs crate.
 
 #![forbid(unsafe_code)]
 
@@ -39,10 +38,10 @@ pub mod render;
 pub mod state;
 
 pub use anim::{Lerp, Transition};
-pub use color::{DimLevel, Opacity, Rgba, Thickness};
+pub use color::{BlurAmount, DimLevel, Opacity, Rgba, Thickness};
 pub use config::{
     AnimConfig, HudColors, HudConfig, HudFonts, HudGeometry, HudPadding, InputConfig,
-    OverlayConfig, RenderConfig, RepeatConfig, SurroundStyle, TapStepConfig, UserConfig,
+    OverlayConfig, RenderConfig, RepeatConfig, TapStepConfig, UserConfig,
 };
 pub use diagnostics::{
     CoreError, DeviceLostOutcome, ErrorClass, LineruleError, Severity, is_device_lost_hresult,
@@ -61,4 +60,6 @@ pub use render::{
     Brush, Geometry, HudFontKey, HudFrame, HudNotification, HudRow, HudRule, HudTelemetry, HudTier,
     Layer, NotificationClass, OverlayFrame, OverlaySample, frame, hud_frame,
 };
-pub use state::{ActiveMode, Mode, OverlayAction, RejectReason, State, StateDelta};
+pub use state::{
+    ActiveMode, Mode, OverlayAction, RejectReason, State, StateDelta, SurroundEffect,
+};

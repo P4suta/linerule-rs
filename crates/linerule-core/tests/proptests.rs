@@ -97,7 +97,7 @@ proptest! {
         let action = match which {
             0 => OverlayAction::BumpThickness(delta),
             1 => OverlayAction::BumpOpacity(delta),
-            _ => OverlayAction::CycleStyle,
+            _ => OverlayAction::CycleEffect,
         };
         let (next, d) = reduce::apply(s, action);
         prop_assert_eq!(next, s);
@@ -135,7 +135,7 @@ proptest! {
         prop_assert_eq!(next.mode, state.mode);
         prop_assert_eq!(next.last_active, state.last_active);
         prop_assert_eq!(next.config.opacity, state.config.opacity);
-        prop_assert_eq!(next.config.mask_color, state.config.mask_color);
+        prop_assert_eq!(next.config.effect, state.config.effect);
     }
 
     /// Cycling to `Off` then toggling restores the mode that was active just
@@ -282,10 +282,10 @@ fn any_key_code() -> impl Strategy<Value = KeyCode> {
 fn any_action() -> impl Strategy<Value = OverlayAction> {
     prop_oneof![
         Just(OverlayAction::CycleMode),
+        Just(OverlayAction::CycleEffect),
         Just(OverlayAction::ToggleOnOff),
         (-1024_i32..1024).prop_map(OverlayAction::BumpThickness),
         (-1024_i32..1024).prop_map(OverlayAction::BumpOpacity),
-        Just(OverlayAction::CycleStyle),
         Just(OverlayAction::ToggleHudDetail),
         Just(OverlayAction::Quit),
     ]
