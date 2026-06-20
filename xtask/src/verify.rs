@@ -34,6 +34,11 @@ pub(crate) struct VerifyArgs {
     /// Keep pre-existing events.jsonl / crash dumps instead of cleaning first.
     #[arg(long)]
     pub(crate) keep_logs: bool,
+    /// Drive a scripted Ctrl+Alt chord sequence (toggle on → flip axis → cycle
+    /// effect → quit) via `SendInput` and assert the resulting `state changed`
+    /// series. Windows + interactive desktop only.
+    #[arg(long)]
+    pub(crate) scenario: bool,
 }
 
 /// Outcome of judging a GUI smoke run. Used by the Windows `run` and the unit
@@ -106,6 +111,56 @@ pub(crate) fn judge(
     }
 }
 
+/// `HotkeyMap` field names injected by `--scenario`, terminated by `quit` so the
+/// overlay quits gracefully instead of waiting out `--duration-ms`.
+#[cfg(any(target_os = "windows", test))]
+const SCENARIO_ACTIONS: &str = "toggle_on_off,cycle_mode,cycle_effect,quit";
+
+/// Expected `state changed` action Debug values, in order, for
+/// `SCENARIO_ACTIONS` (the `quit` action produces no state change). Matched as a
+/// prefix, so bump variants like `BumpThickness(8)` match a `BumpThickness` entry.
+#[cfg(any(target_os = "windows", test))]
+const SCENARIO_EXPECTED: &[&str] = &["ToggleOnOff", "CycleMode", "CycleEffect"];
+
+/// The ordered `action` values of every `state changed` line in an events body.
+#[cfg(any(target_os = "windows", test))]
+fn state_changed_actions(events_body: &str) -> Vec<String> {
+    events_body
+        .lines()
+        .filter(|l| l.contains(r#""message":"state changed""#))
+        .filter_map(extract_field_action)
+        .collect()
+}
+
+/// Pull the `"action":"…"` value out of a JSON line by substring (no JSON dep,
+/// same spirit as the Tier 0/1 gates).
+#[cfg(any(target_os = "windows", test))]
+fn extract_field_action(line: &str) -> Option<String> {
+    let key = r#""action":""#;
+    let start = line.find(key)? + key.len();
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_owned())
+}
+
+/// Whether `expected` appears as an ordered subsequence of `observed`, matching
+/// each expected entry as a prefix (tolerates extra interleaved transitions).
+#[cfg(any(target_os = "windows", test))]
+fn actions_contain_subsequence(
+    observed: &[String],
+    expected: &[&str],
+) -> std::result::Result<(), String> {
+    let mut it = observed.iter();
+    for &want in expected {
+        if !it.by_ref().any(|got| got.starts_with(want)) {
+            return Err(format!(
+                "expected `{want}` not found (in order) within observed {observed:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn run(args: VerifyArgs) -> anyhow::Result<()> {
     win::run(args)
@@ -131,6 +186,8 @@ pub(crate) fn run(args: VerifyArgs) -> anyhow::Result<()> {
 mod win {
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::thread::sleep;
+    use std::time::{Duration, Instant};
 
     use anyhow::{Context, Result, anyhow};
 
@@ -144,6 +201,7 @@ mod win {
             effect,
             strict,
             keep_logs,
+            scenario,
         } = args;
 
         if profile != "debug" && profile != "release" {
@@ -167,6 +225,10 @@ mod win {
         // false verdict (CI does the same before the smoke step).
         if !keep_logs {
             clean_artifacts(&profile_dir);
+        }
+
+        if scenario {
+            return run_scenario(&profile_dir, &exe, duration_ms, strict);
         }
 
         let mut run_args: Vec<String> = vec!["run".to_owned()];
@@ -218,6 +280,108 @@ mod win {
                 dump_diagnostics(&exe, events_path.as_deref());
                 Err(anyhow!("verify failed: {reason}"))
             },
+        }
+    }
+
+    /// Tier 2: launch the overlay, drive a scripted Ctrl+Alt chord sequence via
+    /// the `inject_chords` example (`SendInput`), then assert the resulting
+    /// `state changed` series on top of the Tier 0/1 health gates. This is the
+    /// one path Docker/Linux can't run — synthetic input must reach a real,
+    /// interactive desktop session.
+    fn run_scenario(profile_dir: &Path, exe: &Path, duration_ms: u64, strict: bool) -> Result<()> {
+        let injector = profile_dir.join("examples").join("inject_chords.exe");
+        if !injector.exists() {
+            anyhow::bail!(
+                "{} not found — build it first: cargo build --example inject_chords -p \
+                 linerule-platform-windows",
+                injector.display()
+            );
+        }
+
+        // Generous safety-net duration; the injected `quit` ends the run sooner.
+        let safety_ms = duration_ms.max(15_000).to_string();
+        println!(
+            "=== verify --scenario: {} run --duration-ms {safety_ms} (Off start) ===",
+            exe.display()
+        );
+        let mut child = Command::new(exe)
+            .args(["run", "--duration-ms", &safety_ms])
+            .spawn()
+            .with_context(|| format!("spawning {}", exe.display()))?;
+
+        // Don't inject until the message loop is up: RegisterHotKey runs just
+        // before the pump, so earlier chords are simply lost.
+        if let Err(e) = wait_for_message_loop(profile_dir, Duration::from_secs(15)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(e);
+        }
+
+        println!(
+            "=== verify --scenario: inject [{}] ===",
+            super::SCENARIO_ACTIONS
+        );
+        let injected = Command::new(&injector)
+            .args([super::SCENARIO_ACTIONS, "600"])
+            .status()
+            .with_context(|| format!("spawning {}", injector.display()))?;
+        if !injected.success() {
+            let _ = child.wait();
+            anyhow::bail!("injector exited with {:?}", injected.code());
+        }
+
+        // The injected Ctrl+Alt+Q quits the overlay; wait for it (the
+        // duration-ms safety net bounds this if a chord was dropped).
+        let exit_code = child.wait().context("waiting for overlay exit")?.code();
+
+        let events_path = latest_events_file(profile_dir);
+        let events_body = match &events_path {
+            Some(p) => Some(
+                std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?,
+            ),
+            None => None,
+        };
+        let crash_present = has_crash_dump(profile_dir);
+
+        // Health gates first (reuse the Tier 0/1 verdict).
+        if let Verdict::Fail(reason) =
+            judge(events_body.as_deref(), crash_present, exit_code, strict)
+        {
+            dump_diagnostics(exe, events_path.as_deref());
+            anyhow::bail!("verify --scenario health gate failed: {reason}");
+        }
+
+        // Then the dynamic transition assertion.
+        let observed = super::state_changed_actions(events_body.as_deref().unwrap_or_default());
+        match super::actions_contain_subsequence(&observed, super::SCENARIO_EXPECTED) {
+            Ok(()) => {
+                println!("verify --scenario: PASS — observed transitions {observed:?}");
+                Ok(())
+            },
+            Err(e) => {
+                dump_diagnostics(exe, events_path.as_deref());
+                Err(anyhow!(
+                    "verify --scenario transition assertion failed: {e}"
+                ))
+            },
+        }
+    }
+
+    /// Poll the latest events file until the overlay logs `entering Win32
+    /// message loop`, or `timeout` elapses.
+    fn wait_for_message_loop(dir: &Path, timeout: Duration) -> Result<()> {
+        let start = Instant::now();
+        loop {
+            if let Some(path) = latest_events_file(dir)
+                && let Ok(body) = std::fs::read_to_string(&path)
+                && body.contains(r#""message":"entering Win32 message loop""#)
+            {
+                return Ok(());
+            }
+            if start.elapsed() > timeout {
+                anyhow::bail!("overlay did not reach the Win32 message loop within {timeout:?}");
+            }
+            sleep(Duration::from_millis(100));
         }
     }
 
@@ -374,5 +538,48 @@ mod tests {
             };
             assert!(!reason.is_empty(), "verdict should explain itself: {v:?}");
         }
+    }
+
+    // ---- scenario transition assertions ---------------------------------
+
+    #[test]
+    fn extracts_state_changed_actions_in_order() {
+        let body = concat!(
+            r#"{"fields":{"message":"state changed","action":"ToggleOnOff","mode":"Horizontal"}}"#,
+            "\n",
+            r#"{"fields":{"message":"overlay running","action":"ignored"}}"#,
+            "\n",
+            r#"{"fields":{"message":"state changed","action":"CycleMode","mode":"Vertical"}}"#,
+        );
+        assert_eq!(
+            super::state_changed_actions(body),
+            vec!["ToggleOnOff".to_owned(), "CycleMode".to_owned()],
+        );
+    }
+
+    #[test]
+    fn subsequence_matches_in_order_with_extras_and_prefix() {
+        let observed = vec![
+            "ToggleOnOff".to_owned(),
+            "CycleMode".to_owned(),
+            "CycleEffect".to_owned(),
+            "BumpThickness(8)".to_owned(),
+        ];
+        assert!(
+            super::actions_contain_subsequence(&observed, &["ToggleOnOff", "CycleEffect"]).is_ok()
+        );
+        // Prefix match covers the delta-carrying bump variants.
+        assert!(super::actions_contain_subsequence(&observed, &["BumpThickness"]).is_ok());
+        assert!(super::actions_contain_subsequence(&observed, super::SCENARIO_EXPECTED).is_ok());
+    }
+
+    #[test]
+    fn subsequence_rejects_out_of_order_or_missing() {
+        let observed = vec!["CycleMode".to_owned(), "ToggleOnOff".to_owned()];
+        // ToggleOnOff→CycleMode is not an ordered subsequence of the above.
+        assert!(
+            super::actions_contain_subsequence(&observed, &["ToggleOnOff", "CycleMode"]).is_err()
+        );
+        assert!(super::actions_contain_subsequence(&observed, &["Quit"]).is_err());
     }
 }

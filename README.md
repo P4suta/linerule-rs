@@ -108,6 +108,7 @@ native でしか得られない強み:
 just run                    # 実際にオーバーレイが描画される（コンテナでは不可）
 just verify                 # GUI smoke: 数秒起動して events.jsonl で健全性を判定
 just verify-blur            # Horizontal + Blur で起動し WinRT backdrop-blur を検証
+just verify-scenario        # Ctrl+Alt chord を SendInput で注入し state 遷移を assert
 just publish-windows-native # 出荷用 linerule.exe を native ビルド
 ```
 

@@ -62,3 +62,8 @@ workspace = true
 name = "overlay_smoke"
 path = "examples/overlay_smoke.rs"
 required-features = []
+
+[[example]]
+name = "inject_chords"
+path = "examples/inject_chords.rs"
+required-features = []
