@@ -132,101 +132,18 @@ jobs:
             Write-Host "::error::linerule.exe diagnostics --dry-run exited with $($proc.ExitCode)"
             exit 1
           }
-      # P0 / Phase α: GUI smoke. `linerule.exe run --duration-ms 3000` で
-      # 実 GUI overlay を 3 秒だけ起動 (`AutoQuitTimer` が `WM_APP_QUIT_TIMER`
-      # を送り `PostQuitMessage` で graceful 終了)。終了後 `events.jsonl` を
-      # scan して `tick processing failed` (PR #57/#59 系の症状) や
-      # `level":"ERROR"` (PR #60 系の symptom) が 0 件であることを確認する。
-      #
-      # これで Phase I で発覚した 4 つの bug (E_NOINTERFACE / D2D
-      # WRONG_STATE / commit 漏れ / ShowWindow 漏れ) はすべて動的に CI で
-      # ブロックされる。
-      - name: smoke - linerule.exe run --initial-mode horizontal --initial-effect blur --duration-ms 3000 (GUI headless)
-        shell: pwsh
-        run: |
-          # 過去 run の events.jsonl / crash dump をクリーンアップ (誤検知防止)。
-          Remove-Item "target/release/events.jsonl*" -ErrorAction SilentlyContinue
-          Remove-Item "target/release/crash-*.json" -ErrorAction SilentlyContinue
-          # 失敗時診断: GUI subsystem (windows_subsystem="windows") は stderr が無いため、
-          # crash の中身は events.jsonl / crash-*.json が唯一の手がかり。target/release と
-          # %APPDATA%\linerule (diagnostics サブコマンド経由) の両方を吐き出す。
-          function Dump-Diagnostics {
-            Write-Host "--- target/release events.jsonl.* (tail 80) ---"
-            $l = Get-ChildItem -Path "target/release" -Filter "events.jsonl.*" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($l) { Get-Content $l.FullName | Select-Object -Last 80 } else { Write-Host "(none)" }
-            Write-Host "--- target/release crash-*.json ---"
-            $c = Get-ChildItem -Path "target/release" -Filter "crash-*.json" -ErrorAction SilentlyContinue
-            if ($c) { $c | ForEach-Object { Write-Host "# $($_.Name)"; Get-Content $_.FullName } } else { Write-Host "(none)" }
-            Write-Host "--- diagnostics --last-crash / --recent-events 80 (%APPDATA%) ---"
-            & "target/release/linerule.exe" diagnostics --last-crash 2>&1 | Out-Host
-            & "target/release/linerule.exe" diagnostics --recent-events 80 2>&1 | Out-Host
-          }
-          # `--initial-mode horizontal --initial-effect blur` で HUD + slit に加え
-          # WinRT backdrop-blur の COM 経路 (effect factory / IGraphicsEffectD2D1Interop /
-          # CreateBackdropBrush / tint sprite) を起動直後から exercise する。
-          $proc = Start-Process -FilePath "target/release/linerule.exe" `
-            -ArgumentList "run", "--initial-mode", "horizontal", "--initial-effect", "blur", "--duration-ms", "3000" `
-            -Wait -PassThru -NoNewWindow
-          $exit = $proc.ExitCode
-
-          # --- 描画ヘルスのハード判定 (exit code とは独立に必ず fail させる) ---
-          # events.jsonl が無い = 起動・描画パスに到達していない。
-          $log = Get-ChildItem -Path "target/release" -Filter "events.jsonl.*" `
-            -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $log) {
-            Write-Host "::error::events.jsonl not produced by GUI smoke run (exit=$exit)"
-            Dump-Diagnostics
-            exit 1
-          }
-          $logBody = Get-Content $log.FullName
-          # ERROR イベント (CreateEffectFactory 失敗等) は描画バグなので必ず fail。
-          $errLines = $logBody | Select-String -Pattern '"level":"ERROR"'
-          if ($errLines) {
-            Write-Host "::error::found $($errLines.Count) ERROR events during GUI smoke run (exit=$exit)"
-            Dump-Diagnostics
-            exit 1
-          }
-          $failLines = $logBody | Select-String -Pattern '"message":"tick processing failed"'
-          if ($failLines) {
-            Write-Host "::error::found $($failLines.Count) tick processing failed events (exit=$exit)"
-            Dump-Diagnostics
-            exit 1
-          }
-          # Rust panic は crash dump を残す。あれば fail。
-          $crashes = Get-ChildItem -Path "target/release" -Filter "crash-*.json" -ErrorAction SilentlyContinue
-          if ($crashes) {
-            Write-Host "::error::found $($crashes.Count) crash dump(s) after GUI smoke (exit=$exit)"
-            $crashes | ForEach-Object { Get-Content $_.FullName }
-            exit 1
-          }
-
-          # --- exit code の評価 ---
-          if ($exit -eq 0) {
-            Write-Host "GUI smoke OK: $($log.Name) clean (no ERROR / tick-failed / crash dump), exit 0"
-            exit 0
-          }
-          # 非ゼロ終了。「メッセージループは正常終了した後、teardown で落ちた」場合に限り
-          # 許容する。これは WinRT backdrop-blur の teardown が GitHub headless runner 上
-          # でのみ非ゼロ終了する既知の現象 (0xE0464645) で、実機 (interactive desktop) では
-          # --duration-ms / Ctrl+Alt+Q いずれも exit 0 になることを確認済み (no-blur は
-          # headless でも exit 0)。描画は上の ERROR / tick-failed / crash-dump ゲートを
-          # 全通過しているので、ここで許容しても「描画が壊れた blur」が ship されることはない。
-          $loopExited = $logBody | Select-String -Pattern '"message":"Win32 message loop exited"'
-          if ($loopExited) {
-            Write-Host "::warning::GUI smoke: clean render but non-zero exit ($exit) during teardown — known headless-only WinRT blur teardown artifact (real hardware exits 0). Tolerating."
-            Dump-Diagnostics
-            exit 0
-          }
-          # メッセージループ正常終了の記録が無い = run 中のクラッシュ。これは fail。
-          Write-Host "::error::linerule.exe run (blur) exited with $exit before a clean message-loop exit (crash during run, not teardown)"
-          Dump-Diagnostics
-          # 切り分けプローブ: blur 無し (WinRT + DimBlack) でも run 中に落ちるか。
-          Write-Host "--- probe: WinRT + DimBlack (no blur), 1500ms ---"
-          $probe = Start-Process -FilePath "target/release/linerule.exe" `
-            -ArgumentList "run", "--initial-mode", "horizontal", "--duration-ms", "1500" `
-            -Wait -PassThru -NoNewWindow
-          Write-Host "probe (no-blur) exit code: $($probe.ExitCode)"
-          exit 1
+      # P0 / Phase α: GUI smoke. Lifted into `cargo xtask verify` so CI and the
+      # local `just verify-blur` share one verdict implementation
+      # (xtask/src/verify.rs). Builds the release exe above, launches the real
+      # overlay for 3s via --duration-ms seeded into Horizontal + Blur (exercises
+      # the WinRT backdrop-blur COM path from startup), then judges events.jsonl:
+      # no `level":"ERROR"` / `tick processing failed` / crash dump, and a clean
+      # `Win32 message loop exited` (the known headless 0xE0464645 teardown
+      # artifact is tolerated; real hardware exits 0). Dynamically blocks the
+      # Phase I bug class (E_NOINTERFACE / D2D WRONG_STATE / missing commit /
+      # missing ShowWindow) the same way the old inline pwsh verdict did.
+      - name: smoke - GUI (cargo xtask verify; mirrors local just verify-blur)
+        run: cargo xtask verify --profile release --mode horizontal --effect blur
       - name: Upload binary artifact
         # smoke が crash しても binary は upload する。実機ビルド環境が無くても
         # この artifact を download して GUI / blur を目視確認できるようにする。

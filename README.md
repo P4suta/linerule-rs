@@ -72,7 +72,7 @@ WinRT backdrop blur で常時レンダリングされる。色ベール（tint�
 
 ### 開発環境
 
-ホストには Docker と [`just`](https://github.com/casey/just) があれば良い。すべての Rust ツール (`cargo`, `cargo-xwin`, `cargo-deny`, `cargo-nextest`, `cargo-machete`, `cargo-llvm-cov`, `cargo-audit`, `cargo-sort`, `typos`, `taplo`, `biome`, `yamlfmt`, `lefthook`, `actionlint`, `commitlint`) はコンテナ内に揃う。
+経路は2つ: **Docker**（ホストには Docker と [`just`](https://github.com/casey/just) があれば良く、すべての Rust ツール (`cargo`, `cargo-xwin`, `cargo-deny`, `cargo-nextest`, `cargo-machete`, `cargo-llvm-cov`, `cargo-audit`, `cargo-sort`, `typos`, `taplo`, `biome`, `yamlfmt`, `lefthook`, `actionlint`, `commitlint`) はコンテナ内に揃う）か、**ネイティブ Windows**（Docker 無しで開発・実機検証する。下記「ネイティブ Windows 開発」を参照）。`just` がどちらかを自動判定する。
 
 ```bash
 just bootstrap      # 一発セットアップ: docker build + git hooks + xwin sysroot prefetch + doctor
@@ -89,6 +89,31 @@ just bootstrap      # 一発セットアップ: docker build + git hooks + xwin 
 Windows クロスコンパイル用の MSVC CRT / Windows SDK（~500 MB）は dev image に焼き込まれているので、初回の `just cross-check` も即座に通る。
 
 困ったら `just doctor` を打てば、どのツールが落ちているかすぐ分かる。
+
+#### ネイティブ Windows 開発（Docker なし）
+
+Docker は再現性のためのクロスプラットフォーム経路だが、これは Windows 専用アプリなので **Windows ホスト上で Docker 無しに開発するのが一級の道**として用意されている（オーバーレイの実機描画は Linux コンテナでは原理的にできない）。`just` は実行モードを自動判定する: `INSIDE_CONTAINER=1` ならコンテナ内、Docker が無ければ **native**、Docker があれば docker 経由。Docker があるホストで native を強制したいときは `LINERULE_NATIVE=1 just <recipe>`。
+
+ホストのツールは [mise](https://mise.jdx.dev/) で揃える（リポジトリ root の `mise.toml` に pin 済み）:
+
+```bash
+mise install        # cargo-nextest / cargo-deny / biome / yamlfmt 等を一括導入
+just bootstrap      # native を自動判定: rustup component + git hooks + doctor-native
+just doctor-native  # 必須ツールの疎通確認（mold/clang/xwin は native では対象外）
+```
+
+native でしか得られない強み:
+
+```bash
+just run                    # 実際にオーバーレイが描画される（コンテナでは不可）
+just verify                 # GUI smoke: 数秒起動して events.jsonl で健全性を判定
+just verify-blur            # Horizontal + Blur で起動し WinRT backdrop-blur を検証
+just publish-windows-native # 出荷用 linerule.exe を native ビルド
+```
+
+`just verify` は CI の release-build と同じ判定ロジック（`cargo xtask verify`）を共有する — 起動後 `events.jsonl` を読み、ERROR 0 件 / `tick processing failed` 無し / crash dump 無し / `Win32 message loop exited` 到達を確認する（headless 特有の WinRT teardown 非ゼロ終了は許容、実機は exit 0）。
+
+> 改行コード: リポジトリは `.gitattributes` で LF を強制する（rustfmt / biome / taplo / yamlfmt はすべて LF 前提）。本ファイル追加以前にできた既存の Windows clone は、一度だけ `git add --renormalize . && git checkout .` を実行して作業ツリーを LF に揃えると `just fmt` / `just lint` / commit hook が通る。
 
 #### 高速化の根拠（測定済み）
 
