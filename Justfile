@@ -422,6 +422,14 @@ verify-blur profile="debug":
     @if [ "{{profile}}" = "release" ]; then cargo build --release -p linerule-app; else cargo build -p linerule-app; fi
     cargo xtask verify --profile {{profile}} --mode horizontal --effect blur
 
+# Interactive chord-injection scenario: drive Ctrl+Alt chords via SendInput
+# (toggle on → flip axis → cycle effect → quit) and assert the state-changed
+# series. The one check the Linux container can't run — needs a real, interactive
+# Windows desktop session.
+verify-scenario profile="debug":
+    @if [ "{{profile}}" = "release" ]; then cargo build --release -p linerule-app && cargo build --release --example inject_chords -p linerule-platform-windows; else cargo build -p linerule-app && cargo build --example inject_chords -p linerule-platform-windows; fi
+    cargo xtask verify --profile {{profile}} --scenario
+
 # ----- diagnostics -----
 #
 # Phase J (ADR-0011) 以降、ログは `linerule.exe` と同じディレクトリに出る

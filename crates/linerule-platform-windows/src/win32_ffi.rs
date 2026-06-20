@@ -32,6 +32,9 @@ pub mod graphics;
 pub mod hotkey;
 
 #[cfg(any(doc, target_os = "windows"))]
+pub mod input;
+
+#[cfg(any(doc, target_os = "windows"))]
 pub mod pacer;
 
 pub use core::*;

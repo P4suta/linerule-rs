@@ -41,5 +41,6 @@ pub use foreground_hook::ForegroundHook;
 pub use overlay_state::{HotkeyConflict, HotkeyFailure, OverlayWndState};
 pub use overlay_window::OverlayWindow;
 pub use render_clock::RenderClock;
+pub use win32_ffi::input::send_chord;
 pub use win32_ffi::set_dpi_aware;
 pub use windows_app::run_message_pump;
