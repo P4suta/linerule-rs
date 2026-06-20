@@ -34,6 +34,8 @@
 mod ci;
 mod dep_graph;
 mod lint;
+mod mode;
+mod verify;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -57,6 +59,8 @@ enum Command {
     Lint,
     /// Replay the CI test/build matrix locally.
     Ci,
+    /// GUI smoke: drive linerule.exe and judge events.jsonl (Windows host).
+    Verify(verify::VerifyArgs),
 }
 
 fn main() -> Result<()> {
@@ -65,5 +69,6 @@ fn main() -> Result<()> {
         Command::DepGraph => dep_graph::run(),
         Command::Lint => lint::run(),
         Command::Ci => ci::run(),
+        Command::Verify(args) => verify::run(args),
     }
 }

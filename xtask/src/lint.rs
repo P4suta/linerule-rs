@@ -13,6 +13,54 @@ use anyhow::{Result, anyhow};
     reason = "lint パイプライン定義は本質的に長い線形列。helper 抽出は可読性を損なう。"
 )]
 pub(crate) fn run() -> Result<()> {
+    // From Linux the Windows-target clippy step needs cargo-xwin; on a native
+    // Windows host the host already targets msvc, so run clippy directly (xwin
+    // isn't installed there and isn't needed). Flags are identical either way.
+    let mut win_clippy: Vec<&str> = if crate::mode::is_native() {
+        vec!["cargo", "clippy"]
+    } else {
+        vec!["cargo", "xwin", "clippy"]
+    };
+    win_clippy.extend_from_slice(&[
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-A",
+        "warnings",
+        "-A",
+        "clippy::all",
+        "-A",
+        "clippy::pedantic",
+        "-A",
+        "clippy::nursery",
+        "-A",
+        "clippy::cargo",
+        "-A",
+        "clippy::wildcard_imports",
+        "-A",
+        "clippy::mod_module_files",
+        "-A",
+        "clippy::or_fun_call",
+        "-A",
+        "clippy::unwrap_used",
+        "-A",
+        "clippy::dbg_macro",
+        "-A",
+        "clippy::allow_attributes_without_reason",
+        "-A",
+        "unsafe_op_in_unsafe_fn",
+        "-A",
+        "static_mut_refs",
+        "-D",
+        "clippy::disallowed_methods",
+        "-D",
+        "clippy::disallowed_types",
+        "-D",
+        "clippy::disallowed_macros",
+    ]);
+
     let steps: Vec<(&str, Vec<&str>)> = vec![
         ("rustfmt", vec!["cargo", "fmt", "--all", "--", "--check"]),
         (
@@ -47,51 +95,7 @@ pub(crate) fn run() -> Result<()> {
         // 本ステップでは Windows 専用コードの他 lint (pedantic, style, unwrap_used
         // 等) を `-A` で抑え、`disallowed_methods` / `disallowed_types` /
         // `disallowed_macros` のみを `-D` で発火させる。deny list 系の誤用防止が主目的。
-        (
-            "clippy-windows-deny-list",
-            vec![
-                "cargo",
-                "xwin",
-                "clippy",
-                "--target",
-                "x86_64-pc-windows-msvc",
-                "--workspace",
-                "--all-targets",
-                "--",
-                "-A",
-                "warnings",
-                "-A",
-                "clippy::all",
-                "-A",
-                "clippy::pedantic",
-                "-A",
-                "clippy::nursery",
-                "-A",
-                "clippy::cargo",
-                "-A",
-                "clippy::wildcard_imports",
-                "-A",
-                "clippy::mod_module_files",
-                "-A",
-                "clippy::or_fun_call",
-                "-A",
-                "clippy::unwrap_used",
-                "-A",
-                "clippy::dbg_macro",
-                "-A",
-                "clippy::allow_attributes_without_reason",
-                "-A",
-                "unsafe_op_in_unsafe_fn",
-                "-A",
-                "static_mut_refs",
-                "-D",
-                "clippy::disallowed_methods",
-                "-D",
-                "clippy::disallowed_types",
-                "-D",
-                "clippy::disallowed_macros",
-            ],
-        ),
+        ("clippy-windows-deny-list", win_clippy),
         (
             "cargo-deny",
             vec![
