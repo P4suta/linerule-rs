@@ -357,4 +357,22 @@ mod tests {
             Verdict::Fail(_)
         ));
     }
+
+    #[test]
+    fn every_verdict_carries_a_nonempty_reason() {
+        // Reads the String payload of all three variants. On a non-Windows test
+        // build the production reader (`win::run`) is cfg'd out, so without this
+        // the fields are "never read" (dead_code); it also pins the contract
+        // that every verdict explains itself.
+        for v in [
+            judge(None, false, Some(0), false),
+            judge(Some(CLEAN), false, Some(0), false),
+            judge(Some(CLEAN), false, Some(1), false),
+        ] {
+            let reason = match &v {
+                Verdict::Pass(r) | Verdict::Tolerated(r) | Verdict::Fail(r) => r,
+            };
+            assert!(!reason.is_empty(), "verdict should explain itself: {v:?}");
+        }
+    }
 }
