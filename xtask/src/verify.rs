@@ -112,8 +112,10 @@ pub(crate) fn judge(
 }
 
 /// `HotkeyMap` field names injected by `--scenario`, terminated by `quit` so the
-/// overlay quits gracefully instead of waiting out `--duration-ms`.
-#[cfg(any(target_os = "windows", test))]
+/// overlay quits gracefully instead of waiting out `--duration-ms`. Only the
+/// Windows `run_scenario` reads it (tests assert against `SCENARIO_EXPECTED`),
+/// so gate it to Windows to avoid a dead-code warning in a Linux test build.
+#[cfg(target_os = "windows")]
 const SCENARIO_ACTIONS: &str = "toggle_on_off,cycle_mode,cycle_effect,quit";
 
 /// Expected `state changed` action Debug values, in order, for
