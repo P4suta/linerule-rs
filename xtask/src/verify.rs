@@ -112,6 +112,12 @@ pub(crate) fn run(args: VerifyArgs) -> anyhow::Result<()> {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::unnecessary_wraps,
+    reason = "signature must match the Windows `run` (main.rs dispatches identically on every \
+              target); this variant is a no-op stub that owns and drops the args and never errors"
+)]
 pub(crate) fn run(args: VerifyArgs) -> anyhow::Result<()> {
     let _ = args;
     println!(
