@@ -41,6 +41,13 @@ jobs:
     name: build EXE + SBOM, draft release, upload, publish
     runs-on: windows-latest
     timeout-minutes: 30
+    # Gated behind the `release` GitHub Environment: a pushed `v*` tag
+    # (release-please) or a manual dispatch pauses for required-reviewer
+    # approval before the EXE is built and the GitHub Release is
+    # published. The environment also restricts deployments to `main` +
+    # `v*` refs. Only the ephemeral GITHUB_TOKEN is used here — the gate
+    # adds a human checkpoint before a release goes public.
+    environment: release
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
