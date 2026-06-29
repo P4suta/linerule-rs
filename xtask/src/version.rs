@@ -4,9 +4,9 @@
 //! `build.rs` stamps it verbatim into the shipped binary, and `nightly.yml`
 //! names the nightly artifact from it.
 //!
-//!   dev     → 0.4.1-dev+g<sha>
-//!   nightly → 0.4.1-nightly.<date>+g<sha>
-//!   stable  → 0.4.1                          (clean; the release tag itself)
+//!   dev     → `0.4.1-dev+g<sha>`
+//!   nightly → `0.4.1-nightly.<date>+g<sha>`
+//!   stable  → `0.4.1`                        (clean; the release tag itself)
 //!
 //! The base `X.Y.Z` triple is `env!("CARGO_PKG_VERSION")`: xtask inherits
 //! `version.workspace = true`, so it equals `[workspace.package] version` — the
