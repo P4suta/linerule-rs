@@ -359,3 +359,46 @@ jobs:
         if: github.event_name == 'pull_request'
       - uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed # v6.2.1
         if: github.event_name == 'pull_request'
+
+  # Single aggregation gate. Branch/tag protection (the `.github/rulesets/`
+  # JSONs) reference exactly one status context — `ci-required` — instead of
+  # enumerating every job above, so adding/renaming a job never desyncs the
+  # ruleset. `if: always()` so the gate still runs when an upstream job fails;
+  # `skipped` counts as pass, which is what lets PR-only jobs (dependency-review,
+  # conventional-commits) report green on the merge_group / push events where
+  # they don't run — otherwise the merge queue would stall forever. See ADR-0019.
+  ci-required:
+    name: ci-required
+    if: always()
+    needs:
+      - build-test-linux
+      - build-test-windows
+      - cross-check
+      - release-build
+      - fmt
+      - fmt-non-rust
+      - clippy
+      - doc
+      - dep-graph
+      - spell-check
+      - actionlint
+      - cargo-deny
+      - cargo-machete
+      - cargo-audit
+      - coverage
+      - dependency-review
+      - conventional-commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: verify all required jobs passed (skipped counts as pass)
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "needs results: $results"
+          for r in $results; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "::error::a required job did not pass ($r)"
+              exit 1
+            fi
+          done
+          echo "all required jobs passed"
