@@ -1,7 +1,9 @@
 # linerule-rs CI.
 #
 # Policy:
-#   - No `on: schedule`. Dependabot is the only scheduled job.
+#   - CI itself has no `on: schedule`. `nightly.yml` is the one deliberate
+#     scheduled workflow (unsigned nightly artifact; see ADR-0018); Dependabot
+#     is the only other scheduled job.
 #   - Every action is SHA-pinned; Dependabot bumps weekly.
 #   - Cross-platform jobs run on ubuntu-latest; Windows-native build /
 #     test runs on windows-latest because the platform crate is `#![cfg(windows)]`.
