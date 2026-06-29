@@ -15,7 +15,22 @@ fn version_subcommand_exits_zero_and_prints_linerule_prefix() {
         .arg("version")
         .assert()
         .success()
-        .stdout(predicate::str::starts_with("linerule "));
+        .stdout(predicate::str::starts_with("linerule "))
+        // The stamped version always carries the workspace base triple.
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn version_flag_exits_zero_and_prints_linerule_prefix() {
+    // clap's native `--version`, wired to the same stamped string as the
+    // `version` subcommand.
+    Command::cargo_bin("linerule")
+        .expect("binary built")
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("linerule "))
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
 }
 
 #[test]

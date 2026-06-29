@@ -8,6 +8,8 @@
 //! - `lint`: runs the full local lint pipeline (fmt, clippy, deny, typos,
 //!   actionlint, dep-graph, machete).
 //! - `ci`: replays the CI test/build matrix locally.
+//! - `version`: prints the channel-aware build version (dev|nightly|stable);
+//!   CI exports it as `LINERULE_VERSION` for the build-stamp.
 //!
 //! xtask is a CLI boundary: stdout/stderr printing and panic-on-misconfig
 //! are intentional, hence the narrow crate-level lint relaxations below.
@@ -36,6 +38,7 @@ mod dep_graph;
 mod lint;
 mod mode;
 mod verify;
+mod version;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -61,6 +64,8 @@ enum Command {
     Ci,
     /// GUI smoke: drive linerule.exe and judge events.jsonl (Windows host).
     Verify(verify::VerifyArgs),
+    /// Print the channel-aware build version (dev|nightly|stable).
+    Version(version::VersionArgs),
 }
 
 fn main() -> Result<()> {
@@ -70,5 +75,6 @@ fn main() -> Result<()> {
         Command::Lint => lint::run(),
         Command::Ci => ci::run(),
         Command::Verify(args) => verify::run(args),
+        Command::Version(args) => version::run(&args),
     }
 }
