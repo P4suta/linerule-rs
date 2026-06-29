@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "linerule",
     about = "Reading-ruler overlay for Windows",
+    version = crate::version::VERSION,
     disable_help_subcommand = true
 )]
 pub(crate) struct Cli {
