@@ -57,10 +57,10 @@ impl AutoQuitTimer {
 
 impl Drop for AutoQuitTimer {
     fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            if let Err(e) = handle.join() {
-                tracing::warn!(?e, "auto-quit timer thread panicked during join");
-            }
+        if let Some(handle) = self.handle.take()
+            && let Err(e) = handle.join()
+        {
+            tracing::warn!(?e, "auto-quit timer thread panicked during join");
         }
     }
 }

@@ -150,7 +150,7 @@ fn run_overlay(
     };
 
     // Push recoverable errors collected during boot as 10s HUD notifications.
-    for message in early_recoverable.drain(..) {
+    for message in early_recoverable {
         overlay
             .state()
             .push_notification(linerule_core::NotificationClass::Warn, message, 10_000);

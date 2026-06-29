@@ -212,6 +212,11 @@ pub fn take_userdata(hwnd: HWND) -> Option<Box<OverlayWndState>> {
 
 /// Drops a Box when CreateWindowExW failed before WM_NCCREATE, so the pointer
 /// never reached `GWLP_USERDATA`; the caller passes it directly.
+#[allow(
+    clippy::not_unsafe_ptr_arg_deref,
+    reason = "kept a safe fn for cleanup-path ergonomics; the Box::from_raw contract is documented \
+              in the SAFETY comment below and upheld by the single CreateWindowExW failure caller"
+)]
 pub fn drop_userdata_raw(ptr: *mut OverlayWndState) {
     if ptr.is_null() {
         return;
@@ -325,6 +330,13 @@ pub fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
 ///   `DefWindowProcW`.
 ///
 /// `dispatch` lives in `#![forbid(unsafe_code)]` wndproc.rs and adds no unsafe.
+///
+/// # Safety
+/// Must only be installed as a window class `lpfnWndProc` and invoked by the
+/// Win32 message pump: `hwnd` must be a valid window of that class and, for
+/// `WM_NCCREATE`, `lparam` must point to a `CREATESTRUCTW` whose `lpCreateParams`
+/// is the `Box::into_raw(OverlayWndState)` pointer. These hold by construction
+/// because only `RegisterClassExW` + `CreateWindowExW` here reference it.
 pub unsafe extern "system" fn overlay_wnd_proc(
     hwnd: HWND,
     msg: u32,

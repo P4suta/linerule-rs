@@ -187,7 +187,6 @@ mod tests {
             // Account for window truncation at WINDOW_CAPACITY.
             let kept: Vec<u64> = samples.iter().rev().take(WINDOW_CAPACITY).copied().collect();
             let &max = kept.iter().max().unwrap();
-            #[allow(clippy::cast_precision_loss)]
             let max_f32 = max as f32;
             let p99 = t.snapshot().tick_p99_ms;
             prop_assert!(p99 >= 0.0);
@@ -201,7 +200,6 @@ mod tests {
             for _ in 0..n {
                 t.record_tick(ms(v), false);
             }
-            #[allow(clippy::cast_precision_loss)]
             let v_f32 = v as f32;
             let p99 = t.snapshot().tick_p99_ms;
             prop_assert!((p99 - v_f32).abs() < 0.001);

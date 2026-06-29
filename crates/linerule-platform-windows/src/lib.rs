@@ -14,6 +14,17 @@
 
 #![cfg(windows)]
 #![deny(unsafe_op_in_unsafe_fn)]
+// Win32/COM/D3D の薄いラッパー層は pedantic/nursery を crate 単位で免除する。
+// xtask lint の `clippy-windows-deny-list` ステップが Windows target に対して
+// 同グループを `-A` で抑える方針と一致させ、native host の主 clippy step
+// (`--workspace -D warnings`) でも platform crate が依存コンパイルされる際に
+// pedantic ノイズ (cast 系・doc_markdown・inline_always 等) で落ちないようにする。
+// correctness/style/perf を含む `clippy::all` と `disallowed_*` は引き続き enforce。
+#![allow(
+    clippy::pedantic,
+    clippy::nursery,
+    reason = "Win32/COM 層の pedantic/nursery は意図的に免除 (clippy-windows-deny-list と同方針)"
+)]
 
 pub mod auto_quit;
 pub mod cursor_tracker;
