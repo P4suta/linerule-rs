@@ -57,10 +57,10 @@ impl RenderClock {
 impl Drop for RenderClock {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        if let Some(handle) = self.handle.take() {
-            if let Err(e) = handle.join() {
-                tracing::warn!(?e, "render_clock pacer thread panicked during join");
-            }
+        if let Some(handle) = self.handle.take()
+            && let Err(e) = handle.join()
+        {
+            tracing::warn!(?e, "render_clock pacer thread panicked during join");
         }
     }
 }

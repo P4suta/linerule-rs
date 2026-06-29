@@ -105,7 +105,7 @@ pub(crate) fn classify_and_log(err: &AppError) -> RunDecision {
 pub(crate) enum RunDecision {
     /// Recoverable. Caller pushes a HUD notification.
     Continue,
-    /// Fatal / ProgrammerError. Caller does `Err(_)?`.
+    /// Fatal / `ProgrammerError`. Caller does `Err(_)?`.
     Stop,
 }
 

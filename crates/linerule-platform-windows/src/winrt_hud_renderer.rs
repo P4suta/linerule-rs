@@ -151,6 +151,10 @@ impl WinrtHudRenderer {
             bottom: frame.panel_height,
         };
 
+        #[allow(
+            clippy::expect_used,
+            reason = "surface is created unconditionally above in this method before this use"
+        )]
         let surface = self.surface.as_ref().expect("just created");
         let (dc, offset) = begin_surface_draw(surface)?;
         let draw = dwrite::draw_hud_rows(

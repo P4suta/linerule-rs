@@ -116,6 +116,10 @@ impl OverlayWindow {
                 win32_ffi::show_window_noactivate(hwnd);
 
                 // SAFETY: Box::into_raw is never null.
+                #[allow(
+                    clippy::expect_used,
+                    reason = "Box::into_raw never yields null; this is an enforced invariant, not fallible I/O"
+                )]
                 let state = NonNull::new(state_ptr).expect("Box::into_raw is never null");
                 // Shelve the HWND so device-lost rebuild can call
                 // `WinrtCompositionRenderer::new(hwnd)` again.
