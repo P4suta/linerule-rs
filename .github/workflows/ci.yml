@@ -394,7 +394,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: verify all required jobs passed (skipped counts as pass)
-        run: |
+        run: |-
           results="${{ join(needs.*.result, ' ') }}"
           echo "needs results: $results"
           for r in $results; do
