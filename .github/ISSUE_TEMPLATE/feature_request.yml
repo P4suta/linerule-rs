@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest an idea (please read the out-of-scope list first)
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before you file
+
+        linerule-rs is deliberately a **reading-ruler overlay for Windows** —
+        that focus is what keeps it small and fast. The following are explicitly
+        **out of scope**, and such requests will be closed:
+
+        - Cross-platform support (Windows-only by design)
+        - Eye-tracking hardware integration
+        - Features beyond a reading ruler (annotation, OCR, capture, etc.)
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: I confirm this is not on the out-of-scope list above.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

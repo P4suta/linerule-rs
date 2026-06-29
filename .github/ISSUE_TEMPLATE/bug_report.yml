@@ -1,0 +1,82 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Logs help. They sit next to `linerule.exe` as
+        `events.jsonl.YYYY-MM-DD` (and `crash-*.json` on panic). To collect them:
+
+        ```
+        linerule diagnostics --recent-events 50
+        linerule diagnostics --last-crash
+        ```
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did and what went wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `linerule version`, or the release tag.
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: e.g. Windows 11 23H2 (build 22631)
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU / display setup
+      placeholder: e.g. NVIDIA RTX 3060, single 4K monitor at 150% scaling
+  - type: dropdown
+    id: overlay-state
+    attributes:
+      label: Overlay state when it happened
+      options:
+        - Off
+        - Horizontal
+        - Vertical
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: effect
+    attributes:
+      label: Surround effect
+      options:
+        - Dim
+        - White
+        - Blur
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpts
+      description: From `linerule diagnostics` or the `events.jsonl` / `crash-*.json` files.
+      render: shell

@@ -1,10 +1,31 @@
-# On tag push, build the Windows EXE + CycloneDX SBOM and attach them via a
-# 3-step draft release -> upload -> publish flow.
-# Immutable releases reject (422) adding assets to a published release, so
-# "upload everything while draft, then publish last" is the only automatable
-# path (ADR-0014).
-# release-please owns CHANGELOG / version / tag push (`skip-github-release:
-# true`); this workflow does the release attach.
+# On tag push (`vX.Y.Z`): build Windows EXE + CycloneDX SBOM, sign with
+# Authenticode (SSL.com eSigner, non-blocking), generate SHA256SUMS, create a
+# DRAFT GitHub Release, upload assets, keyless attestation (build provenance +
+# SBOM), then publish.
+#
+# Immutable releases (GA 2025-10-28) reject post-publish asset adds with 422.
+# Draft releases stay mutable, so "upload everything while draft, then publish
+# (draft=false)" is the only supported automation path. See ADR-0014
+# (supersedes ADR-0010).
+#
+# Signing is non-blocking: without secrets (ES_USERNAME / CREDENTIAL_ID) the
+# binary ships unsigned with a `::warning::`. Setup and rationale: docs/SIGNING.md
+# and ADR-0017. Verify provenance:
+# `gh attestation verify <exe> --repo P4suta/linerule-rs`.
+#
+# Trigger:
+#   - push: tags: ["v*"]              # tags pushed by release-please with
+#                                     # `skip-github-release: true` (always publish)
+#   - workflow_dispatch               # manual retry / signing smoke test
+#       inputs.tag                    #   ref to (re)build; `main` for a smoke test
+#       inputs.publish (default true) #   false = build+sign+verify only; creates no
+#                                     #   Release/tag/attestation. Safe smoke test
+#                                     #   that verifies signing without touching
+#                                     #   immutable releases.
+#
+# release-please.yml handles CHANGELOG / version bump / tag push; this workflow
+# owns the GitHub Release (draft → publish). Wired via
+# `skip-github-release: true` in release-please-config.json.
 
 name: release-assets
 
@@ -14,11 +35,18 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to (re)build assets for (e.g. v0.4.1)" # manual retry on failure
+        description: "Tag to (re)build assets for (e.g. v0.4.1), or `main` for a signing smoke test"
         required: true
+      publish:
+        description: "Publish a GitHub Release (false = build+sign+verify only; safe under immutable releases)"
+        required: false
+        default: true
+        type: boolean
 
+# Least privilege at the top level; the job below requests only the write scopes
+# it needs (job-scoped writes are preferred over a broad top-level grant).
 permissions:
-  contents: write # needed for gh release create / upload / edit
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,18 +54,40 @@ env:
 
 jobs:
   build-and-release:
-    name: build EXE + SBOM, draft release, upload, publish
+    name: build EXE + SBOM, sign, draft release, attest, publish
     runs-on: windows-latest
     timeout-minutes: 30
     # Gated behind the `release` Environment: required-reviewer approval +
     # ref restricted to `main`/`v*` before a release goes public.
     environment: release
+    permissions:
+      contents: write # gh release create / upload / edit
+      id-token: write # OIDC token for keyless Sigstore signing (attestations)
+      attestations: write # write build-provenance + SBOM attestations
+    env:
+      # Build the shipped binary from the committed Cargo.lock, never a silent
+      # re-resolve (the cargo-sbom install step passes its own --locked).
+      CARGO_NET_LOCKED: "true"
+      # secrets.* can't be referenced in `if:`, so hoist to an env bool and gate
+      # the signing steps on env.HAVE_SIGNING.
+      HAVE_SIGNING: ${{ secrets.ES_USERNAME != '' && secrets.CREDENTIAL_ID != '' }}
+      # tag push always publishes; workflow_dispatch follows inputs.publish
+      # (publish=false = build+sign+verify only, no Release; signing smoke test).
+      PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      # Stamp the binary as a clean stable `X.Y.Z`. Without this, linerule-app's
+      # build.rs defaults to the `-dev+g<sha>` lane and the shipped EXE would
+      # self-report a dev version (== the release tag, since release-please syncs
+      # [workspace.package].version via extra-files). See ADR-0018.
+      - name: stamp stable version
+        shell: bash
+        run: echo "LINERULE_VERSION=$(cargo xtask version --channel stable)" >> "$GITHUB_ENV"
 
       - name: cargo build --release (shipping profile, panic=abort, strip=symbols)
         run: cargo build --release -p linerule-app
@@ -50,7 +100,9 @@ jobs:
         shell: pwsh
         run: |-
           $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # Single-binary distribution (ADR-0011): only linerule-app's dependency closure.
+          # Single-binary distribution (ADR-0011), so scope to linerule-app's
+          # dependency closure. CycloneDX 1.6 JSON is accepted by GitHub
+          # Dependency Submission and SBOM scanners generally.
           cargo sbom --output-format=cyclone_dx_json_1_6 --cargo-package linerule-app `
             > "linerule-${tag}-sbom.cdx.json"
 
@@ -60,13 +112,89 @@ jobs:
           $tag = "${{ github.event.inputs.tag || github.ref_name }}"
           Copy-Item target/release/linerule.exe "linerule-${tag}-win-x64.exe"
 
+      # Authenticode signing (non-blocking). The only first-party PE is
+      # `linerule.exe`, so stage that one file, batch_sign it, copy back from
+      # signed/, and hard-verify. eSigner is a cloud HSM (no key on the runner;
+      # unattended auth via TOTP secret). Gated only on env.HAVE_SIGNING, not
+      # env.PUBLISH, so sign+verify also runs in a publish=false smoke test.
+      - name: stage binary for signing
+        if: env.HAVE_SIGNING == 'true'
+        shell: pwsh
+        run: |-
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          New-Item -ItemType Directory -Force sign-stage | Out-Null
+          New-Item -ItemType Directory -Force signed | Out-Null
+          Copy-Item "linerule-${tag}-win-x64.exe" sign-stage/
+
+      - name: sign staged binary (SSL.com eSigner)
+        if: env.HAVE_SIGNING == 'true'
+        uses: SSLcom/esigner-codesign@cf5f6c1d38ad10f47e3ed9aca873f429b1a8d85b # v1.3.2
+        with:
+          command: batch_sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          dir_path: ${{ github.workspace }}\sign-stage
+          # batch_sign ignores `override`; without an explicit output_path the
+          # copy-back picks up the unsigned original and Verify reports "NotSigned".
+          output_path: ${{ github.workspace }}\signed
+          environment_name: PROD
+          # Pass SSL.com's pre-signing malware scan inline; without it hash
+          # submission fails with "hash needs to be scanned first".
+          malware_block: "true"
+
+      - name: copy signed binary back
+        if: env.HAVE_SIGNING == 'true'
+        shell: pwsh
+        run: |-
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          Copy-Item "signed/linerule-${tag}-win-x64.exe" "linerule-${tag}-win-x64.exe" -Force
+
+      # Fail unless Valid, so we never ship unsigned after requesting signing.
+      - name: verify signature
+        if: env.HAVE_SIGNING == 'true'
+        shell: pwsh
+        run: |-
+          $ErrorActionPreference = 'Stop'
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $sig = Get-AuthenticodeSignature "linerule-${tag}-win-x64.exe"
+          if ($sig.Status -ne 'Valid') {
+            throw "Authenticode check failed for linerule-${tag}-win-x64.exe - status: $($sig.Status)"
+          }
+          Write-Host "signed: linerule-${tag}-win-x64.exe - $($sig.SignerCertificate.Subject)"
+
+      - name: warn if unsigned
+        if: env.HAVE_SIGNING != 'true'
+        run: echo "::warning::Signing secrets absent - publishing UNSIGNED binary (SmartScreen will warn end users). See docs/SIGNING.md to enable."
+
+      # SHA256SUMS.txt (exe + sbom). For `sha256sum -c` compatibility: lowercase
+      # hex, bare filenames, LF newlines (use WriteAllText; Out-File emits CRLF).
+      - name: generate SHA256SUMS.txt
+        if: env.PUBLISH == 'true'
+        shell: pwsh
+        run: |-
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $files = @("linerule-${tag}-win-x64.exe", "linerule-${tag}-sbom.cdx.json")
+          $lines = foreach ($f in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
+            "$hash  $f"
+          }
+          [System.IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", ($lines -join "`n") + "`n")
+          Get-Content SHA256SUMS.txt
+
       - name: create draft release (or reuse existing draft)
+        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |-
           $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # Reuse a leftover draft, else create one. Fail if already published, to avoid the 422.
+          # Reuse a leftover draft (prior run failed just before publish, or
+          # workflow_dispatch retry); otherwise create one. `--generate-notes`
+          # auto-builds release notes from the PR title list. Different format
+          # from release-please's changelog, but the core info (PR number +
+          # title) is the same.
           $existing = gh release view $tag --json isDraft --jq '.isDraft' 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag --draft --title "$tag" --generate-notes
@@ -78,22 +206,43 @@ jobs:
           }
 
       - name: upload assets to draft release
+        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |-
           $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # `--clobber` makes re-upload idempotent (for manual retry).
+          # `--clobber` makes re-uploads idempotent (manual retry).
           gh release upload $tag `
             "linerule-${tag}-win-x64.exe" `
             "linerule-${tag}-sbom.cdx.json" `
+            "SHA256SUMS.txt" `
             --clobber
 
+      # build provenance + SBOM attestation (keyless / OIDC, no stored secrets),
+      # over the signed final bytes. Verify:
+      # `gh attestation verify linerule-vX.Y.Z-win-x64.exe --repo P4suta/linerule-rs`.
+      - name: attest build provenance
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            linerule-${{ github.event.inputs.tag || github.ref_name }}-win-x64.exe
+            SHA256SUMS.txt
+
+      - name: attest SBOM
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: linerule-${{ github.event.inputs.tag || github.ref_name }}-win-x64.exe
+          sbom-path: linerule-${{ github.event.inputs.tag || github.ref_name }}-sbom.cdx.json
+
       - name: publish release (draft → public, locks immutable)
+        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |-
           $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # Publishing locks it immutable; any later asset add returns 422.
+          # Immutable lock applies here; later asset adds are rejected with 422.
           gh release edit $tag --draft=false --latest
