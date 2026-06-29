@@ -374,6 +374,11 @@ ci:
     @echo "==> cargo xtask ci"
     LINERULE_MODE={{mode}} {{cargo}} xtask ci
 
+# Channel-aware build version (dev|nightly|stable). Mirrors what CI stamps as
+# LINERULE_VERSION; `--date YYYYMMDD` is required for the nightly channel.
+version channel date="":
+    @if [ -n "{{date}}" ]; then {{cargo}} xtask version --channel {{channel}} --date {{date}}; else {{cargo}} xtask version --channel {{channel}}; fi
+
 # ----- cross-compile checks -----
 
 # Compile-only check that Windows code still builds from Linux dev container.
