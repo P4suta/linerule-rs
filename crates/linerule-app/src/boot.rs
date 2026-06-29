@@ -38,7 +38,7 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
     // run_id in its events.jsonl line.
     let root = tracing::info_span!("linerule_run", run_id = %run_id);
     let _entered = root.enter();
-    tracing::info!(run_id = %run_id, version = env!("CARGO_PKG_VERSION"), "linerule boot");
+    tracing::info!(run_id = %run_id, version = crate::version::VERSION, "linerule boot");
 
     dispatch_command(cli)
 }
@@ -71,8 +71,8 @@ pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
             data_dir,
         }),
         Command::Version => {
-            println!("linerule {}", env!("CARGO_PKG_VERSION"));
-            tracing::info!(version = env!("CARGO_PKG_VERSION"), "linerule version");
+            println!("linerule {}", crate::version::VERSION);
+            tracing::info!(version = crate::version::VERSION, "linerule version");
             Ok(())
         },
     }
@@ -299,12 +299,17 @@ mod tests {
 
     #[traced_test]
     #[test]
-    fn version_dispatch_emits_info_with_package_version() {
+    fn version_dispatch_emits_info_with_stamped_version() {
         dispatch_command(parse(&["version"])).expect("version subcommand");
-        let pkg = env!("CARGO_PKG_VERSION");
         assert!(
-            logs_contain(pkg),
-            "info event should include CARGO_PKG_VERSION"
+            logs_contain(crate::version::VERSION),
+            "info event should include the stamped LINERULE_VERSION"
+        );
+        // The stamped string always carries the workspace base version, so a
+        // dev/nightly suffix never drops the X.Y.Z triple.
+        assert!(
+            logs_contain(env!("CARGO_PKG_VERSION")),
+            "stamped version should contain the base CARGO_PKG_VERSION"
         );
         assert!(
             logs_contain("linerule version"),

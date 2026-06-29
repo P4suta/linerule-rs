@@ -33,6 +33,7 @@ mod crash_dump;
 mod error;
 mod event_ring;
 mod logging;
+mod version;
 
 fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
