@@ -9,7 +9,5 @@
       "exclude": ["refs/heads/gh-pages"]
     }
   },
-  "rules": [
-    { "type": "required_signatures" }
-  ]
+  "rules": [{ "type": "required_signatures" }]
 }
