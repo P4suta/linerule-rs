@@ -1,6 +1,4 @@
-//! Pure tick pipeline: turns a tick's inputs (drained hotkeys, polled cursor,
-//! timestamp) into the next [`TickWorld`] and a list of [`TickEffect`] for the
-//! platform layer to apply.
+//! Pure tick pipeline: tick inputs -> next [`TickWorld`] + [`TickEffect`] list.
 
 use std::time::Duration;
 
@@ -25,9 +23,8 @@ pub struct TickInput {
     pub drained_hotkeys: Vec<OverlayAction>,
 }
 
-/// Transition channels driving the overlay's visual glides. Lives inside
-/// [`TickWorld`]; endpoints are integers so the world stays `Eq + Hash`
-/// (see [`crate::anim`]).
+/// Overlay visual-glide transition channels. Integer endpoints keep the world
+/// `Eq + Hash` ([`crate::anim`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct OverlayAnim {
     /// Show/hide + mode-switch envelope (`0` = gone, `255` = fully shown).
@@ -56,8 +53,7 @@ impl OverlayAnim {
         }
     }
 
-    /// Sample bundle at the current time; the values carried by the
-    /// `DrawOverlay` effect.
+    /// Sample bundle at `now_ms`, as carried by `DrawOverlay`.
     #[must_use]
     pub fn sample(self, now_ms: i64) -> OverlaySample {
         OverlaySample {
@@ -69,26 +65,20 @@ impl OverlayAnim {
     }
 }
 
-/// HUD presentation view-state.
-///
-/// Lives in `TickWorld` rather than `State`: it is irrelevant to the reducer
-/// and `render::frame`, and carries time-coupled display state (`boot_at_ms`)
-/// — same family as `last_hud_refresh_at_ms`.
+/// HUD presentation view-state. In `TickWorld`, not `State`: irrelevant to the
+/// reducer/`render::frame` and time-coupled (`boot_at_ms`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct HudView {
     /// Current presentation tier (chip / full).
     pub tier: HudTier,
-    /// Whether the user has ever pressed `ToggleHudDetail`. Once `true`, the
-    /// startup auto-demotion (Full → Chip) never fires.
+    /// Set once `ToggleHudDetail` is pressed; suppresses startup auto-demotion.
     pub user_touched: bool,
-    /// Time of the first tick (origin of the startup full display).
-    /// `i64::MIN` is the unset sentinel.
+    /// First-tick time (startup full-display origin); `i64::MIN` = unset.
     pub boot_at_ms: i64,
 }
 
 impl HudView {
-    /// Right after boot: full display (hotkey-guide teaching period), boot
-    /// time unset.
+    /// Boot state: full display (teaching period), boot time unset.
     pub const INITIAL: Self = Self {
         tier: HudTier::Full,
         user_touched: false,
@@ -114,17 +104,15 @@ pub struct TickWorld {
     pub anim: OverlayAnim,
     /// HUD presentation tier (chip / full) view-state.
     pub hud_view: HudView,
-    /// HUD fade envelope (`0` = invisible, `255` = full). Ramps 0 → 255 on
-    /// boot and on chip ⇄ full swaps. The platform multiplies it into
-    /// `SetOpacity2` (visual layer), so no surface redraw happens while
-    /// fading.
+    /// HUD fade envelope (`0` = invisible, `255` = full). Ramps 0 → 255 on boot
+    /// and chip ⇄ full swaps; multiplied into `SetOpacity2` so fading needs no
+    /// surface redraw.
     pub hud_envelope: Transition<u8>,
 }
 
 impl TickWorld {
-    /// Initial state. `last_hud_refresh_at_ms = i64::MIN` forces the first tick
-    /// to refresh the HUD regardless of clock origin. The HUD envelope starts
-    /// at `0` and fades in on the first tick.
+    /// Initial state. `last_hud_refresh_at_ms = i64::MIN` forces a first-tick
+    /// HUD refresh regardless of clock origin; the envelope starts at `0`.
     pub const INITIAL: Self = Self {
         state: State::DEFAULT,
         last_cursor: None,
@@ -135,8 +123,7 @@ impl TickWorld {
         hud_envelope: Transition::settled(0),
     };
 
-    /// Initial state with a caller-supplied [`State`], for booting directly
-    /// into a non-default mode.
+    /// Initial state with a caller-supplied [`State`] (non-default boot mode).
     #[must_use]
     pub const fn with_initial_state(state: State) -> Self {
         Self {
@@ -166,8 +153,7 @@ pub enum TickEffect {
     Quit,
     /// Draw or update the overlay at the given cursor position.
     DrawOverlay {
-        /// Axis to render. While fading out after `→ Off` this is the
-        /// `last_active` axis (the state's mode is already `Off`).
+        /// Axis to render; the `last_active` axis while fading out after `→ Off`.
         mode: Mode,
         /// Cursor position for slit anchoring.
         cursor: Point<Logical>,
@@ -192,9 +178,8 @@ pub enum TickEffect {
         state: State,
         /// Cursor position used for the distance calculation.
         cursor: Point<Logical>,
-        /// HUD fade envelope sample (`0` = invisible, `255` = full). The
-        /// platform multiplies it into the distance fade through the
-        /// perceptual curve ([`crate::input::hud_fade::apply_envelope`]).
+        /// HUD fade envelope sample (`0` = invisible, `255` = full), multiplied
+        /// into the distance fade via [`crate::input::hud_fade::apply_envelope`].
         envelope: u8,
     },
     /// Log a `LogStateChanged` event after a successful reduce.
@@ -204,10 +189,8 @@ pub enum TickEffect {
         /// New mode.
         mode: Mode,
     },
-    /// Surface a rejected action to the user. The platform layer formats the
-    /// reason (with the actual configured hotkey strings) and toasts it on
-    /// the HUD. Always followed by a forced `RefreshHud` in the same tick so
-    /// the toast appears immediately.
+    /// Surface a rejected action; always followed by a forced `RefreshHud` in
+    /// the same tick so the toast shows immediately.
     NotifyRejected {
         /// Why the reducer refused the action.
         reason: RejectReason,
@@ -231,8 +214,7 @@ pub fn step(
     let mut hud_view = world.hud_view;
     let mut hud_envelope = world.hud_envelope;
     if hud_view.boot_at_ms == i64::MIN {
-        // First tick: fix the origin of the startup full display (teaching
-        // period) and fade the HUD in 0 → 255.
+        // First tick: anchor the teaching-period origin and fade the HUD in.
         hud_view.boot_at_ms = now;
         hud_envelope = hud_envelope.retarget(now, u8::MAX, anim_config.hud_swap_ms);
     }
@@ -244,8 +226,8 @@ pub fn step(
             quit_requested = true;
         }
         if matches!(action, OverlayAction::ToggleHudDetail) {
-            // View-layer action: the reducer no-ops; the tier flips here.
-            // Once touched, the startup auto-demotion never fires again.
+            // View-layer action: reducer no-ops, tier flips here, auto-demote
+            // disabled once touched.
             hud_view.tier = hud_view.tier.toggle();
             hud_view.user_touched = true;
         }
@@ -263,9 +245,8 @@ pub fn step(
         state = next;
     }
 
-    // The startup full display auto-demotes to chip once the teaching period
-    // (startup_full_hud_ms) has passed. After an explicit user toggle,
-    // respect their choice and leave the tier alone.
+    // Auto-demote full → chip once startup_full_hud_ms passes, unless the user
+    // has toggled.
     if !hud_view.user_touched
         && matches!(hud_view.tier, HudTier::Full)
         && now.saturating_sub(hud_view.boot_at_ms) >= i64::from(anim_config.startup_full_hud_ms)
@@ -282,9 +263,9 @@ pub fn step(
     let state_changed = state != prev_state;
     let tier_changed = hud_view.tier != world.hud_view.tier;
     if tier_changed {
-        // Chip ⇄ full swap: content and size change instantly (RefreshHud)
-        // and the new look fades in 0 → 255. A short ramp-up is less noisy
-        // than crossfading panels of different sizes.
+        // Chip ⇄ full swap: content/size change instantly (RefreshHud), new
+        // look fades in. Ramp-up is less noisy than crossfading panels of
+        // different sizes.
         hud_envelope = Transition {
             from: 0,
             to: u8::MAX,
@@ -299,8 +280,7 @@ pub fn step(
     effects.push(draw_or_clear(state, anim, next_cursor, now));
 
     // While the envelope is live, push opacity every tick even with a
-    // stationary cursor (only the visual layer's SetOpacity2 updates, so
-    // redraw cost is zero).
+    // stationary cursor (only SetOpacity2 updates, so redraw cost is zero).
     if let Some(cursor) = next_cursor
         && (cursor_moved || hud_envelope.is_live(now) || tier_changed)
     {
@@ -312,10 +292,9 @@ pub fn step(
     }
     let interval_ms = i64::try_from(telemetry_refresh.as_millis()).unwrap_or(i64::MAX);
     let interval_elapsed = input.now_ms.saturating_sub(world.last_hud_refresh_at_ms) >= interval_ms;
-    // `rejected_this_tick` forces a refresh so the NotifyRejected toast shows
-    // this tick instead of waiting out the telemetry interval. Effect order
-    // matters: NotifyRejected was already pushed above, so the platform sees
-    // it before this RefreshHud.
+    // rejected_this_tick forces a refresh so the toast shows now, not after the
+    // telemetry interval. NotifyRejected was pushed above, so it precedes this
+    // RefreshHud (order matters).
     let next_last_hud_refresh =
         if state_changed || tier_changed || interval_elapsed || rejected_this_tick {
             effects.push(TickEffect::RefreshHud {
@@ -337,8 +316,8 @@ pub fn step(
         hud_envelope,
     };
 
-    // Invariants: frame_seq advances by exactly 1, and last_hud_refresh_at_ms
-    // is monotonic (except the i64::MIN sentinel).
+    // Invariants: frame_seq +1, last_hud_refresh_at_ms monotonic (except the
+    // i64::MIN sentinel).
     debug_assert!(
         next_world.frame_seq == world.frame_seq.wrapping_add(1),
         "frame_seq must be wrapping_add(1) of previous: prev={}, next={}",
@@ -383,9 +362,8 @@ fn draw_or_clear(
     }
 }
 
-/// Retargets each transition channel from the `prev → next` state diff.
-/// Retarget re-bases from the current sample (`crate::anim`), so held-key
-/// repeats landing mid-flight keep the value gliding continuously.
+/// Retargets each transition channel from the `prev → next` diff. Re-bases from
+/// the current sample (`crate::anim`), so mid-flight repeats keep gliding.
 fn retarget_channels(
     mut anim: OverlayAnim,
     prev: State,
@@ -395,13 +373,13 @@ fn retarget_channels(
 ) -> OverlayAnim {
     if next.mode != prev.mode {
         anim.master = match (prev.mode.active(), next.mode.active()) {
-            // Off → active: fade in (re-bases mid-fade-out, so a quick double
-            // toggle rises smoothly from wherever the fade-out got to).
+            // Off → active: fade in (re-bases mid-fade-out, so a fast double
+            // toggle rises smoothly).
             (None, Some(_)) => anim.master.retarget(now_ms, u8::MAX, cfg.overlay_fade_ms),
             // active → Off: fade out.
             (Some(_), None) => anim.master.retarget(now_ms, 0, cfg.overlay_fade_ms),
-            // H ⇄ V: soft cut — the new axis fades in from 0. A hard reset
-            // (not a retarget) because the axis being faded changed identity.
+            // H ⇄ V: soft cut, new axis fades in from 0. Hard reset (not
+            // retarget) since the faded axis changed identity.
             (Some(_), Some(_)) => Transition {
                 from: 0,
                 to: u8::MAX,
@@ -424,10 +402,9 @@ fn retarget_channels(
     }
     if next.config.effect != prev.config.effect {
         if next.config.effect.is_blur() || prev.config.effect.is_blur() {
-            // Flat ⇄ Blur: the brush kind flips Solid ⇄ Blur, which rebuilds
-            // the renderer's sprite pool — a color crossfade cannot bridge
-            // that. Ride the master envelope instead (the same soft cut as
-            // H ⇄ V) and settle the style channel immediately.
+            // Flat ⇄ Blur: brush kind flips Solid ⇄ Blur, rebuilding the sprite
+            // pool, which a color crossfade can't bridge. Ride the master
+            // envelope (soft cut, as H ⇄ V) and settle style immediately.
             anim.style_mix = Transition::settled(next.config.effect.mix_target());
             if next.mode == prev.mode {
                 anim.master = Transition {
@@ -446,11 +423,9 @@ fn retarget_channels(
             );
         }
     }
-    // `config.blur` (σ) deliberately has no transition channel: σ is baked
-    // into the effect brush and is part of the sprite-pool signature, so
-    // gliding it would rebuild the pool (and recompile the effect factory)
-    // every tick. `BlurAmount` steps are perceptually uniform, so stepping is
-    // already smooth enough.
+    // `config.blur` (σ) has no transition channel: σ is part of the sprite-pool
+    // signature, so gliding it would rebuild the pool every tick. `BlurAmount`
+    // steps are perceptually uniform, so stepping is smooth enough.
     anim
 }
 
@@ -503,10 +478,8 @@ mod tests {
         assert!(fx.contains(&TickEffect::Quit));
     }
 
-    /// An adjust key while Off emits `NotifyRejected` and forces `RefreshHud`
-    /// in the same tick even inside the telemetry interval (pins the
-    /// `rejected_this_tick` clause). No state change, so no
-    /// `LogStateChanged`.
+    /// Adjust key while Off: `NotifyRejected` + forced `RefreshHud` inside the
+    /// telemetry interval; no state change, so no `LogStateChanged`.
     #[test]
     fn bump_while_off_emits_notify_rejected_and_forces_hud_refresh() {
         // Tick 1: consume the initial refresh so last_hud_refresh_at_ms is
@@ -566,10 +539,8 @@ mod tests {
         );
     }
 
-    /// `ToggleOnOff` round trip: Off → Draw in the restored mode. Right after
-    /// toggling back off the fade-out is still running, so it **still Draws**
-    /// (along the `last_active` axis); Clear only comes on a tick after the
-    /// fade completes.
+    /// `ToggleOnOff` round trip: toggling off still Draws (along `last_active`)
+    /// while the fade-out runs; Clear comes only after the fade completes.
     #[test]
     fn toggle_on_off_fades_out_then_clears() {
         let cursor = Some(Point::new(100, 100));
@@ -654,16 +625,15 @@ mod tests {
         assert_eq!(s3.master, 255, "fade-in must land exactly at 255");
     }
 
-    /// The thickness sample never regresses when the next bump lands
-    /// mid-flight (pipeline-level check of the retarget glide-continuity
-    /// guarantee).
+    /// Thickness sample never regresses when a bump lands mid-flight
+    /// (glide-continuity, pipeline level).
     #[test]
     fn held_bumps_glide_thickness_without_regression() {
         let cursor = Some(Point::new(100, 100));
         let mut w = TickWorld::with_initial_state(State::with_mode(Mode::Horizontal));
         let mut last = 0_u16;
         let mut now = 0_i64;
-        // Four +8 bumps at 50ms intervals → each lands mid-glide (130ms).
+        // Four +8 bumps at 50ms → each lands mid-glide (130ms).
         for _ in 0..4 {
             let mut i = input(now);
             i.polled_cursor = cursor;
@@ -724,9 +694,8 @@ mod tests {
 
     // ---- HUD tier FSM ------------------------------------------------------
 
-    /// Boots in full display (teaching period), auto-demotes to chip on the
-    /// first tick after `startup_full_hud_ms` elapses, and the demotion tick
-    /// emits `RefreshHud { tier: Chip }`.
+    /// Boots full, auto-demotes to chip on the first tick after
+    /// `startup_full_hud_ms`, which emits `RefreshHud { tier: Chip }`.
     #[test]
     fn hud_boots_full_then_auto_demotes_to_chip() {
         let (w1, fx1) = step(world(), &input(0), TELEMETRY, ANIM);
@@ -752,9 +721,8 @@ mod tests {
         );
     }
 
-    /// `ToggleHudDetail` flips the tier and sets `user_touched`. From then
-    /// on, no auto-demotion even past the teaching period (respects the
-    /// user's choice).
+    /// `ToggleHudDetail` flips the tier, sets `user_touched`, and disables
+    /// auto-demotion thereafter.
     #[test]
     fn user_toggle_flips_tier_and_disables_auto_demote() {
         let (w1, _) = step(world(), &input(0), TELEMETRY, ANIM);
@@ -822,10 +790,9 @@ mod tests {
         })
     }
 
-    /// Pins the `SetHudOpacity` emit conditions: while the HUD envelope is
-    /// live, emit every tick even with a stationary cursor; once settled,
-    /// only on ticks where the cursor moved. (A `!=` → `==` mutation or an
-    /// `is_live` mix-up cannot satisfy all the asserts at once.)
+    /// `SetHudOpacity` emit conditions: while the envelope is live, emit every
+    /// tick even with a stationary cursor; once settled, only when the cursor
+    /// moved.
     #[test]
     fn set_hud_opacity_emission_follows_cursor_and_envelope() {
         let p1 = Point::new(100, 100);

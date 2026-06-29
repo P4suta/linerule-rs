@@ -1,11 +1,6 @@
-# Auto-merge Dependabot PRs once required CI passes.
-#
-# Policy:
-#   - All bumps (patch / minor / major) get auto-merge enabled (squash).
-#   - Branch protection's required status checks gate the actual merge, so a
-#     red CI still blocks it — this only removes the human click.
-#   - main requires branches to be up to date (strict); Dependabot rebases its
-#     own PRs when main moves so they catch up and then merge.
+# Enable squash auto-merge on all Dependabot PRs; branch protection's required
+# checks still gate the actual merge. main is strict (up-to-date required);
+# Dependabot rebases its own PRs to catch up.
 
 name: dependabot-auto-merge
 

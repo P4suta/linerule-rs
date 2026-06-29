@@ -230,7 +230,7 @@ test:
     @echo "==> cargo test --doc --workspace --exclude linerule-platform-windows"
     {{cargo}} test --doc --workspace --exclude linerule-platform-windows
 
-# Inner-loop test alias (doctest を省くので速い)。
+# Inner-loop test alias (fast: skips doctests).
 t:
     @if [ "{{nextest_present}}" = "1" ]; then \
         {{cargo}} nextest run --workspace --exclude linerule-platform-windows --no-fail-fast; \
@@ -238,7 +238,7 @@ t:
         {{cargo}} test --workspace --exclude linerule-platform-windows -- --test-threads=1; \
     fi
 
-# Doctest 単独実行（`just test` にも含まれるが個別に叩きたいとき用）。
+# Run doctests alone (also covered by `just test`; for running them in isolation).
 doctest:
     @echo "==> cargo test --doc --workspace --exclude linerule-platform-windows"
     {{cargo}} test --doc --workspace --exclude linerule-platform-windows
@@ -343,15 +343,15 @@ docs: docs-dep-graph docs-modules docs-readme
 doc:
     {{cargo}} doc --workspace --no-deps --open
 
-# `RUSTDOCFLAGS=-D warnings` 下で rustdoc を build。.github/workflows/docs.yml
-# (main push 時に GitHub Pages へ publish するジョブ) と同じ厳しさで warning を
-# error 扱いし、`pre-push` で push 前に検出する。
+# Build rustdoc under `RUSTDOCFLAGS=-D warnings`. Treats warnings as errors with
+# the same strictness as .github/workflows/docs.yml (the job that publishes to
+# GitHub Pages on main push), catching them at `pre-push` before push.
 #
-# `docker compose exec/run` の `-e` flag を使うため `{{docker_run}}` 展開を手で
-# 書き分ける（テンプレートは末尾に `dev` を含むため -e を直接挟めない）。
-# `dev` service が起動済みなら `exec` で速い、停止中なら `run --rm` で起動する。
-# 後者を fallback として持たないと、pre-push hook が dev サービス停止時に必ず
-# `service "dev" is not running` で失敗する。
+# We hand-write the `{{docker_run}}` expansion to use the `-e` flag of
+# `docker compose exec/run` (the template ends in `dev`, so -e can't be slotted
+# in directly). `exec` is fast when the `dev` service is up; `run --rm` starts it
+# when stopped. Without that fallback the pre-push hook always fails with
+# `service "dev" is not running` whenever the dev service is down.
 rustdoc-check:
     @echo "==> cargo doc --workspace --no-deps --exclude linerule-platform-windows (RUSTDOCFLAGS=-D warnings)"
     @if [ "{{mode}}" != "docker" ]; then \
@@ -382,8 +382,8 @@ version channel date="":
 # ----- cross-compile checks -----
 
 # Compile-only check that Windows code still builds from Linux dev container.
-# `--all-targets` でテスト・examples・benches も対象にし、Windows native CI
-# (`cargo build --workspace --all-targets`) と検出範囲を揃える。
+# `--all-targets` also covers tests, examples, and benches, matching the
+# detection scope of Windows native CI (`cargo build --workspace --all-targets`).
 cross-check:
     @if [ "{{mode}}" = "native" ]; then \
         echo "==> native host: cargo check --workspace --all-targets (xwin cross-check is a Linux-only concern; the host already targets msvc)"; \
@@ -437,10 +437,11 @@ verify-scenario profile="debug":
 
 # ----- diagnostics -----
 #
-# Phase J (ADR-0011) 以降、ログは `linerule.exe` と同じディレクトリに出る
-# portable 運用。これらの recipes は dev profile (`target/debug/linerule.exe`)
-# を起動した場合の出力先 `target/debug/` を assume する。`target/release/` の
-# log/crash を見たいときは LOG_DIR=target/release just <recipe> で上書きできる。
+# Since Phase J (ADR-0011), logs are written to the same directory as
+# `linerule.exe` (portable operation). These recipes assume `target/debug/`, the
+# output dir when launching the dev profile (`target/debug/linerule.exe`). To
+# inspect `target/release/` logs/crashes, override with LOG_DIR=target/release
+# just <recipe>.
 
 log_dir := env_var_or_default("LOG_DIR", "target/debug")
 

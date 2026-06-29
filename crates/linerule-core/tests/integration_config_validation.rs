@@ -1,8 +1,4 @@
-//! Integration: validate the physical reasonableness of `UserConfig::DEFAULT`.
-//!
-//! These are not "did the constant compile" tests (the type system
-//! handles that). They are "are the values sensible?" tests — DPI-scaled
-//! sizes positive, repeat timings monotonically growing, fade decay > 0.
+//! Integration: assert `UserConfig::DEFAULT` values are sensible (not just that they compile).
 
 use linerule_core::{
     HudConfig, InputConfig, OverlayConfig, RenderConfig, SurroundEffect, UserConfig,
@@ -18,8 +14,7 @@ fn default_overlay_config_has_legal_thickness_and_opacity() {
 
 #[test]
 fn default_surround_effect_preserves_historical_dim_black() {
-    // The default must stay the dim-black mask so existing users see no
-    // behavior change; white-wash is opt-in via the effect cycle.
+    // Default stays dim-black; white-wash is opt-in via the effect cycle.
     assert_eq!(OverlayConfig::DEFAULT.effect, SurroundEffect::DimBlack);
     let mask = SurroundEffect::DimBlack.mask_color();
     assert_eq!(
@@ -78,8 +73,7 @@ fn default_repeat_timings_are_non_zero() {
 
 #[test]
 fn default_long_press_threshold_exceeds_release_poll() {
-    // For the AwaitRelease branch to fire long-press undo, the threshold
-    // must be observably larger than the polling tick.
+    // AwaitRelease long-press undo needs threshold > polling tick.
     let r = InputConfig::DEFAULT.repeat;
     assert!(
         r.long_press_threshold > r.release_poll,
@@ -98,9 +92,7 @@ fn default_tap_steps_are_non_zero_and_positive() {
 
 #[test]
 fn user_config_default_is_internally_consistent() {
-    // Smoke: the aggregate const compiles and its sub-defaults match the
-    // individual sub-defaults. (Guards against accidental drift if
-    // someone replaces UserConfig::DEFAULT with hand-written values.)
+    // Guard against drift: aggregate sub-defaults must match individual sub-defaults.
     let u = UserConfig::DEFAULT;
     assert_eq!(u.overlay, OverlayConfig::DEFAULT);
     assert_eq!(u.input, InputConfig::DEFAULT);

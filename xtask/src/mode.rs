@@ -1,11 +1,6 @@
-//! Native-host awareness for the lint / ci pipelines.
+//! Native-host awareness for lint/ci pipelines.
 //!
-//! The Justfile exports `LINERULE_MODE` (`inside` | `native` | `docker`) when
-//! it invokes `cargo xtask`. Only `native` changes behavior: the Windows
-//! clippy step runs without `cargo-xwin` (a native Windows host already targets
-//! msvc), and the test step avoids the bare-`cargo test` parallelism that trips
-//! the linerule-app `event_ring` shared-state tests. Unset / `inside` /
-//! `docker` keep the original behavior, so the container and CI are unaffected.
+//! `LINERULE_MODE` (set by the Justfile): only `native` changes behavior; unset/`inside`/`docker` keep container/CI defaults.
 
 use std::process::{Command, Stdio};
 
@@ -14,8 +9,7 @@ pub(crate) fn is_native() -> bool {
     std::env::var("LINERULE_MODE").as_deref() == Ok("native")
 }
 
-/// Whether `cargo nextest` is callable, so the native test step can match CI's
-/// process-per-test isolation instead of a serial `cargo test` fallback.
+/// Whether `cargo nextest` is callable (native step needs process-per-test isolation; else serial `cargo test`).
 pub(crate) fn nextest_available() -> bool {
     Command::new("cargo")
         .args(["nextest", "--version"])

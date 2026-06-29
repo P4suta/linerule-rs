@@ -1,14 +1,5 @@
-//! Build script for `linerule-app`. Two jobs:
-//!
-//! 1. Embed the Windows manifest (DPI v2, longPathAware) into the resulting
-//!    `linerule.exe` on Windows targets. No-op on other targets so cross-checks
-//!    under Linux still build cleanly.
-//! 2. Resolve the channel-aware version string and expose it to the crate as
-//!    the `LINERULE_VERSION` compile-time env (read by `src/version.rs`).
-//!
-//! `linerule-app` is the top (leaf) of the one-way dependency graph, so stamping
-//! here — rather than in a separate buildstamp crate — keeps `.git`-change
-//! rebuilds scoped to this crate alone and adds no workspace member.
+//! Build script: embed the Windows manifest (DPI v2, longPathAware; no-op off
+//! Windows) and emit `LINERULE_VERSION` for `src/version.rs`.
 
 use std::process::Command;
 
@@ -21,11 +12,9 @@ fn main() {
     emit_version();
 }
 
-/// Resolve and emit `LINERULE_VERSION`. Always emits exactly one value so
-/// `env!("LINERULE_VERSION")` never fails to compile, including in source-tarball
-/// builds with no `.git`.
+/// Emit `LINERULE_VERSION`. Always emits one value so `env!` never fails, even
+/// in source-tarball builds with no `.git`.
 fn emit_version() {
-    // Rerun when CI's override changes or HEAD moves.
     println!("cargo:rerun-if-env-changed=LINERULE_VERSION");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rerun-if-changed=../../.git/index");
@@ -33,10 +22,8 @@ fn emit_version() {
     println!("cargo:rustc-env=LINERULE_VERSION={}", resolve_version());
 }
 
-/// Precedence:
-/// 1. `LINERULE_VERSION` env override (set by CI for stable/nightly) — verbatim.
-/// 2. `{CARGO_PKG_VERSION}-dev+g{short_sha}[.dirty]` when git is available.
-/// 3. `{CARGO_PKG_VERSION}-dev` when git / `.git` is absent.
+/// Resolve version: CI `LINERULE_VERSION` override verbatim, else
+/// `{CARGO_PKG_VERSION}-dev+g{sha}[.dirty]`, else `{CARGO_PKG_VERSION}-dev`.
 fn resolve_version() -> String {
     if let Ok(forced) = std::env::var("LINERULE_VERSION")
         && !forced.is_empty()

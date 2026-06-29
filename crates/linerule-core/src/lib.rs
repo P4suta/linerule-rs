@@ -1,30 +1,8 @@
-//! linerule-core
+//! linerule-core: pure logic layer (ADTs, reducer, render, parser, FSM).
 //!
-//! Pure logic layer: ADTs, reducer, render, parser, FSM. `#![forbid(unsafe_code)]`
-//! bans `unsafe` outright; nondeterminism (time, randomness, I/O) is passed in
-//! by the caller as arguments.
-//!
-//! ## Modules
-//!
-//! - [`anim`] — integer-endpoint timed transitions (`Transition<T>`) and easing
-//! - [`color`] — `Rgba` / `Opacity` / `DimLevel` / `Thickness` / `BlurAmount` and perceptual curves
-//! - [`config`] — `UserConfig` tree (`OverlayConfig` / `HudConfig` / ...)
-//! - [`diagnostics`] — `LineruleError` / `Severity`
-//! - [`geometry`] — coordinate-space-tagged `Point<S>` / `ScreenRect<S>`
-//! - [`input`] — chord parser / hold FSM / tick pipeline / HUD fade / hotkey map
-//! - [`render`] — `OverlayFrame` ADT and the pure `render::frame`
-//! - [`state`] — `State` / `OverlayAction` / `StateDelta` and `state::reduce::apply`
-//!
-//! ## Short public paths
-//!
-//! Key types are re-exported here, so consumers write short paths like
-//! `linerule_core::Rgba` / `linerule_core::frame(...)`. Internal code uses the
-//! long paths (`linerule_core::color::rgba::Rgba`), leaving room to refactor.
-//!
-//! ## Dependency direction
-//!
-//! `linerule-app` → `linerule-platform-windows` → `linerule-core`. This crate
-//! depends on no other linerule-rs crate.
+//! Nondeterminism (time, randomness, I/O) is passed in by the caller.
+//! Key types are re-exported here for short paths (`linerule_core::Rgba`);
+//! internal code uses long paths. Depends on no other linerule-rs crate.
 
 #![forbid(unsafe_code)]
 
@@ -48,11 +26,7 @@ pub use diagnostics::{
     record_device_lost_failure,
 };
 
-/// Canonical `Result` alias for `linerule-core`.
-///
-/// Defaults to [`LineruleError`] so the whole crate's failure surface flows
-/// through a single error type; override for narrow validators that return
-/// [`CoreError`] etc.
+/// Canonical `Result` alias; defaults to [`LineruleError`].
 pub type Result<T, E = LineruleError> = core::result::Result<T, E>;
 pub use geometry::{CoordSpace, Logical, Physical, Point, ScreenRect};
 pub use input::{ChordError, ChordSpec, Direction, HotkeyMap, KeyCode, Letter, Modifiers};

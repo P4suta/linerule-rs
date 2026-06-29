@@ -6,11 +6,8 @@ use std::process::Command;
 use anyhow::{Result, anyhow};
 
 pub(crate) fn run() -> Result<()> {
-    // On a native Windows host, bare `cargo test --workspace` runs the
-    // linerule-app event_ring tests in parallel threads and trips their shared
-    // process state. Match CI with nextest's process-per-test isolation, and
-    // fall back to a serial run when nextest isn't installed. Other modes keep
-    // the original plain `cargo test`.
+    // Native Windows: event_ring tests share process state and fail under
+    // parallel threads. Use nextest (process-per-test) or fall back to serial.
     let test_step: (&str, Vec<&str>) = if crate::mode::is_native() {
         if crate::mode::nextest_available() {
             (

@@ -1,8 +1,5 @@
 //! Pure renderer: state + cursor + monitor bounds into an [`OverlayFrame`].
-//! No I/O, no platform calls.
-//!
-//! The data ADT ([`Layer`], [`Brush`], [`Geometry`], [`OverlayFrame`]) lives in
-//! [`overlay_frame`]; [`frame`] is the only entry point.
+//! No I/O, no platform calls. [`frame`] is the only entry point.
 
 pub mod hud_frame;
 pub mod overlay_frame;
@@ -12,8 +9,6 @@ pub use hud_frame::{
     NotificationClass, hud_frame,
 };
 pub use overlay_frame::{Brush, Geometry, Layer, OverlayFrame};
-// `OverlaySample` is defined below in this file (the renderer owns the
-// contract for its interpolated inputs).
 
 use serde::Serialize;
 
@@ -25,36 +20,30 @@ use crate::{
     state::{Mode, SurroundEffect},
 };
 
-// The 18×4px corner mode indicator inherited from the C# port was dropped: the
-// persistent HUD chip (`crate::render::hud_frame::HudTier::Chip`) shows the
-// mode letter + values in the same corner and strictly supersedes it (two mode
-// readouts in one corner is noise).
+// No corner mode indicator: the HUD chip (`crate::render::hud_frame::HudTier::Chip`)
+// already shows the mode letter + values in that corner.
 
-/// Per-tick interpolated render inputs, produced by the tick pipeline's
-/// transition channels (`crate::input::tick`). Integers only so the carrying
-/// `TickEffect` stays `Eq + Hash`.
+/// Per-tick interpolated render inputs from the tick pipeline (`crate::input::tick`).
 ///
-/// At steady state (`OverlaySample::settled`) the output of [`frame`] is
-/// byte-identical to rendering straight from the config — transitions never
-/// change where a settled frame lands.
+/// Integers only so the carrying `TickEffect` stays `Eq + Hash`. Settled
+/// (`OverlaySample::settled`) renders byte-identically to rendering straight from
+/// the config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct OverlaySample {
-    /// Master envelope `0..=255`: show/hide / mode-switch fade. `255` = fully
+    /// Master envelope `0..=255`: show/hide / mode-switch fade, `255` = fully
     /// shown. Applied perceptually ([`perceptual::smooth`]) to all alpha.
     pub master: u8,
-    /// Current slit thickness in logical px (glides during bumps).
+    /// Slit thickness in logical px (glides during bumps).
     pub thickness_px: u16,
-    /// Current mask opacity byte (pre-perceptual, same domain as
-    /// [`crate::color::Opacity::get`]).
+    /// Mask opacity byte, pre-perceptual ([`crate::color::Opacity::get`] domain).
     pub mask_alpha: u8,
-    /// Style crossfade `0..=255`: `0` = the dim mask color, `255` = the white
-    /// wash. Settled at [`SurroundEffect::mix_target`].
+    /// Style crossfade `0..=255`: `0` = dim mask color, `255` = white wash.
+    /// Settled at [`SurroundEffect::mix_target`].
     pub style_mix: u8,
 }
 
 impl OverlaySample {
-    /// Sample with every channel settled at the config's values — renders
-    /// byte-identically to the pre-transition pipeline.
+    /// Sample with every channel settled at the config's values.
     #[must_use]
     pub const fn settled(config: OverlayConfig) -> Self {
         Self {
@@ -68,12 +57,10 @@ impl OverlaySample {
 
 /// Build the frame for the current tick.
 ///
-/// `cursor` is the latest cursor position polled from the OS; `monitor` is
-/// the bounding rect of the screen the cursor is on. Both are in logical
-/// pixels. Takes `mode` + `config` (mirroring the `DrawOverlay` effect
-/// payload) instead of a full `State` so the platform layer never has to
-/// fabricate one. `sample` carries the interpolated per-tick values
-/// (thickness / alpha / style crossfade / master envelope).
+/// `cursor` and `monitor` (the rect of the screen the cursor is on) are in
+/// logical pixels. Takes `mode` + `config` (mirroring the `DrawOverlay`
+/// payload) rather than a full `State`. `sample` carries the interpolated
+/// per-tick values.
 ///
 /// # Examples
 ///
@@ -87,8 +74,7 @@ impl OverlaySample {
 /// assert!(out.is_empty());
 /// ```
 ///
-/// In an active mode, the frame has the two dim halves (two layers total
-/// when the cursor is in the middle of the screen):
+/// In an active mode, the frame has two dim halves (cursor mid-screen):
 ///
 /// ```
 /// use linerule_core::{frame, Mode, OverlayConfig, OverlaySample, Point, ScreenRect};
@@ -141,11 +127,9 @@ fn slit_frame(
 
 /// Brush for the surround bands: `Solid` for dim/white-wash, `Blur` for blur.
 ///
-/// For the flat effects, `style_mix` crossfades the *base* RGB between the
-/// dark dim mask and the bright white wash; the alpha comes from the
-/// interpolated opacity byte, scaled by the master envelope. Blur carries no
-/// tint, only the σ amount; under `Blur` the opacity hotkeys retarget onto
-/// [`OverlayConfig::blur`] instead.
+/// Flat effects: `style_mix` crossfades base RGB between dim mask and white
+/// wash; alpha is the opacity byte scaled by the master envelope. Blur carries
+/// no tint, only the σ amount.
 fn surround_brush(config: OverlayConfig, sample: OverlaySample) -> Brush {
     if config.effect.is_blur() {
         Brush::Blur {
@@ -173,11 +157,10 @@ fn mix_rgb(from: Rgba, to: Rgba, mix: u8) -> Rgba {
     )
 }
 
-/// Perceptual alpha composition: the stored opacity byte goes through the
-/// CIE L\* curve (exactly like [`crate::color::Opacity::to_perceptual_byte`])
-/// and the master envelope is applied on top through the gamma curve. At
-/// `master == 255` the envelope factor is exactly `1.0`, so the result is
-/// byte-identical to `to_perceptual_byte()` — settled frames don't drift.
+/// Perceptual alpha composition: opacity byte through the CIE L\* curve (like
+/// [`crate::color::Opacity::to_perceptual_byte`]), then the master envelope
+/// via the gamma curve. At `master == 255` the envelope is exactly `1.0`, so
+/// the result is byte-identical to `to_perceptual_byte()`.
 fn composite_alpha(mask_alpha: u8, master: u8) -> u8 {
     let linear = f32::from(mask_alpha) / 255.0;
     let envelope = perceptual::smooth(f32::from(master) / 255.0);
@@ -242,9 +225,8 @@ fn dim_half(
     })
 }
 
-/// Construct a clipped rectangle from `(left, top, right, bottom)`, returning
-/// `None` when the resulting width or height is zero (after clipping against
-/// the monitor edge).
+/// Clipped rectangle from `(left, top, right, bottom)`; `None` when width or
+/// height clips to zero.
 pub(crate) fn band(left: i32, top: i32, right: i32, bottom: i32) -> Option<ScreenRect<Logical>> {
     let width = u32::try_from((right - left).max(0)).ok()?;
     let height = u32::try_from((bottom - top).max(0)).ok()?;
@@ -262,8 +244,7 @@ mod tests {
         ScreenRect::new(Point::new(0, 0), 1920, 1080)
     }
 
-    /// Test helper that calls `frame` in the settled state
-    /// (`OverlaySample::settled`).
+    /// Calls `frame` with a settled sample.
     fn settled_frame(mode: Mode, config: OverlayConfig, cursor: Point<Logical>) -> OverlayFrame {
         frame(
             mode,
@@ -324,8 +305,7 @@ mod tests {
             ..OverlayConfig::DEFAULT
         };
         let f = settled_frame(mode, config, Point::new(960, 540));
-        // The first layer is a dim/wash surround half (cursor centered ⇒
-        // two halves).
+        // First layer is a surround half (cursor centered).
         match f.layers()[0].brush {
             Brush::Solid(c) => c,
             Brush::Blur { .. } => panic!("surround must be a solid brush in flat effects"),
@@ -411,9 +391,8 @@ mod tests {
         );
     }
 
-    /// The master envelope reaches the blur brush as its visual-level opacity
-    /// (settled = 255, mid-fade = the sampled byte), so show/hide fades work
-    /// under the Blur effect without rebuilding the sprite pool.
+    /// The master envelope reaches the blur brush as its opacity, so show/hide
+    /// fades work under Blur without rebuilding the sprite pool.
     #[test]
     fn blur_brush_carries_the_master_envelope_as_opacity() {
         let config = OverlayConfig {
@@ -526,10 +505,8 @@ mod tests {
 
     // ---- OverlaySample (transition channels) ------------------------------
 
-    /// The mask alpha of a settled sample (`master = 255`) is
-    /// **byte-identical** to the legacy `Opacity::to_perceptual_byte()`.
-    /// Catches even 1-bit drift in settled frames from introducing
-    /// transitions.
+    /// Settled-sample mask alpha (`master = 255`) is byte-identical to
+    /// `Opacity::to_perceptual_byte()`; catches 1-bit drift from transitions.
     #[test]
     fn settled_sample_alpha_is_byte_identical_to_perceptual_byte() {
         for byte in [1_u8, 0x40, 0x80, 0xAA, 0xFF] {

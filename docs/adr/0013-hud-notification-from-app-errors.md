@@ -1,26 +1,20 @@
-# 0013 — AppError::class() を消費して Recoverable を HUD notification に出す
+# 0013 — Consume AppError::class() to surface Recoverable as HUD notification
 
 **Status:** Accepted.
 
-**See also:** [[0008-error-class-and-app-aggregator]] (`ErrorClass` / `AppError` の型導入、本 ADR がその実消費を担当)、[[0012-foreground-hook-and-hud-telemetry]] (HUD frame 拡張).
+**See also:** [[0008-error-class-and-app-aggregator]], [[0012-foreground-hook-and-hud-telemetry]].
 
-## 文脈
+## Context
 
-ADR-0008 で以下を導入した:
+ADR-0008 introduced `ErrorClass`, `class()` on each error type, and the `AppError` aggregator, but `AppError` and `class()` stayed `#[allow(dead_code)]` with no consumer. This ADR wires Recoverable errors into a HUD notification path and removes the dead_code allows.
 
-- `linerule-core::ErrorClass { Recoverable, Fatal, ProgrammerError }`
-- 各 error 型 (`CoreError` / `ChordError` / `LineruleError` / `PlatformError`) に `class()` method
-- `linerule-app::AppError` aggregator + `class()` method
+## Decision
 
-ただし `AppError` と `AppError::class()` は `#[allow(dead_code)]` で凍結され、消費経路が無いまま `dead_code` allow を生んでいた。本 ADR でその実消費 (Recoverable を HUD notification に出す経路) を実装する。
-
-## 判断
-
-**`AppError::class()` を `boot::run_overlay` のエラーパスで実消費し、`Recoverable` 判定された早期エラーは HUD notification として toast push する。dead_code allow 4 箇所はすべて解消する。**
+Consume `AppError::class()` in `boot::run_overlay`'s error path; `Recoverable` early errors are pushed as a HUD notification toast. Removes 4 dead_code allows.
 
 ### 1. `classify_and_log(err: &AppError) -> RunDecision`
 
-`linerule-app/src/error.rs` に classify helper を追加:
+Add to `linerule-app/src/error.rs`:
 
 ```rust
 pub(crate) fn classify_and_log(err: &AppError) -> RunDecision {
@@ -42,13 +36,13 @@ pub(crate) fn classify_and_log(err: &AppError) -> RunDecision {
 }
 ```
 
-- `Recoverable` は呼び出し側で HUD push を行い処理を続行する。
-- `Fatal` は `?` で main へ bubble up し crash dump 経路に乗る。
-- `ProgrammerError` は debug build で `debug_assert!` を発火し、release では Fatal 同等に扱う (ADR-0009 と整合)。
+- `Recoverable`: caller pushes HUD and continues.
+- `Fatal`: bubble up to main via `?`, hits the crash-dump path.
+- `ProgrammerError`: `debug_assert!` fires in debug builds, equivalent to Fatal in release (consistent with ADR-0009).
 
-### 2. `boot::run_overlay` での消費経路
+### 2. Consumer path in `boot::run_overlay`
 
-`SetProcessDpiAwarenessContext` 失敗のような早期エラーは:
+Early errors such as `SetProcessDpiAwarenessContext` failure:
 
 ```rust
 if let Err(e) = set_dpi_aware() {
@@ -65,43 +59,33 @@ for msg in early_recoverable.drain(..) {
 }
 ```
 
-`OverlayWindow` ハンドルが存在する文脈 (= dcomp attach 後) で HUD push する。HUD は既に `HudNotification` + `OverlayWndState::push_notification` + `wndproc::build_notifications` 経路が完備で、本変更で新規 platform API は不要。
+Push to the HUD only after the `OverlayWindow` handle exists (after dcomp attach). The existing `HudNotification` / `push_notification` / `wndproc::build_notifications` path suffices; no new platform API needed.
 
-### 3. dead_code allow の整理
+### 3. Cleaning up the dead_code allows
 
-| ファイル | 解消方法 |
+| File | Resolution |
 |---|---|
-| `linerule-app/src/error.rs:32` | `AppError` を `classify_and_log` が実消費するため、allow を削除 |
-| `linerule-app/src/error.rs:57` | 同上 |
-| `linerule-app/src/logging.rs:83` | future-use の `Subscriber` import は実需要が出るまで撤去 (再追加は trivial) |
-| `linerule-platform-windows/src/overlay_state.rs:318` | `ChordSpec` の HUD 表示拡張は別 issue とし、import 自体を撤去 |
+| `linerule-app/src/error.rs:32` | remove allow, now consumed by `classify_and_log` |
+| `linerule-app/src/error.rs:57` | same |
+| `linerule-app/src/logging.rs:83` | drop the future-use `Subscriber` import |
+| `linerule-platform-windows/src/overlay_state.rs:318` | drop `ChordSpec` import (HUD display extension is a separate issue) |
 
-ChordSpec import は `chord::parse(spec).map(|c| c.to_string())` のような canonical display 化に使う計画だったが、本 ADR の本筋ではないので `HotkeyConflict` の表示強化として分離する。
+## Consequences
 
-## 結果
+- `crates/linerule-app/src/error.rs` — remove 2 dead_code allows, add `classify_and_log` + `RunDecision`
+- `crates/linerule-app/src/boot.rs` — accumulate recoverable errors when `set_dpi_aware()` fails, push them as HUD notifications in one batch after `attach_dcomp()`
+- `crates/linerule-app/src/logging.rs` — remove `Subscriber` import + dead_code allow
+- `crates/linerule-platform-windows/src/overlay_state.rs` — remove `ChordSpec` import + dead_code allow
 
-- `crates/linerule-app/src/error.rs` — dead_code allow 2 件削除、`classify_and_log` + `RunDecision` 追加
-- `crates/linerule-app/src/boot.rs` — `set_dpi_aware()` 失敗時に `classify_and_log` 経由で recoverable error を `early_recoverable` に蓄積、`overlay.attach_dcomp()` 後に HUD notification として一括 push
-- `crates/linerule-app/src/logging.rs` — `Subscriber` import + dead_code allow + `const _` ブロック削除
-- `crates/linerule-platform-windows/src/overlay_state.rs` — `ChordSpec` import + dead_code allow + `const _` ブロック削除
+## Alternatives considered
 
-## 検討した代替案
+- **A. Don't consume AppError, just mix the class string into the log** — rejected: `class()` stays dead code.
+- **B. Bundle the HUD push into ADR-0008** — rejected: violates separation between introducing the types and consuming them.
+- **C. Store ChordSpec parsed into `HotkeyConflict`** — rejected: orthogonal to the main thread, and the separate issue is small.
 
-### A. AppError を消費せず log 出力に class を文字列で混ぜるだけ
+## Related
 
-却下: `AppError::class()` が compile-time に dead-code のまま残る。`#[allow(dead_code)]` を維持することになる。
-
-### B. HUD push を ADR-0008 で同梱
-
-却下: ADR-0008 の責務分離 (型導入と消費の分離) に反する。型導入と実消費は別 ADR に分ける。
-
-### C. ChordSpec を `HotkeyConflict` に parsed として格納
-
-却下: 本 PR の本筋 (`AppError::class()` 消費) と直交。`HotkeyConflict` の表示改善は別 issue で扱う方が変更が小さい。
-
-## 関連
-
-- [[0008-error-class-and-app-aggregator]]: 本 ADR が完成形を与える先行 ADR。
-- [[0009-diagnostics-cli-and-debug-assertions]]: `ProgrammerError` の debug build 挙動 (`debug_assert!`) と整合。
-- [[0011-phase-j-slim-down]]: 本変更は portable doctrine に反しない (HUD 既存基盤を活用するだけ)。
-- [[0012-foreground-hook-and-hud-telemetry]]: HUD frame 拡張と独立。同 ADR の `HudTelemetry` row と並列に notification rows が表示される。
+- [[0008-error-class-and-app-aggregator]]: prior ADR.
+- [[0009-diagnostics-cli-and-debug-assertions]]: consistent with `ProgrammerError`'s `debug_assert!` behavior.
+- [[0011-phase-j-slim-down]]: does not violate the portable doctrine.
+- [[0012-foreground-hook-and-hud-telemetry]]: independent of the HUD frame extension.

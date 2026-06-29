@@ -1,8 +1,7 @@
 //! Render-output data: an immutable list of geometry × brush layers.
 //!
-//! `OverlayFrame` is produced by [`crate::render::frame`] and consumed by the
-//! platform layer (`linerule-platform-windows::winrt_composition_renderer`). It is
-//! pure data; the platform layer translates it to D2D draw calls.
+//! Pure data produced by [`crate::render::frame`]; the platform layer translates
+//! it to D2D draw calls.
 
 use crate::{
     color::{BlurAmount, Rgba},
@@ -21,9 +20,9 @@ pub enum Brush {
     Blur {
         /// Gaussian blur σ (logical px) for the backdrop.
         amount: BlurAmount,
-        /// Master-envelope opacity byte (`255` = fully shown). Applied by the
-        /// platform layer at the visual level (not baked into the effect
-        /// brush), so show/hide fades never rebuild the sprite pool.
+        /// Master-envelope opacity byte (`255` = fully shown). Applied at the
+        /// visual level (not baked into the effect brush) so show/hide fades
+        /// never rebuild the sprite pool.
         opacity: u8,
     },
 }

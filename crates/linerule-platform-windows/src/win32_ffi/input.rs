@@ -1,11 +1,7 @@
 //! Safe wrapper over `SendInput` for synthesizing modifier+key chords.
 //!
-//! Used by the `inject_chords` example (driven by `cargo xtask verify
-//! --scenario`) to exercise the overlay's `RegisterHotKey` hotkeys from a
-//! separate input source — the one verification a Linux container cannot do,
-//! since `RegisterHotKey` delivers `WM_HOTKEY` on a VK match regardless of
-//! focus, so desktop-level `SendInput` triggers it (but only on an interactive
-//! desktop session).
+//! Drives `RegisterHotKey` hotkeys from a separate input source (only works on
+//! an interactive desktop session).
 
 #![allow(
     unsafe_code,
@@ -20,25 +16,19 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 
 use crate::error::{PlatformError, Result, decode_last_error};
 
-// `RegisterHotKey` `fsModifiers` flags (mirror of
-// `linerule_core::input::win32_vk`); kept here to avoid a value dependency.
+// `RegisterHotKey` `fsModifiers` flags; duplicated to avoid a value dependency.
 const MOD_ALT: u32 = 0x0001;
 const MOD_CONTROL: u32 = 0x0002;
 const MOD_SHIFT: u32 = 0x0004;
 const MOD_WIN: u32 = 0x0008;
 
-/// Synthesize a modifier+key chord as a single atomic `SendInput` batch:
-/// modifier key-downs, the key down+up, then modifier key-ups (reverse order).
-///
-/// `modifier_flags` uses the `RegisterHotKey` `fsModifiers` bits
-/// (`MOD_CONTROL` / `MOD_ALT` / `MOD_SHIFT` / `MOD_WIN`); `vk` is the target
-/// virtual-key code (e.g. from
-/// [`linerule_core::input::win32_vk::chord_to_win32`]). Batching the whole
-/// chord in one call keeps it from interleaving with other system input.
+/// Synthesize a modifier+key chord as one atomic `SendInput` batch (modifier
+/// downs, key down+up, modifier ups in reverse) so it can't interleave with
+/// other system input. `modifier_flags` uses `RegisterHotKey` `fsModifiers` bits.
 ///
 /// # Errors
-/// When `SendInput` injects fewer events than requested (input blocked, e.g. by
-/// a secure desktop), tagged with `GetLastError`.
+/// When `SendInput` injects fewer events than requested (input blocked), tagged
+/// with `GetLastError`.
 #[allow(
     clippy::cast_possible_truncation,
     reason = "vk is a Win32 virtual-key code in 0x00..=0xFE, always fits u16"
@@ -71,9 +61,7 @@ pub fn send_chord(modifier_flags: u32, vk: u32) -> Result<()> {
         inputs.push(key_event(m, true, false));
     }
 
-    // SAFETY: `inputs` is a valid, non-empty slice of `INPUT`; `cbSize` is the
-    // size of one `INPUT`. `SendInput` reads the data synchronously and copies
-    // it into the system input queue.
+    // SAFETY: valid non-empty `INPUT` slice with correct element size; read synchronously.
     let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
     if sent as usize == inputs.len() {
         return Ok(());
@@ -87,8 +75,7 @@ pub fn send_chord(modifier_flags: u32, vk: u32) -> Result<()> {
     })
 }
 
-/// Build a single keyboard `INPUT` event for `vk` (down or up; extended-key flag
-/// set for keys like the arrows that need it for correct scan-code routing).
+/// Build one keyboard `INPUT` event for `vk` (down or up, optionally extended).
 fn key_event(vk: VIRTUAL_KEY, up: bool, extended: bool) -> INPUT {
     let mut flags = KEYBD_EVENT_FLAGS(0);
     if up {
@@ -111,9 +98,8 @@ fn key_event(vk: VIRTUAL_KEY, up: bool, extended: bool) -> INPUT {
     }
 }
 
-/// Whether a virtual-key code is an extended key (the arrow cluster), which
-/// needs `KEYEVENTF_EXTENDEDKEY` for the synthetic scan code to route correctly.
+/// Whether `vk` is an extended key (arrow cluster) needing `KEYEVENTF_EXTENDEDKEY`.
 const fn is_extended(vk: u32) -> bool {
-    // VK_LEFT (0x25) .. VK_DOWN (0x28).
+    // VK_LEFT..=VK_DOWN.
     matches!(vk, 0x25..=0x28)
 }

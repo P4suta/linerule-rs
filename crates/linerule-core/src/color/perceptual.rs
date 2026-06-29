@@ -1,15 +1,7 @@
-//! Perceptual opacity helpers.
-//!
-//! Linear alpha values are pretty for math but ugly for human perception:
-//! doubling a linear alpha does not double perceived translucency. We map
-//! linear values to perceptual ones with two curves:
-//!
-//! - [`smooth`]: simple gamma-2.2 approximation, fast and adequate for HUD fade.
-//! - [`l_star`]: CIE L\* (piecewise cube-root + linear toe), used by
-//!   [`crate::color::Opacity`] to convert a stored byte into its on-screen alpha.
+//! Perceptual opacity helpers: map linear alpha to perceived translucency.
+//! [`smooth`] is gamma-2.2; [`l_star`] is CIE L\*, used by [`crate::color::Opacity`].
 
-/// `linear^(1/2.2)` clamped to `[0, 1]`. NaN and negatives map to `0`; values
-/// `≥ 1` map to `1`. Branch-free in the common case.
+/// `linear^(1/2.2)` clamped to `[0, 1]`; NaN/negatives map to `0`.
 #[must_use]
 pub fn smooth(linear: f32) -> f32 {
     if !linear.is_finite() || linear <= 0.0 {
@@ -21,8 +13,7 @@ pub fn smooth(linear: f32) -> f32 {
     linear.powf(1.0 / 2.2)
 }
 
-/// CIE L\* curve: piecewise cube-root above the toe, linear segment below.
-/// Returns a value in `[0, 1]`. NaN and negatives map to `0`.
+/// CIE L\* curve (cube-root above toe, linear below) in `[0, 1]`; NaN/negatives map to `0`.
 #[must_use]
 pub fn l_star(linear: f32) -> f32 {
     const TOE: f32 = 0.008_856;
@@ -116,9 +107,8 @@ mod tests {
         );
     }
 
-    /// `l_star` maps NaN / negatives to 0.0. Guards against mutating the guard's
-    /// `||` to `&&`: NaN has `is_finite() == false` but `<= 0.0 == false`, so
-    /// `&&` would slip past the zero guard.
+    /// NaN/negatives map to 0.0. Catches `||`→`&&` guard mutation: NaN is not
+    /// finite but `<= 0.0 == false`, so `&&` would slip past the zero guard.
     #[test]
     fn l_star_handles_nan_and_negatives() {
         assert!(l_star(f32::NAN).abs() < 1e-6, "NaN must map to 0.0");

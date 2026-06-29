@@ -1,6 +1,4 @@
-# Build `cargo doc` for all crates and deploy to GitHub Pages on every
-# successful push to `main`. The published rustdoc is the canonical API
-# reference; `lib.rs` crate-doc and `///` items feed it directly.
+# Build `cargo doc` and deploy to GitHub Pages on push to `main`.
 
 name: docs
 
@@ -25,18 +23,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # .cargo/config.toml forces -fuse-ld=mold for x86_64-unknown-linux-gnu;
-      # install mold so the link step actually finds the linker.
+      # .cargo/config.toml forces -fuse-ld=mold for linux-gnu; install mold.
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo doc
         env:
-          # Stable rustdoc only. `--enable-index-page` / `-Z unstable-options`
-          # need nightly; we write a manual redirect HTML in the next step
-          # so the gh-pages root lands on linerule_core's index.
+          # Stable rustdoc has no auto-index; redirect HTML written below.
           RUSTDOCFLAGS: -D warnings
-        # Same command is gated on PRs by the `doc` job in ci.yml (without the
-        # Pages deploy below). Keep the two in sync.
+        # Keep in sync with the `doc` job in ci.yml (PR gate, no deploy).
         run: cargo doc --workspace --no-deps --exclude linerule-platform-windows
       - name: write redirect index.html (stable rustdoc has no auto-index)
         run: |

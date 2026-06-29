@@ -5,8 +5,7 @@
 use crate::error::{PlatformError, Result};
 use crate::win32_ffi;
 
-/// Run the synchronous `GetMessageW` message pump. Returns `Ok(())` once
-/// `WM_QUIT` arrives; `Err` only if `GetMessageW` returns -1.
+/// Run the synchronous `GetMessageW` pump until `WM_QUIT`.
 ///
 /// # Errors
 /// When `GetMessageW` returns -1.

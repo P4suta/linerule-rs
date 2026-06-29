@@ -16,10 +16,8 @@ pub(crate) fn install_panic_hook(run_id: Uuid) {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if let Err(e) = write_crash_dump(info, run_id) {
-            // If the crash dump itself fails, stderr is all we have.
             eprintln!("crash_dump write failed: {e}");
         }
-        // Also run the default hook for the usual backtrace.
         prev(info);
     }));
 }
@@ -31,8 +29,7 @@ struct CrashRecord<'a> {
     message: String,
     location: Option<CrashLocation<'a>>,
     backtrace: String,
-    /// Tail of tracing events before the panic (up to 64), via
-    /// `event_ring::snapshot_tail`. Empty `Vec` if the lock can't be taken.
+    /// Up to 64 tracing events before the panic; empty if the lock can't be taken.
     recent_events: Vec<crate::event_ring::RingEntry>,
 }
 
@@ -89,11 +86,8 @@ fn crash_path(run_id: Uuid, unix_ms: i128) -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    //! Unit tests for crash filename construction and JSON schema.
-    //!
-    //! `install_panic_hook` cannot be exercised inside the test harness
-    //! without poisoning subsequent tests (it replaces the global hook).
-    //! We test the file-name pattern and the JSON shape via the struct.
+    //! Tests filename construction and JSON shape. `install_panic_hook` is
+    //! untested: it replaces the global hook, poisoning later tests.
 
     use super::*;
     use serde::Deserialize;
@@ -182,9 +176,7 @@ mod tests {
 
     #[test]
     fn crash_path_filename_has_expected_shape() {
-        // `crash_path` resolves the data-dir from the OS; we can't isolate
-        // that without env-mocking, so we assert via the returned PathBuf's
-        // final component pattern.
+        // Data-dir comes from the OS; assert only the final-component pattern.
         let run = Uuid::nil();
         let ts: i128 = 1_700_000_000_000;
         if let Ok(p) = crash_path(run, ts) {

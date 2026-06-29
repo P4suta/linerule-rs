@@ -1,7 +1,6 @@
 //! Safe wrappers over `DwmFlush` + `PostMessageW`.
 //!
-//! `render_clock.rs` calls `DwmFlush` on a separate thread to wait for vsync,
-//! then `PostMessageW(target_hwnd, WM_APP_TICK, 0, 0)` to wake the UI thread.
+//! A worker thread `DwmFlush`es for vsync, then `PostMessageW`s to wake the UI thread.
 
 #![allow(
     unsafe_code,

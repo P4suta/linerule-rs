@@ -1,8 +1,5 @@
-//! FFI boundary — the core `unsafe` file in `linerule-platform-windows`.
-//!
-//! The windows crate's Win32 / COM APIs are effectively all `unsafe fn`. This
-//! file thinly safe-wraps them; other modules call only the safe functions
-//! here. Every `unsafe { ... }` block carries a `// SAFETY:` comment.
+//! FFI boundary: thin safe wrappers over the windows crate's `unsafe` Win32/COM
+//! APIs. Other modules call only the safe functions here.
 
 #![allow(
     unsafe_code,
@@ -63,10 +60,8 @@ pub fn register_class(name: PCWSTR, wnd_proc: WNDPROC) -> Result<u16> {
 
 // ---- window lifecycle ------------------------------------------------------
 
-/// Safe wrapper over `CreateWindowExW`.
-///
-/// `create_param` is the `*mut OverlayWndState` (from `Box::into_raw`) that
-/// reaches the WndProc via WM_NCCREATE.
+/// Safe wrapper over `CreateWindowExW`. `create_param` is the
+/// `*mut OverlayWndState` (`Box::into_raw`) delivered to the WndProc via WM_NCCREATE.
 #[allow(
     clippy::too_many_arguments,
     reason = "mirrors the Win32 API argument shape; flat is clearer for callers"
@@ -112,8 +107,7 @@ pub fn create_window(
     Ok(hwnd)
 }
 
-/// Safe wrapper over `DestroyWindow`. May fail (called from Drop) without
-/// aborting the program.
+/// Safe wrapper over `DestroyWindow`. May fail (called from Drop) without aborting.
 pub fn destroy_window(hwnd: HWND) -> Result<()> {
     // SAFETY: hwnd is a valid HWND owned by OverlayWindow.
     unsafe { DestroyWindow(hwnd) }.map_err(|e| PlatformError::BadHr {
@@ -122,17 +116,14 @@ pub fn destroy_window(hwnd: HWND) -> Result<()> {
     })
 }
 
-/// Safe wrapper over `SetWindowPos(hwnd, NULL, x, y, width, height,
-/// SWP_NOACTIVATE | SWP_NOZORDER)`. Used by the `WM_DPICHANGED` handler to
-/// reposition the overlay HWND to the OS-recommended rect. `SWP_NOACTIVATE`
-/// avoids stealing focus; `SWP_NOZORDER` preserves the WS_EX_TOPMOST z-order.
+/// Repositions the overlay HWND via `SetWindowPos` with `SWP_NOACTIVATE`
+/// (no focus steal) | `SWP_NOZORDER` (preserve WS_EX_TOPMOST). For WM_DPICHANGED.
 ///
 /// # Errors
 /// When `SetWindowPos` fails.
 pub fn set_window_pos_rect(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos};
-    // SAFETY: hwnd is a valid overlay-owned HWND, SWP_* are Win32 constants,
-    // hwndinsertafter = None makes no z-order change (consistent with SWP_NOZORDER).
+    // SAFETY: valid overlay-owned hwnd; insertafter = None makes no z-order change.
     unsafe {
         SetWindowPos(
             hwnd,
@@ -150,63 +141,54 @@ pub fn set_window_pos_rect(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) 
     })
 }
 
-/// Interprets a `WM_DPICHANGED` `lparam` as the OS-recommended new window
-/// `RECT` and returns it by value. Keeps the raw-pointer deref in this file
-/// since `wndproc::dispatch` is `#![forbid(unsafe_code)]`.
+/// Reads a `WM_DPICHANGED` `lparam` as the OS-recommended new window `RECT`.
+/// Deref kept here since `wndproc::dispatch` is `#![forbid(unsafe_code)]`.
 ///
 /// # Safety
-/// Call only when `msg == WM_DPICHANGED`; for other messages `lparam` is not a
-/// `RECT*` and this is undefined behavior.
+/// Call only when `msg == WM_DPICHANGED`; otherwise `lparam` is not a `RECT*` (UB).
 pub fn rect_from_wm_dpichanged_lparam(lparam: LPARAM) -> windows::Win32::Foundation::RECT {
-    // SAFETY: per Win32, the WM_DPICHANGED lparam is an OS-provided valid
-    // `RECT*`. Copy the value once.
+    // SAFETY: WM_DPICHANGED lparam is an OS-provided valid `RECT*`.
     unsafe { *(lparam.0 as *const windows::Win32::Foundation::RECT) }
 }
 
 /// Safe wrapper over `ShowWindow(hwnd, SW_SHOWNOACTIVATE)`.
 ///
 /// A `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` overlay HWND may not
-/// become visible without an explicit `ShowWindow`. `SW_SHOWNOACTIVATE` plus
-/// `WS_EX_NOACTIVATE` doubly avoids stealing focus.
-///
-/// The BOOL return only reports whether the window was previously visible, not
-/// failure, so it is discarded.
+/// show without an explicit `ShowWindow`; `SW_SHOWNOACTIVATE` avoids focus steal.
+/// The BOOL return only reports prior visibility, not failure, so it is discarded.
 #[allow(
     clippy::disallowed_methods,
     reason = "the only place ShowWindow is allowed; callers deny it via clippy::disallowed_methods"
 )]
 pub fn show_window_noactivate(hwnd: HWND) {
-    // SAFETY: hwnd is a valid HWND owned by OverlayWindow. SW_SHOWNOACTIVATE is
-    // a WinAPI constant. This API returns no failure HRESULT.
+    // SAFETY: valid overlay-owned hwnd; this API returns no failure HRESULT.
     let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
 }
 
 // ---- GWLP_USERDATA (instance state) ----------------------------------------
 
-/// Stores the WM_NCCREATE `*mut OverlayWndState` (from `Box::into_raw`) in
-/// `GWLP_USERDATA`.
+/// Stores the WM_NCCREATE `*mut OverlayWndState` (`Box::into_raw`) in `GWLP_USERDATA`.
 pub fn set_userdata(hwnd: HWND, ptr: *mut OverlayWndState) {
-    // SAFETY: hwnd valid; ptr is either a caller-owned Box::into_raw result or null.
+    // SAFETY: hwnd valid; ptr is a caller-owned Box::into_raw result or null.
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize) };
 }
 
-/// Reads the `*mut OverlayWndState` stored in `GWLP_USERDATA` as `NonNull`.
-/// `None` if not yet set (before WM_NCCREATE).
+/// Reads the `*mut OverlayWndState` from `GWLP_USERDATA` as `NonNull`.
+/// `None` before WM_NCCREATE sets it.
 pub fn get_userdata(hwnd: HWND) -> Option<NonNull<OverlayWndState>> {
-    // SAFETY: plain GWLP_USERDATA read, made safe by the null check.
+    // SAFETY: plain read, made safe by the null check.
     let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut OverlayWndState;
     NonNull::new(raw)
 }
 
-/// Clears `GWLP_USERDATA` to 0 and reclaims the stored Box. Call once in
-/// WM_NCDESTROY.
+/// Clears `GWLP_USERDATA` and reclaims the stored Box. Call once in WM_NCDESTROY.
 pub fn take_userdata(hwnd: HWND) -> Option<Box<OverlayWndState>> {
-    // SAFETY: SetWindowLongPtrW writes 0 and returns the prior value (atomic swap).
+    // SAFETY: writes 0 and returns the prior value (atomic swap).
     let raw = unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) } as *mut OverlayWndState;
     if raw.is_null() {
         return None;
     }
-    // SAFETY: reclaims the WM_NCCREATE Box::into_raw value once, in WM_NCDESTROY.
+    // SAFETY: reclaims the WM_NCCREATE Box::into_raw value once.
     Some(unsafe { Box::from_raw(raw) })
 }
 
@@ -225,11 +207,11 @@ pub fn drop_userdata_raw(ptr: *mut OverlayWndState) {
     drop(unsafe { Box::from_raw(ptr) });
 }
 
-/// Converts `NonNull<OverlayWndState>` to `&OverlayWndState`, valid only for the
-/// duration of one WndProc dispatch.
+/// Converts `NonNull<OverlayWndState>` to `&OverlayWndState`, valid only for one
+/// WndProc dispatch.
 pub fn state_ref<'a>(ptr: NonNull<OverlayWndState>) -> &'a OverlayWndState {
-    // SAFETY: ptr is the stable address established at WM_NCCREATE. WndProc runs
-    // only on the single UI thread and the box lives until dispatch returns.
+    // SAFETY: stable address from WM_NCCREATE; WndProc runs single-threaded and the
+    // box lives until dispatch returns.
     unsafe { ptr.as_ref() }
 }
 
@@ -247,15 +229,11 @@ pub fn post_quit(exit_code: i32) {
     unsafe { PostQuitMessage(exit_code) };
 }
 
-/// Pumps one message.
-///
-/// Returns:
-/// - `Some(true)`: a message was processed; keep going.
-/// - `Some(false)`: `WM_QUIT` received; exit the loop.
-/// - `None`: `GetMessageW` returned -1 (API error).
+/// Pumps one message: `Some(true)` processed, `Some(false)` WM_QUIT,
+/// `None` GetMessageW returned -1 (API error).
 pub fn pump_one() -> Option<bool> {
     let mut msg = MSG::default();
-    // SAFETY: msg is a zero-init out param; other args are defaults.
+    // SAFETY: msg is a zero-init out param.
     let r = unsafe { GetMessageW(&mut msg, None, 0, 0) };
     match r.0 {
         0 => Some(false),
@@ -300,9 +278,7 @@ pub fn screen_height() -> i32 {
     unsafe { GetSystemMetrics(SM_CYSCREEN) }
 }
 
-/// Returns the whole virtual-screen bounds (`SM_XVIRTUALSCREEN` /
-/// `SM_YVIRTUALSCREEN` / `SM_CXVIRTUALSCREEN` / `SM_CYVIRTUALSCREEN`) as
-/// `(left, top, width, height)` — the rect covering all monitors.
+/// Virtual-screen bounds `(left, top, width, height)` covering all monitors.
 pub fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
     use windows::Win32::UI::WindowsAndMessaging::{
         SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -320,23 +296,14 @@ pub fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
 
 // ---- WndProc entry point ---------------------------------------------------
 
-/// The linerule overlay WndProc.
-///
-/// Only this function is declared `unsafe` to satisfy the `unsafe extern
-/// "system" fn` type for `RegisterClassExW`'s `lpfnWndProc`. It:
-/// - on WM_NCCREATE, stores instance state in `GWLP_USERDATA`;
-/// - otherwise delegates to `crate::wndproc::dispatch` (safe);
-/// - absorbs any dispatch panic via `catch_unwind`, falling back to
-///   `DefWindowProcW`.
-///
-/// `dispatch` lives in `#![forbid(unsafe_code)]` wndproc.rs and adds no unsafe.
+/// The linerule overlay WndProc. On WM_NCCREATE stores instance state in
+/// `GWLP_USERDATA`; otherwise delegates to `crate::wndproc::dispatch`, absorbing
+/// any panic via `catch_unwind` and falling back to `DefWindowProcW`.
 ///
 /// # Safety
-/// Must only be installed as a window class `lpfnWndProc` and invoked by the
-/// Win32 message pump: `hwnd` must be a valid window of that class and, for
-/// `WM_NCCREATE`, `lparam` must point to a `CREATESTRUCTW` whose `lpCreateParams`
-/// is the `Box::into_raw(OverlayWndState)` pointer. These hold by construction
-/// because only `RegisterClassExW` + `CreateWindowExW` here reference it.
+/// Install only as a window class `lpfnWndProc`: `hwnd` must be a valid window of
+/// that class and, for `WM_NCCREATE`, `lparam` must point to a `CREATESTRUCTW`
+/// whose `lpCreateParams` is the `Box::into_raw(OverlayWndState)` pointer.
 pub unsafe extern "system" fn overlay_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -359,7 +326,7 @@ pub unsafe extern "system" fn overlay_wnd_proc(
         Ok(Some(lresult)) => lresult,
         Ok(None) => def_window_proc(hwnd, msg, wparam, lparam),
         Err(_panic) => {
-            // Swallow the panic and keep the process alive.
+            // Swallow panic; keep the process alive.
             def_window_proc(hwnd, msg, wparam, lparam)
         },
     }
@@ -424,13 +391,8 @@ pub fn get_monitor_info(hmonitor: HMONITOR) -> Result<MONITORINFO> {
 
 // ---- DPI awareness ---------------------------------------------------------
 
-/// Safe wrapper over
-/// `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)`.
-/// Call once at process startup.
-///
-/// V2 awareness respects per-monitor DPI and lets the overlay HWND receive
-/// `WM_DPICHANGED` (requires Windows 10 1703+). Failure (e.g. awareness already
-/// set) is not fatal; only logged.
+/// Sets per-monitor-aware-V2 DPI awareness (call once at startup). V2 lets the
+/// overlay HWND receive `WM_DPICHANGED` (Windows 10 1703+). Failure is non-fatal.
 ///
 /// # Errors
 /// When `SetProcessDpiAwarenessContext` returns `FALSE`.
@@ -438,8 +400,7 @@ pub fn set_dpi_aware() -> Result<()> {
     use windows::Win32::UI::HiDpi::{
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
     };
-    // SAFETY: DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is a windows-rs constant.
-    // The API is idempotent; called once right after startup.
+    // SAFETY: windows-rs constant arg; API is idempotent.
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }.map_err(
         |e| PlatformError::BadHr {
             operation: "SetProcessDpiAwarenessContext",
@@ -450,12 +411,10 @@ pub fn set_dpi_aware() -> Result<()> {
 
 // ---- display settings (refresh rate) ---------------------------------------
 
-/// Safe wrapper over `EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS,
-/// &mut devmode)`. Reads the primary display's current `DEVMODEW`. Used by HUD
-/// telemetry to show `DEVMODEW::dmDisplayFrequency` (Hz).
+/// Reads the primary display's current `DEVMODEW` (HUD shows `dmDisplayFrequency`).
 ///
 /// # Errors
-/// When `EnumDisplaySettingsW` returns FALSE (normally never).
+/// When `EnumDisplaySettingsW` returns FALSE.
 pub fn enum_display_settings_current() -> Result<windows::Win32::Graphics::Gdi::DEVMODEW> {
     use windows::Win32::Graphics::Gdi::{DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW};
     let mut dm = DEVMODEW {

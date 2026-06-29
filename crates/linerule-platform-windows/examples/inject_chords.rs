@@ -1,16 +1,10 @@
 //! Inject `Ctrl+Alt+<key>` chords via `SendInput` to drive the overlay's
-//! `RegisterHotKey` hotkeys from a separate input source.
+//! `RegisterHotKey` hotkeys. Windows + interactive desktop only (synthetic
+//! input can't reach a `RegisterHotKey` owner on a headless runner).
 //!
-//! Driven by `cargo xtask verify --scenario`. Windows + an interactive desktop
-//! session only (synthetic input can't reach a `RegisterHotKey` owner on a
-//! headless runner); a no-op elsewhere.
-//!
-//! Usage: `inject_chords <action,action,...> [delay_ms]`, where each action is a
-//! field name of [`linerule_core::input::hotkey_map::HotkeyMap`]
-//! (`toggle_on_off`, `cycle_mode`, `cycle_effect`, `thicker`, `thinner`,
-//! `more_opaque`, `less_opaque`, `toggle_hud`, `quit`). Chords come from
-//! `HotkeyMap::DEFAULT` so the injector can never disagree with what the app
-//! actually registered.
+//! Usage: `inject_chords <action,action,...> [delay_ms]`, action = a field name
+//! of [`linerule_core::input::hotkey_map::HotkeyMap`]. Chords come from
+//! `HotkeyMap::DEFAULT` so the injector matches what the app registered.
 
 #![allow(
     clippy::print_stdout,
@@ -36,8 +30,8 @@ fn run(actions: &str, delay_ms: u64) {
     use linerule_platform_windows::send_chord;
 
     let map = HotkeyMap::DEFAULT;
-    // Settle once so the overlay's message loop is draining input before the
-    // first chord — sending immediately after spawn drops the key.
+    // Let the overlay's message loop start draining input; chords sent
+    // immediately after spawn get dropped.
     sleep(Duration::from_millis(delay_ms));
 
     for action in actions.split(',').filter(|s| !s.is_empty()) {
@@ -58,8 +52,7 @@ fn run(actions: &str, delay_ms: u64) {
             std::process::exit(1);
         }
         println!("inject_chords: sent {action} ({chord_str})");
-        // Space chords past one tick so each lands on a distinct frame and
-        // produces its own `state changed` line.
+        // Space chords past one tick so each lands on a distinct frame.
         sleep(Duration::from_millis(delay_ms));
     }
 }

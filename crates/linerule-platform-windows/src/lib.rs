@@ -1,29 +1,16 @@
-//! linerule-platform-windows
-//!
-//! Win32 / COM layer: HWND lifecycle, DirectComposition + Direct2D + D3D11
-//! rendering, hotkeys, `DwmFlush` pacing, structured `tracing` events. No logic.
-//!
-//! Gated to Windows via `#![cfg(windows)]`; compiles as an empty crate elsewhere.
-//!
-//! `unsafe` is confined to `win32_ffi.rs`. Every other module is
-//! `#![forbid(unsafe_code)]` and calls Win32 / COM only through its safe wrappers.
-//!
-//! Invariants:
-//! - No logic here; call `linerule-core` reducers / render.
-//! - `Drop` must release COM objects, HWNDs, hooks, and `JoinHandle`s.
+//! Win32/COM layer: HWND lifecycle, DComp/D2D/D3D11 rendering, hotkeys, pacing.
+//! `unsafe` confined to `win32_ffi`; other modules `forbid(unsafe_code)`. No logic
+//! here (delegate to `linerule-core`); `Drop` must release COM/HWND/hooks/threads.
 
 #![cfg(windows)]
 #![deny(unsafe_op_in_unsafe_fn)]
-// Win32/COM/D3D の薄いラッパー層は pedantic/nursery を crate 単位で免除する。
-// xtask lint の `clippy-windows-deny-list` ステップが Windows target に対して
-// 同グループを `-A` で抑える方針と一致させ、native host の主 clippy step
-// (`--workspace -D warnings`) でも platform crate が依存コンパイルされる際に
-// pedantic ノイズ (cast 系・doc_markdown・inline_always 等) で落ちないようにする。
-// correctness/style/perf を含む `clippy::all` と `disallowed_*` は引き続き enforce。
+// pedantic/nursery exempted crate-wide for this thin Win32/COM/D3D wrapper layer,
+// matching xtask's `clippy-windows-deny-list` (-A on Windows target). `clippy::all`
+// and `disallowed_*` stay enforced.
 #![allow(
     clippy::pedantic,
     clippy::nursery,
-    reason = "Win32/COM 層の pedantic/nursery は意図的に免除 (clippy-windows-deny-list と同方針)"
+    reason = "pedantic/nursery intentionally exempted for Win32/COM layer (same policy as clippy-windows-deny-list)"
 )]
 
 pub mod auto_quit;

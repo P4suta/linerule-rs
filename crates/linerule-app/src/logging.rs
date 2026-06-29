@@ -1,12 +1,6 @@
-//! tracing subscriber + tracing-appender setup.
-//!
-//! `LINERULE_LOG` controls per-subsystem levels (e.g.
-//! `debug,wnd_proc=info,heartbeat=info`). Outputs:
-//! - stderr (CLI mode): human-readable
-//! - `<exe dir>/events.jsonl.YYYY-MM-DD`: machine-readable JSON Lines
-//!
-//! Portable layout: logs go next to the exe rather than under `%APPDATA%`. If
-//! the dir is not writable (e.g. under Program Files) `init()` returns `Err`.
+//! tracing subscriber setup. `LINERULE_LOG` controls per-subsystem levels.
+//! Logs go next to the exe (portable layout): stderr (human) plus
+//! `<exe dir>/events.jsonl.YYYY-MM-DD` (JSON Lines).
 
 #![forbid(unsafe_code)]
 
@@ -19,12 +13,11 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// Initialize tracing at startup. Hold the returned `WorkerGuard` for the life
-/// of `main` (dropping it flushes the background writer).
+/// Initialize tracing. Hold the returned `WorkerGuard` for the life of `main`
+/// (dropping it flushes the background writer).
 ///
 /// # Errors
-/// When the exe path can't be resolved, the log dir can't be created, or the
-/// file appender fails to init.
+/// Exe path unresolvable, log dir uncreatable, or file appender init fails.
 pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
     let log_dir = data_dir().context("resolving log dir next to linerule.exe")?;
     std::fs::create_dir_all(&log_dir)
@@ -45,8 +38,8 @@ pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
 
     let registry = tracing_subscriber::registry()
         .with(env_filter)
-        // Ring buffer that supplies pre-panic events to the crash dump JSON.
-        // Events dropped by env_filter never reach the ring (filter is shared).
+        // Ring buffer supplying pre-panic events to the crash dump JSON.
+        // env_filter is shared, so dropped events never reach the ring.
         .with(crate::event_ring::RingBufferLayer)
         .with(file_layer);
 
@@ -62,11 +55,10 @@ pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
     Ok(guard)
 }
 
-/// Return the directory of the running `linerule.exe`. Both `events.jsonl.*`
-/// and `crash-*.json` live here.
+/// Directory of the running exe; holds `events.jsonl.*` and `crash-*.json`.
 ///
 /// # Errors
-/// When `std::env::current_exe()` fails or the exe path has no parent.
+/// `current_exe()` fails or the exe path has no parent.
 pub(crate) fn data_dir() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("std::env::current_exe failed")?;
     let dir = exe
@@ -78,15 +70,13 @@ pub(crate) fn data_dir() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    //! `init()` installs a *global* tracing subscriber and is therefore not
-    //! exercised here (would corrupt sibling tests). We cover the pure
-    //! pieces: `data_dir()` shape and `EnvFilter` boundary parsing.
+    //! `init()` installs a global subscriber, so it's untested here (would
+    //! corrupt sibling tests). Covers `data_dir()` and `EnvFilter` parsing.
 
     use super::*;
 
     #[test]
     fn data_dir_matches_current_exe_parent() {
-        // Portable layout: logs sit next to the exe.
         let p = data_dir().expect("current_exe resolves under cargo nextest");
         let expected = std::env::current_exe()
             .expect("current_exe resolves under cargo nextest")
@@ -107,20 +97,15 @@ mod tests {
 
     #[test]
     fn env_filter_parses_default_directive_used_by_init() {
-        // This is the exact string `init()` falls back to when LINERULE_LOG
-        // is unset. If the format ever drifts (e.g. a renamed target),
-        // EnvFilter::new will panic — we catch that here.
+        // Exact fallback string `init()` uses; a drift here would panic.
         let _ = EnvFilter::new("info,wnd_proc=info,heartbeat=info,cursor_tracker=info");
     }
 
     #[test]
     fn env_filter_rejects_obviously_bad_input() {
-        // EnvFilter is permissive about most things (it just ignores unknown
-        // tokens), but completely invalid level names should error out.
-        // `try_new` here exercises the same surface init() uses.
+        // EnvFilter accepts arbitrary target names; just ensure no panic.
         let bad = "this-is-not-a-level";
         let parsed = EnvFilter::try_new(bad);
-        // EnvFilter accepts arbitrary target names; just ensure no panic.
         let _ = parsed;
     }
 }

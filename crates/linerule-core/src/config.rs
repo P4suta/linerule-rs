@@ -1,6 +1,5 @@
-//! User-facing configuration. Every tunable is a compile-time constant,
-//! exposed as `const DEFAULT: Self`. There is no file parser, no environment
-//! lookup; reconfiguration means recompiling.
+//! User-facing configuration. Every tunable is a compile-time constant
+//! (`const DEFAULT: Self`); reconfiguring means recompiling.
 
 use std::time::Duration;
 
@@ -42,8 +41,7 @@ impl Default for OverlayConfig {
     }
 }
 
-/// Granularity of a single tap step. The values generalize for future
-/// continuous controls; today they're just the bump magnitudes.
+/// Per-tap bump magnitudes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TapStepConfig {
     /// Pixels per `BumpThickness` tap.
@@ -252,13 +250,10 @@ pub struct HudColors {
 impl HudColors {
     /// Default dark palette.
     ///
-    /// `background.alpha` is `0xEB` (≈ 92%): a slight translucency lets the
-    /// desktop / overlay mask breathe through the panel (Fluent-style acrylic
-    /// feel) while staying dark enough that text contrast is unaffected. The
-    /// HUD sits on top of the overlay mask in composition z-order, so the mask
-    /// darkens the panel marginally when active — intended. Per-frame fade is
-    /// still applied via [`HudConfig::base_opacity`] / `compute_opacity` on
-    /// top of this.
+    /// `background.alpha` `0xEB` (≈92%): slight translucency for acrylic feel
+    /// without hurting text contrast. The HUD composites above the overlay
+    /// mask, so an active mask darkens the panel marginally — intended.
+    /// Per-frame fade ([`HudConfig::base_opacity`]) applies on top.
     pub const DEFAULT: Self = Self {
         background: Rgba::new(0x10, 0x12, 0x18, 0xEB),
         foreground: Rgba::new(0xE6, 0xE9, 0xEF, 0xFF),
@@ -275,10 +270,10 @@ impl Default for HudColors {
     }
 }
 
-/// Geometry of the persistent status chip (the default, low-key HUD tier).
+/// Geometry of the persistent status chip (default low-key HUD tier).
 ///
-/// The chip is a one-line mono status (`H · 28px · 67%`) anchored top-right;
-/// the full guide panel only appears at startup or via the HUD-detail hotkey.
+/// One-line mono status anchored top-right; the full guide panel appears only
+/// at startup or via the HUD-detail hotkey.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct HudChip {
     /// Chip text size (logical pt, mono family).
@@ -352,10 +347,9 @@ impl Default for HudConfig {
 
 /// Transition timing tunables (milliseconds).
 ///
-/// The design constraint is "fast, subtle, never sluggish": every duration is
-/// a short ease-out glide well under 200 ms, so motion reads as
-/// responsiveness rather than decoration. `0` disables a transition
-/// (instant), which doubles as the CI / determinism escape hatch.
+/// Design constraint "fast, subtle": every duration is a short ease-out glide
+/// under 200 ms. `0` disables a transition (instant) — the CI/determinism
+/// escape hatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(
     clippy::struct_field_names,
@@ -446,10 +440,8 @@ mod tests {
         assert!((HudConfig::DEFAULT.corner_radius - 8.0).abs() < f32::EPSILON);
     }
 
-    /// The HUD background is slightly translucent (0xEB ≈ 92%). Fully opaque
-    /// (0xFF) loses the Fluent airiness; dropping toward 0x80 lets the
-    /// overlay curtain bleed through and hurts readability. The pin catches
-    /// accidents in either direction.
+    // Pin slight translucency (0xEB): 0xFF loses airiness, 0x80 lets the
+    // overlay bleed through and hurts readability.
     #[test]
     fn hud_default_background_alpha_is_pinned_slightly_translucent() {
         assert_eq!(HudColors::DEFAULT.background.a, 0xEB);
@@ -471,8 +463,7 @@ mod tests {
         assert_eq!(OverlayConfig::DEFAULT.blur, BlurAmount::DEFAULT);
     }
 
-    /// Pin the animation defaults. Design constraint "fast, subtle": every
-    /// transition stays under 200 ms; catches changes that drift sluggish.
+    // Pin anim defaults; constraint "fast, subtle": every transition < 200 ms.
     #[test]
     fn anim_defaults_are_pinned_under_200ms() {
         let a = AnimConfig::DEFAULT;

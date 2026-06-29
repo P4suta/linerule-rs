@@ -1,66 +1,60 @@
-# ADR 0003 — `unsafe` を FFI 境界 1 ファイルに集約する
+# ADR 0003 — Confine `unsafe` to one FFI-boundary file
 
-- 日付: 2026-05-20
-- ステータス: accepted
-- 提案者: P4suta
+- Date: 2026-05-20
+- Status: accepted
+- Author: P4suta
 
-## 文脈
+## Context
 
-`linerule-platform-windows` は Win32 / COM / DirectComposition / Direct2D / DirectWrite / D3D11 を直接叩く。`windows` crate (Microsoft 謹製) の Win32 API は実質すべて `unsafe fn` であり、これを呼ぶ以上 `unsafe` ブロックは避けられない。
+`linerule-platform-windows` calls Win32 / COM / DirectComposition / Direct2D / DirectWrite / D3D11 directly. The `windows` crate's Win32 APIs are essentially all `unsafe fn`, so `unsafe` blocks are unavoidable. The default rule is "no unsafe", but a click-through + per-pixel alpha + Alt+Tab-hidden overlay requires `DirectComposition` + `WS_EX_LAYERED` + `WS_EX_NOREDIRECTIONBITMAP` + `WS_EX_TOOLWINDOW`; zero `unsafe` is impossible under any abstraction.
 
-原則として「unsafe は禁止」だが、click-through + per-pixel α + Alt+Tab 非表示の overlay は `DirectComposition` + `WS_EX_LAYERED` + `WS_EX_NOREDIRECTIONBITMAP` + `WS_EX_TOOLWINDOW` を要し、winit / winsafe / wgpu / tiny-skia いずれの抽象でも完全 `unsafe` ゼロは技術的に不可能。
+## Decision
 
-## 決定
+Confine `unsafe` to **a single file, `crates/linerule-platform-windows/src/win32_ffi.rs`**. Specifically:
 
-`unsafe` を **`crates/linerule-platform-windows/src/win32_ffi.rs` の 1 ファイル**に集約する。具体的には:
-
-1. `win32_ffi.rs` の冒頭で:
+1. At the top of `win32_ffi.rs`:
    ```rust
    #![allow(
        unsafe_code,
-       reason = "FFI 境界。Win32 / COM API は windows crate 経由でも全部 unsafe fn。
-                 他のモジュールは #![forbid(unsafe_code)]、本ファイルでのみ集約する。
-                 詳細は ADR-0003。"
+       reason = "FFI boundary. Win32 / COM APIs are all unsafe fn even via the windows crate.
+                 Other modules are #![forbid(unsafe_code)]; concentrate it only here.
+                 See ADR-0003 for details."
    )]
    ```
-2. `crates/linerule-platform-windows/src/` 配下の他の `.rs` ファイルは **全部** ファイル先頭に `#![forbid(unsafe_code)]` を宣言する
-3. `lib.rs` も `#![cfg(windows)]` + `#![deny(unsafe_op_in_unsafe_fn)]` を保持しつつ、自身では `unsafe` を書かない（`pub mod` 宣言だけ）
-4. `win32_ffi.rs` は薄い safe wrapper の集まり:
-   - 各 `pub fn` は 1〜数行の `unsafe { windows::Win32::...::CallW(...) }` + エラー Result 化のみ
-   - 引数型・戻り型は windows crate 由来でも、関数本体の unsafe は局所化
-   - 各 `unsafe { }` ブロックの直前に `// SAFETY: …` コメントを必須化
-5. `wndproc.rs` 内の dispatch ロジックも `forbid(unsafe_code)`。`extern "system" fn` 本体は `win32_ffi::overlay_wnd_proc` として `win32_ffi.rs` 側に置く
+2. **Every** other `.rs` file under `crates/linerule-platform-windows/src/` declares `#![forbid(unsafe_code)]` at the top of the file.
+3. `lib.rs` keeps `#![cfg(windows)]` + `#![deny(unsafe_op_in_unsafe_fn)]` but writes no `unsafe` itself (only `pub mod` declarations).
+4. `win32_ffi.rs` is a collection of thin safe wrappers:
+   - Each `pub fn` is just a few lines of `unsafe { windows::Win32::...::CallW(...) }` plus mapping errors into a Result.
+   - Argument and return types may come from the windows crate, but the unsafe in the function body is localized.
+   - A `// SAFETY: …` comment is required immediately before each `unsafe { }` block.
+5. The dispatch logic in `wndproc.rs` is also `forbid(unsafe_code)`. The `extern "system" fn` body lives in `win32_ffi.rs` as `win32_ffi::overlay_wnd_proc`.
 
-## 範囲
+## Scope
 
-| ファイル | unsafe 方針 |
+| File | unsafe policy |
 |---|---|
-| `win32_ffi.rs` | `#![allow(unsafe_code, reason = "...")]`、`unsafe extern "system" fn` 含む |
-| `lib.rs` | `unsafe` 出てこない（`#![deny(unsafe_op_in_unsafe_fn)]` でガード） |
-| `error.rs`, `messages.rs`, `overlay_state.rs`, `window_class.rs`, `wndproc.rs`, `overlay_window.rs`, `ex_style_snapshot.rs`, `monitor_info.rs`, `windows_app.rs` | 全部 `#![forbid(unsafe_code)]` |
-| examples / tests | `#![forbid(unsafe_code)]`（smoke test の `main.rs` も含む） |
+| `win32_ffi.rs` | `#![allow(unsafe_code, reason = "...")]`, includes `unsafe extern "system" fn` |
+| `lib.rs` | no `unsafe` appears (guarded by `#![deny(unsafe_op_in_unsafe_fn)]`) |
+| `error.rs`, `messages.rs`, `overlay_state.rs`, `window_class.rs`, `wndproc.rs`, `overlay_window.rs`, `ex_style_snapshot.rs`, `monitor_info.rs`, `windows_app.rs` | all `#![forbid(unsafe_code)]` |
+| examples / tests | `#![forbid(unsafe_code)]` (including the smoke test `main.rs`) |
 
-## 機械検証
+## Mechanical verification
 
 ```bash
-# unsafe を含むファイルは win32_ffi.rs のみであることを保証
+# Ensure win32_ffi.rs is the only file containing unsafe
 grep -lr '^#!\[allow(unsafe_code' crates/linerule-platform-windows/src/ \
   | grep -v '/win32_ffi.rs$' \
   && exit 1 || true
 
-# win32_ffi.rs 以外は forbid(unsafe_code) を含むこと
+# Every file other than win32_ffi.rs must contain forbid(unsafe_code)
 for f in $(find crates/linerule-platform-windows/src -name '*.rs' ! -name 'win32_ffi.rs' ! -name 'lib.rs'); do
   grep -q '^#!\[forbid(unsafe_code\b' "$f" || (echo "missing forbid: $f" && exit 1)
 done
 ```
 
-`xtask lint` に上記チェックを組み込む（将来）。
+Wire the above checks into `xtask lint` (future).
 
-## 結果
+## Consequences
 
-- user-facing コード（dispatch, OverlayWindow, MonitorInfo, run_message_pump 等）は `forbid(unsafe_code)`。`grep unsafe` の review attention surface は `win32_ffi.rs` 内に閉じる
-- DirectComposition / Direct2D / DWrite / D3D11 wrapper も同じファイル (`win32_ffi.rs`) か、サブモジュール (`win32_ffi/graphics.rs`, `win32_ffi/dwrite.rs` 等) を作って `win32_ffi.rs` 親への `mod` 宣言で吸収する。**`#![allow(unsafe_code)]` のファイル数を増やすときは ADR を要する**
-- ユーザの「unsafe 禁止」要件への対応:
-  - user code（dispatch ロジック、状態管理、メッセージポンプ）からは unsafe 完全に消える
-  - FFI 境界の薄い wrapper だけが unsafe を持つ
-  - これにより review/audit の attention surface は最小化、`grep unsafe` の戦場が「ファイル 1 つ」に絞られる
+- User-facing code (dispatch, OverlayWindow, MonitorInfo, run_message_pump, etc.) is `forbid(unsafe_code)`. The `unsafe` review surface is closed within the single file `win32_ffi.rs`.
+- DirectComposition / Direct2D / DWrite / D3D11 wrappers are absorbed into `win32_ffi.rs` or its submodules (`win32_ffi/graphics.rs`, etc.). **Adding any new `#![allow(unsafe_code)]` file requires an ADR.**

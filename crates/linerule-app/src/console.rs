@@ -1,12 +1,5 @@
-//! Attach a console only in CLI mode, even under `windows_subsystem =
-//! "windows"`.
-//!
-//! Tries `AttachConsole(ATTACH_PARENT_PROCESS)`, falling back to
-//! `AllocConsole`.
-//!
-//! This is the only place in `linerule-app` that needs `unsafe`. The Win32
-//! calls are cfg-gated to Windows; a `cfg(not(windows))` no-op keeps the Linux
-//! build compiling.
+//! Attach a console in CLI mode despite `windows_subsystem = "windows"`.
+//! Only place in `linerule-app` needing `unsafe`; non-Windows is a no-op.
 
 #![cfg_attr(not(target_os = "windows"), forbid(unsafe_code))]
 #![cfg_attr(
@@ -14,8 +7,7 @@
     allow(unsafe_code, reason = "console attach calls Win32 directly")
 )]
 
-/// Attach the parent process console, allocating a new one if there is none, so
-/// `println!` etc. become visible.
+/// Attach the parent console, allocating one if none, so `println!` is visible.
 pub(crate) fn ensure_console_attached() {
     #[cfg(target_os = "windows")]
     win::ensure_console_attached();
@@ -36,6 +28,6 @@ mod win {
             // SAFETY: AllocConsole allocates a new console.
             let _ = unsafe { AllocConsole() };
         }
-        // stdout/stderr rebinding happens automatically once a console exists.
+        // stdout/stderr rebind automatically once a console exists.
     }
 }

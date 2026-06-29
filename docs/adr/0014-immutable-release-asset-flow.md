@@ -1,31 +1,18 @@
-# 0014 — Immutable release との asset flow 再設計 (draft → upload → publish)
+# 0014 — Immutable release asset flow (draft → upload → publish)
 
-**Status:** Accepted (2026-05-24)。supersedes [[0010-release-assets-workflow]] の trigger 設計部分。命名規則・SBOM 添付・build 戦略は ADR-0010 から継承する。
+**Status:** Accepted (2026-05-24). Supersedes the trigger design of [[0010-release-assets-workflow]]. Naming convention, SBOM attachment, and build strategy inherited from ADR-0010.
 
-**注意:** `release-please-config.json` の `"skip-github-release": true` は Release object だけでなく **tag 自体も push しない** (`release-please-action@v5` の `action.yml` 仕様)。tag が無いと release-please workflow が `untagged, merged release PRs outstanding - aborting` で stuck するため、`release-please.yml` 側で「実行後に `tag_name` と現 tag 一覧を照合し、未 push なら自前で `git tag` + `git push` する補助 step」が必要。
+**Note:** `release-please-config.json`'s `"skip-github-release": true` skips not only the Release object but also the tag push (`release-please-action@v5`). Without a tag, release-please gets stuck with `untagged, merged release PRs outstanding - aborting`, so `release-please.yml` needs a helper step that runs `git tag` + `git push` itself when no tag was pushed.
 
-**See also:** [[0010-release-assets-workflow]] (supersede 元)、[[0011-phase-j-slim-down]] (薄い読書ツール志向).
+## Context
 
-## 文脈
+Immutable releases (GA 2025-10-28) are ON in this repo (owner policy, 2026-05-24). Adding, changing, or deleting assets on a published release is forbidden with 422. Old ADR-0010 added assets after publish via `gh release upload`, so under immutable that upload always fails with 422.
 
-GitHub が 2025-10-28 GA とした **immutable releases** 機能が本リポジトリで ON のまま運用される (owner 方針: 「on/off を繰り返すものじゃないので一切いじるつもりない」、2026-05-24)。immutable release は **publish 済み release への asset 追加・変更・削除を 422 で禁止する**。
+## Decision
 
-旧 ADR-0010 の設計は:
+Keep immutable ON, switch release-assets.yml to a `push: tags: ["v*"]` trigger, and assemble the release + assets in 3 steps: draft create → upload → publish. The draft is mutable; the immutable lock applies the moment publish (`draft=false`) happens, so staging all assets before publish is the only safe way to attach.
 
-1. `release-please-action` が `chore(main): release X.Y.Z` PR を merge した瞬間に tag + GitHub Release を **publish** で作る
-2. release-assets.yml が `on: release: types: [published]` で trigger され、`gh release upload` で asset を **後付け**
-
-これは immutable release 前提では破綻する: step 2 で発火する upload が常に 422 で失敗する。
-
-更に二次的に、`release-please-action` が `secrets.GITHUB_TOKEN` で release を作るため、GitHub の policy で他 workflow を trigger しない仕様も重なって、自動 attach は事実上 dead path だった (workflow_dispatch で手動 trigger しても同じ 422)。
-
-## 判断
-
-**immutable は ON のまま受け入れ、release-assets.yml を `push: tags: ["v*"]` トリガに切り替え、draft create → upload → publish の 3-step で release + asset を 1 度に組み立てる。**
-
-GitHub の公式推奨ルートはこれだけ — draft 状態は mutable、publish (= `draft=false`) の瞬間に immutable lock が掛かるため、「publish 前に asset を全部揃える」ことだけが安全に attach できる方法。
-
-### Workflow 連携の再設計
+### Workflow coordination
 
 ```
 release-please.yml                 release-assets.yml
@@ -35,69 +22,61 @@ on: push: branches: [main]         on: push: tags: ["v*"]
 ↓                                  ↓
 release-please-action              gh release create $tag --draft --generate-notes
   └ skip-github-release: true      gh release upload $tag <files> --clobber
-  └ tag を push (release は作らない)  gh release edit $tag --draft=false --latest
+  └ push the tag (no release)      gh release edit $tag --draft=false --latest
 ```
 
-`release-please-config.json` の package config に **`"skip-github-release": true`** を追加することで release-please に release を作らせない。release-please は CHANGELOG / version bump / tag push までを担い、Release ページの生成は release-assets.yml に委ねる。
+Add `"skip-github-release": true` to `release-please-config.json`: release-please handles CHANGELOG / version bump / tag push, and the Release page generation is delegated to release-assets.yml.
 
-### Release notes の sourcing
+### Release notes
 
-`gh release create --generate-notes` で commit 範囲 (前 tag → 現 tag) から PR タイトル一覧を auto 生成する。release-please が CHANGELOG.md に書く形式とは厳密一致しないが、PR 番号 + タイトルの core 情報は両者で同じ。slim doctrine ([[0011-phase-j-slim-down]]) に従い、CHANGELOG section の精密抽出は採用しない (= awk script の追加メンテを避ける)。
+`gh release create --generate-notes` auto-generates PR titles from the commit range. Precise CHANGELOG section extraction is not adopted (avoids maintaining an awk script, [[0011-phase-j-slim-down]]).
 
-### 冪等性 / 手動再試行
+### Idempotency / manual retry
 
-ジョブ冒頭で `gh release view $tag --json isDraft` を probe し:
+Probe `gh release view $tag --json isDraft` at the start of the job:
 
-- `release が存在しない` → `gh release create $tag --draft` (新規)
-- `存在 + draft` → そのまま再利用 (`--clobber` upload で冪等)
-- `存在 + published` → **error で停止** (immutable lock 済み、手動で別 tag を使うか release を delete + tag 削除 + retag が必要)
+- absent → `gh release create $tag --draft`
+- present + draft → reuse (idempotent via `--clobber` upload)
+- present + published → stop with error (immutable lock already applied; needs a different tag or delete + retag)
 
-`workflow_dispatch (inputs.tag)` は build 失敗時の手動 retry / 過去 tag の再 build に使う。draft が残っていれば idempotent に再 upload できる。
+`workflow_dispatch (inputs.tag)` is used for manual retry on build failure.
 
-### release-please の `release-please-action` token 問題との関係
+### Relation to the token problem
 
-`secrets.GITHUB_TOKEN` で release-please が tag を push しても、本 ADR の workflow は `push: tags` (= 必ず trigger 発火する event) を使うため、token PAT 化を待たずに自動 attach が動く。token PAT 化 (release PR で `ci.yml` を発火させる問題) は本 ADR の scope 外。
+This workflow uses `push: tags` (an event that always fires), so it avoids the problem where release-please's `secrets.GITHUB_TOKEN` does not trigger other workflows. Migrating the token to a PAT is out of scope for this ADR.
 
-### 既存 release (v0.2.0–v0.4.0) への遡及 attach
+### Retroactive attach to existing releases (v0.2.0–v0.4.0)
 
-**実施しない**。immutable 前提で publish 済み release には asset を追加できないため、過去 release は asset 無しのまま残す。本 ADR 適用後 (v0.4.1 以降の最初の release) から asset 付きで配布される。SBOM の遡及配布が必要になったら、別 commit / 別 release tag (`v0.4.0-sbom` など) で発行する案を残すが現状は scope 外。
+Not done. Assets cannot be added to published releases, so past releases stay without assets. Distribution with assets starts from v0.4.1.
 
-### Branch protection (required check) への追加判断
+### Branch protection
 
-本 workflow は **release-assets を必須 check に入れない**。tag push event は PR check ではないため、main branch protection の required check リストには出現しない。release 失敗時の修正は (a) 失敗した draft を手動 delete + tag 削除、(b) feat / fix commit を main に積んで release-please の次バージョン PR を待つ、の手順で対応する。
+release-assets is not a required check (a tag push event is not a PR check). On failure, manually delete the draft + tag, or wait for the next release-please PR.
 
-### 命名規則 (ADR-0010 から継承)
+### Naming convention (inherited from ADR-0010)
 
 ```
 linerule-vX.Y.Z-win-x64.exe          (release profile: stripped, panic=abort)
 linerule-vX.Y.Z-sbom.cdx.json        (CycloneDX 1.6 JSON)
 ```
 
-## 影響
+## Consequences
 
-| 項目 | Before (ADR-0010) | After (本 ADR) |
+| Item | Before (ADR-0010) | After (this ADR) |
 |---|---|---|
 | trigger | `release: [published]` | `push: tags: ["v*"]` |
-| release 作成主体 | release-please-action | release-assets.yml の `gh release create --draft` |
-| asset attach | publish 後 (失敗、422) | draft 中に upload (成功) |
-| release-please-config | `skip-github-release` 未設定 | **`skip-github-release: true`** を追加 |
-| immutable 互換性 | ❌ 不可 | ✅ 仕様準拠 |
-| release notes 出所 | release-please の CHANGELOG | `gh release ... --generate-notes` |
+| release creator | release-please-action | release-assets.yml's `gh release create --draft` |
+| asset attach | after publish (fails, 422) | upload during draft (succeeds) |
+| release-please-config | `skip-github-release` unset | add `skip-github-release: true` |
+| immutable compatibility | ❌ not possible | ✅ spec-compliant |
+| release notes source | release-please's CHANGELOG | `gh release ... --generate-notes` |
 
-## 検証
+## Verification
 
-リリース cycle の merge で live 検証する:
-
-1. release-please PR を merge
-2. release-please workflow が tag を push (release は作らない)
-3. push: tags trigger で release-assets.yml が起動
-4. draft 作成 → EXE + SBOM upload → publish
-5. `gh release view <tag>` で asset 2 個が確認できれば成功
-
-失敗時の rollback は `gh release delete <tag> --cleanup-tag` で全消し、原因修正後に再実行。
+Live verification on a release cycle merge: release-please PR merge → tag push → release-assets.yml creates draft → EXE + SBOM upload → publish → confirm 2 assets via `gh release view <tag>`. Rollback is `gh release delete <tag> --cleanup-tag`.
 
 ## Open questions / Followup
 
-- release-please の `secrets.GITHUB_TOKEN` 起因の PR check 問題は本 ADR で解消されない。release PR の `ci.yml` check を毎回 close+reopen で発火させる暫定運用を継続する。
-- `gh release ... --generate-notes` の出力が要件を満たさないと判明したら CHANGELOG.md からの section 抽出に切り替える。
-- `--latest` flag は `gh release edit --draft=false` 時に最新タグ判定を強制する。複数 main 系列 (`v0.4.x` と `v0.5.x` 並列) を運用する場合は再検討。現状は単系列なので OK。
+- The PR-check problem caused by release-please's `secrets.GITHUB_TOKEN` is not resolved by this ADR. Continue the interim practice of firing the release PR's `ci.yml` by close+reopen.
+- If `--generate-notes` output is insufficient, switch to section extraction from CHANGELOG.md.
+- Reconsider the `--latest` flag when running multiple main lines (`v0.4.x` and `v0.5.x` in parallel). Currently a single line.

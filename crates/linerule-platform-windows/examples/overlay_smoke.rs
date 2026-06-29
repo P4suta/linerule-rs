@@ -1,20 +1,10 @@
-//! Overlay smoke test.
+//! Overlay smoke test: transparent click-through overlay over the primary
+//! monitor, blocking in the message pump until `WM_QUIT`.
 //!
-//! `cargo run --example overlay_smoke` (Windows host) raises a transparent
-//! click-through overlay covering the primary monitor and blocks in the
-//! message pump until `WM_QUIT`. Exit cleanly by killing
-//! `linerule-platform-windows.exe` from Task Manager, or by triggering
-//! `DestroyWindow` so `PostQuitMessage` flows.
-//!
-//! Expected behavior:
-//! - Nothing is visible, but Spy++ shows an HWND of class `linerule-rs-overlay`
-//! - Clicks on other windows pass through the overlay
-//! - The overlay does not appear in Alt+Tab (`WS_EX_TOOLWINDOW`)
-//! - A deliberate panic planted in `WndProc` does not kill the overlay
-//!   (`catch_unwind`)
-//!
-//! Hotkey + tick wiring is verified by `linerule.exe run`; this example checks
-//! `WndProc` survivability with the minimal setup (HWND + compositor attach).
+//! Checks `WndProc` survivability (panic in `WndProc` is contained by
+//! `catch_unwind`) with minimal setup; hotkey/tick wiring is covered by
+//! `linerule.exe run`. Invisible window of class `linerule-rs-overlay`,
+//! click-through, hidden from Alt+Tab (`WS_EX_TOOLWINDOW`).
 
 #![forbid(unsafe_code)]
 #![allow(

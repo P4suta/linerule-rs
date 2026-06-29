@@ -1,17 +1,7 @@
 # Builds the linerule-rs dev container image and pushes it to ghcr.io.
-#
-# Why a pre-built image (vs `docker compose build` on every clone):
-#   - Actions runners ship with GITHUB_TOKEN pre-configured, so
-#     cargo-binstall hits the authenticated api.github.com rate limit (5000/h)
-#     instead of the anonymous 60/h cliff. Step 10 stays in the ~70 s lane
-#     instead of ~10 min of retries-and-source-compile.
-#   - `cache-from: type=gha` keeps cargo registry / binstall layers warm.
-#   - End users `docker compose pull` (≈20 s for 1.2 GB) instead of building.
-#
-# Trigger policy:
-#   - push to main with Dockerfile / workflow file changes
-#   - weekly schedule to refresh prebuilt tool versions
-#   - manual workflow_dispatch for ad-hoc rebuilds
+# Pre-built so end users `docker compose pull` instead of building, and so
+# cargo-binstall uses the runner's authenticated api.github.com rate limit
+# (5000/h) rather than the anonymous 60/h cliff.
 
 name: dev-image
 
@@ -23,7 +13,7 @@ on:
       - compose.yml
       - .github/workflows/dev-image.yml
   schedule:
-    # Sunday 03:00 UTC — refresh prebuilt tool versions weekly.
+    # Sunday 03:00 UTC weekly refresh.
     - cron: "0 3 * * 0"
   workflow_dispatch:
 

@@ -1,22 +1,14 @@
-# Nightly build — the one deliberate scheduled workflow (CI itself has none;
-# see ADR-0018). Produces an UNSIGNED, tagless win-x64 binary as a GitHub
-# Actions artifact (14-day retention), clearly distinct from the signed,
-# attested, immutable stable releases that release-assets.yml ships.
-#
-# Channel identity lives in the version string alone: the binary self-reports
-# `X.Y.Z-nightly.<date>+g<sha>` (cargo xtask version --channel nightly), stamped
-# through the LINERULE_VERSION build override. No tag, no Release, no signing,
-# no SBOM, no attestation — retrieval is `gh run download --name linerule-nightly`.
-#
-# Trigger:
-#   - schedule: daily, skipped when main saw no commits in the last 24h.
-#   - workflow_dispatch: always builds (bypasses the freshness gate).
+# Scheduled nightly: unsigned, tagless win-x64 binary as an Actions artifact
+# (14-day retention). Channel identity is the version string only:
+# `X.Y.Z-nightly.<date>+g<sha>` via LINERULE_VERSION. No tag/Release/signing/
+# SBOM/attestation; retrieve with `gh run download --name linerule-nightly`.
+# Scheduled run skips when main is idle 24h; workflow_dispatch always builds.
 
 name: nightly
 
 on:
   schedule:
-    # 04:00 UTC daily — off-peak, after most of a day's merges have landed.
+    # 04:00 UTC: off-peak, after the day's merges have landed.
     - cron: "0 4 * * *"
   workflow_dispatch:
 
@@ -29,7 +21,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Build from the committed Cargo.lock, never a silent re-resolve.
+  # Build from the committed Cargo.lock; no silent re-resolve.
   CARGO_NET_LOCKED: "true"
 
 jobs:
@@ -40,11 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          # Full history so the freshness probe can see the last 24h of commits.
+          # Full history for the 24h freshness probe.
           fetch-depth: 0
 
-      # Skip the nightly when main is idle, so an unchanged tree doesn't ship a
-      # redundant artifact. A manual dispatch always builds.
       - name: freshness gate (build only if main changed in 24h, or dispatched)
         id: freshness
         shell: bash
@@ -63,8 +53,6 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         if: steps.freshness.outputs.build == 'true'
 
-      # Stamp the nightly channel identity. cargo xtask version --channel nightly
-      # formats X.Y.Z-nightly.<date>+g<sha>; build.rs picks up the override.
       - name: stamp nightly version
         if: steps.freshness.outputs.build == 'true'
         shell: bash
@@ -76,8 +64,7 @@ jobs:
         if: steps.freshness.outputs.build == 'true'
         run: cargo build --release -p linerule-app
 
-      # Same GUI smoke as the CI release-build job: a nightly that can't even
-      # boot into Horizontal + Blur is not worth distributing.
+      # GUI smoke mirrors CI release-build: don't ship a nightly that can't boot.
       - name: smoke - GUI (cargo xtask verify; mirrors CI release-build)
         if: steps.freshness.outputs.build == 'true'
         run: cargo xtask verify --profile release --mode horizontal --effect blur
@@ -88,7 +75,7 @@ jobs:
         run: |-
           $exe = "linerule-$env:LINERULE_VERSION-win-x64.exe"
           Copy-Item target/release/linerule.exe $exe
-          # `sha256sum -c` 互換: 小文字 hex・bare filename・LF (Out-File は CRLF を吐く)。
+          # `sha256sum -c` compatible: lowercase hex, bare filename, LF (Out-File emits CRLF).
           $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
           [System.IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", "$hash  $exe`n")
           Get-Content SHA256SUMS.txt

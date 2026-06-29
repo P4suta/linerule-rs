@@ -1,24 +1,16 @@
-//! Pure time-driven interpolation for overlay / HUD transitions.
+//! Pure time-driven interpolation for overlay/HUD transitions.
 //!
-//! A [`Transition<T>`] glides between two **integer** endpoints over a fixed
-//! duration. Integer endpoints are a deliberate constraint: transition state
-//! lives inside `TickWorld`, which derives `Eq + Hash + Serialize` — storing
-//! `f32` there would break those derives. Sampling happens per tick with the
-//! injected `now_ms`, so the module stays free of clocks and I/O.
-//!
-//! Cancellation/retargeting is a single rule: [`Transition::retarget`]
-//! re-bases the glide *from the currently sampled value*, so a held bump key
-//! whose repeats land mid-flight keeps moving smoothly instead of
-//! stair-stepping or snapping back.
+//! Integer endpoints only, so transition state stays `Eq + Hash + Serialize`
+//! inside `TickWorld` (`f32` would break those derives). Sampling is per-tick
+//! with injected `now_ms`; [`Transition::retarget`] re-bases from the current
+//! sampled value so a held key mid-flight glides smoothly instead of snapping.
 
 use serde::Serialize;
 
-/// Integer endpoint interpolation. Implementors are small unsigned scalars
-/// (`u8` for opacity bytes / envelopes, `u16` for thickness px) so transition
-/// state stays `Eq + Hash` inside `TickWorld`.
+/// Integer-endpoint interpolation; small unsigned scalars (`u8`, `u16`) keep
+/// transition state `Eq + Hash` inside `TickWorld`.
 pub trait Lerp: Copy + Eq {
-    /// Interpolate `from → to` at `t ∈ [0, 1]` (callers clamp `t`), rounding
-    /// to the nearest representable value.
+    /// Interpolate `from → to` at `t ∈ [0, 1]`, rounding to nearest.
     #[must_use]
     fn lerp(from: Self, to: Self, t: f32) -> Self;
 }
@@ -47,9 +39,8 @@ impl Lerp for u16 {
     }
 }
 
-/// `from + (to - from) * t`, with `t` clamped to `[0, 1]` (NaN → 0). The
-/// result is clamped to the interval spanned by the endpoints, so integer
-/// casts never go out of range.
+/// `from + (to - from) * t`, `t` clamped to `[0, 1]` (NaN → 0); result clamped
+/// to the endpoint interval so integer casts stay in range.
 fn lerp_f32(from: f32, to: f32, t: f32) -> f32 {
     let t = if t.is_finite() {
         t.clamp(0.0, 1.0)
@@ -60,8 +51,7 @@ fn lerp_f32(from: f32, to: f32, t: f32) -> f32 {
     v.clamp(from.min(to), from.max(to))
 }
 
-/// Cubic ease-out: `1 - (1 - t)³`. `t` is clamped to `[0, 1]`; non-finite
-/// values map to `0` (same guard style as [`crate::color::perceptual`]).
+/// Cubic ease-out `1 - (1 - t)³`. `t` clamped to `[0, 1]`; non-finite → `0`.
 #[must_use]
 pub fn ease_out(t: f32) -> f32 {
     if !t.is_finite() || t <= 0.0 {
@@ -74,25 +64,22 @@ pub fn ease_out(t: f32) -> f32 {
     (inv * inv).mul_add(-inv, 1.0)
 }
 
-/// Timed transition between integer endpoints. `sample(now_ms)` returns the
-/// eased current value. "Settled" once `from == to` or the duration elapsed
-/// (then `to` at any time).
+/// Timed transition between integer endpoints; `sample(now_ms)` returns the
+/// eased value. Settled once `from == to` or duration elapsed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct Transition<T: Lerp> {
     /// Start value.
     pub from: T,
     /// Target value.
     pub to: T,
-    /// Start time (ms, same time axis as the tick's `now_ms`).
+    /// Start time (ms, same axis as the tick's `now_ms`).
     pub start_ms: i64,
-    /// Duration (ms). `0` = instant (escape hatch for CI / disabled
-    /// animation).
+    /// Duration (ms). `0` = instant.
     pub duration_ms: u16,
 }
 
 impl<T: Lerp> Transition<T> {
-    /// A transition settled at `value` from the start. `sample` returns
-    /// `value` at any time.
+    /// Transition settled at `value`; `sample` always returns it.
     #[must_use]
     pub const fn settled(value: T) -> Self {
         Self {
@@ -103,8 +90,8 @@ impl<T: Lerp> Transition<T> {
         }
     }
 
-    /// Progress in `[0, 1]` (linear, pre-easing). `duration_ms == 0` is
-    /// always `1.0`; `now_ms < start_ms` is `0.0`.
+    /// Linear progress in `[0, 1]` (pre-easing). `duration_ms == 0` → `1.0`;
+    /// before `start_ms` → `0.0`.
     #[must_use]
     pub fn progress(self, now_ms: i64) -> f32 {
         if self.duration_ms == 0 {
@@ -131,18 +118,16 @@ impl<T: Lerp> Transition<T> {
         T::lerp(self.from, self.to, ease_out(self.progress(now_ms)))
     }
 
-    /// Whether the transition is still moving. `false` once settled
-    /// (`from == to` or duration elapsed). While `true`, callers must keep
-    /// redrawing every tick.
+    /// Whether the transition is still moving. While `true`, callers must
+    /// redraw every tick.
     #[must_use]
     pub fn is_live(self, now_ms: i64) -> bool {
         self.from != self.to && self.progress(now_ms) < 1.0
     }
 
-    /// Swap the target. Re-bases **from the currently sampled value**, so a
-    /// new target arriving mid-flight keeps the value gliding continuously
-    /// (held-key glide guarantee). Retargeting to the same target is a no-op
-    /// (does not restart the existing flight).
+    /// Swap the target, re-basing from the current sampled value so a mid-flight
+    /// target change glides continuously. Same-target is a no-op (does not
+    /// restart the flight).
     #[must_use]
     pub fn retarget(self, now_ms: i64, to: T, duration_ms: u16) -> Self {
         if self.to == to {
@@ -172,16 +157,13 @@ mod tests {
         }
     }
 
-    // ---- ease_out ---------------------------------------------------------
-
     #[test]
     fn ease_out_endpoints() {
         assert!(ease_out(0.0).abs() < 1e-6);
         assert!((ease_out(1.0) - 1.0).abs() < 1e-6);
     }
 
-    /// Pins the concrete value of `ease_out(0.5)`: `1 - 0.5³ = 0.875`.
-    /// Spot-catches operator mutations in `inv*inv*inv` (`*` → `+` etc.).
+    /// Pins `ease_out(0.5) = 0.875`; catches operator mutations in `inv*inv*inv`.
     #[test]
     fn ease_out_midpoint_value_is_pinned() {
         let v = ease_out(0.5);
@@ -198,8 +180,6 @@ mod tests {
         assert!(ease_out(f32::INFINITY).abs() < 1e-6, "non-finite maps to 0");
         assert!((ease_out(2.0) - 1.0).abs() < 1e-6);
     }
-
-    // ---- Transition -------------------------------------------------------
 
     #[test]
     fn sample_at_start_is_from() {
@@ -252,8 +232,8 @@ mod tests {
         assert_eq!(settled.retarget(5_000, 200, 160), settled);
     }
 
-    /// With ease-out, the value at 0.5 progress is past linear (50%).
-    /// Mutating `ease_out` into the identity would yield 100 and be caught.
+    /// At 0.5 progress the eased value is past the linear 50%; identity-mutating
+    /// `ease_out` would yield 100 and be caught.
     #[test]
     fn sample_midpoint_is_past_linear_midpoint() {
         let t = tr(0, 200, 0, 160);
@@ -294,9 +274,8 @@ mod tests {
             }
         }
 
-        /// Retarget continuity: the sample right after the swap equals the
-        /// sample right before. Core of the guarantee that held bump keys
-        /// landing mid-flight never make the value jump.
+        /// Sample right after the swap equals the sample right before: the
+        /// value never jumps at retarget.
         #[test]
         fn retarget_is_continuous_at_switch_time(
             from in any::<u8>(), to in any::<u8>(), new_to in any::<u8>(),
@@ -310,10 +289,8 @@ mod tests {
             prop_assert_eq!(r.sample(now), before, "value must not jump at retarget");
         }
 
-        /// After a retarget to a *different* target, the transition heads to
-        /// it and arrives when the new duration elapses. Same-target retarget
-        /// is a documented no-op (keeps the existing flight), pinned by
-        /// `retarget_to_same_target_is_identity`.
+        /// After retargeting to a different target, the value arrives when the
+        /// new duration elapses.
         #[test]
         fn retarget_reaches_new_target(
             from in any::<u8>(), to in any::<u8>(), new_to in any::<u8>(),

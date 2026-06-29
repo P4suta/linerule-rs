@@ -1,10 +1,6 @@
-//! Safe wrapper over the D3D11 + DXGI + D2D device stack.
+//! Safe wrapper over the D3D11 + DXGI + D2D device stack (Windows-only).
 //!
-//! The WinRT composition host (`win32_ffi::composition`) sits on this stack.
-//! Confines COM-object-creation `unsafe` here so composition / renderer code can
-//! stay `#![forbid(unsafe_code)]`.
-//!
-//! Windows-only; not built on Linux via `cfg(target_os = "windows")`.
+//! Confines COM-creation `unsafe` here so composition / renderer code stays `#![forbid(unsafe_code)]`.
 
 #![allow(
     unsafe_code,

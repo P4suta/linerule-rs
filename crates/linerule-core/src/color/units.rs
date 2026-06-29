@@ -1,21 +1,13 @@
-//! Bounded numeric newtypes used across the overlay model.
-//!
-//! - [`Opacity`] — overlay mask alpha (`1..=255`, perceptually mapped on output).
-//! - [`DimLevel`] — mask darkness (`0..=255`).
-//! - [`Thickness`] — slit width in logical pixels (`1..=2048`).
-//!
-//! Each newtype carries a `try_new` for boundary input and a `saturating_add`
-//! for in-range bumping. All arithmetic on these values is total (no panics,
-//! no overflow), which is why they are pure newtypes rather than aliases.
+//! Bounded numeric newtypes for the overlay model. All arithmetic is total
+//! (saturating clamps, no panics/overflow).
 
 use serde::{Deserialize, Serialize};
 
 use super::perceptual;
 use crate::diagnostics::CoreError;
 
-/// Overlay mask alpha. Stored value is in `[1, 255]`; conversion to the
-/// on-screen alpha byte applies the CIE L\* curve via
-/// [`Opacity::to_perceptual_byte`].
+/// Overlay mask alpha in `[1, 255]`; mapped to the on-screen byte via the
+/// CIE L\* curve in [`Opacity::to_perceptual_byte`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Opacity(u8);
 
@@ -62,8 +54,7 @@ impl Opacity {
     #[must_use]
     pub fn saturating_add(self, delta: i32) -> Self {
         let next = i32::from(self.0).saturating_add(delta).clamp(1, 255);
-        // After `clamp(1, 255)` the value fits in `u8`; `try_from` is total
-        // here and short-circuits the cast lints without an `#[allow]`.
+        // Post-clamp value fits u8; `try_from` avoids a cast `#[allow]`.
         u8::try_from(next).map_or(self, Self)
     }
 
@@ -74,8 +65,7 @@ impl Opacity {
         let scaled = (perceptual::l_star(linear) * 255.0)
             .clamp(0.0, 255.0)
             .round();
-        // `scaled` is finite and bounded to `[0.0, 255.0]` by the clamp above,
-        // so the saturating `as u8` cast is exact (Rust 1.45+ semantics).
+        // `scaled` is finite and clamped to `[0.0, 255.0]`, so `as u8` is exact.
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -154,42 +144,37 @@ impl Thickness {
     }
 }
 
-/// Backdrop-blur amount, stored as a perceptual *level* in `[1, 255]` and mapped
-/// to a Gaussian σ (logical px) on output via [`BlurAmount::to_std_dev`].
+/// Backdrop-blur perceptual *level* in `[1, 255]` (not σ).
 ///
-/// The stored byte is a level, not σ. Perceived blur follows Weber–Fechner
-/// (≈ `log σ`), so [`BlurAmount::to_std_dev`] spaces σ geometrically across the
-/// range, making uniform level steps feel uniform.
+/// Mapped to a Gaussian σ in logical px via [`BlurAmount::to_std_dev`], which
+/// spaces σ geometrically so uniform level steps feel uniform (Weber–Fechner).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BlurAmount(u8);
 
 impl BlurAmount {
-    /// Smallest legal level (maps to the minimum σ, ~2 logical px — a
-    /// barely-there frosting).
+    /// Smallest legal level (minimum σ, ~2 logical px).
     pub const MIN: Self = Self(1);
-    /// Largest legal level (maps to the maximum σ, ~64 logical px — heavy
-    /// frosted glass).
+    /// Largest legal level (maximum σ, ~64 logical px).
     pub const MAX: Self = Self(255);
 
     /// Default level — `to_std_dev` ≈ 9 px.
     pub const DEFAULT: Self = Self(111);
 
-    /// σ (logical px) at [`MIN`](Self::MIN) — a barely-there frosting.
+    /// σ (logical px) at [`MIN`](Self::MIN).
     const SIGMA_MIN_PX: f32 = 2.0;
-    /// σ (logical px) at [`MAX`](Self::MAX) — heavy frosted glass.
+    /// σ (logical px) at [`MAX`](Self::MAX).
     const SIGMA_MAX_PX: f32 = 64.0;
     // Spell px values out in public docs: `SIGMA_*_PX` are private and rustdoc
     // `-D warnings` rejects public→private intra-doc links.
 
-    /// Inner level byte in `[1, 255]` (a perceptual index, *not* σ — use
-    /// [`to_std_dev`](Self::to_std_dev) for the pixel radius).
+    /// Inner level byte in `[1, 255]` (perceptual index, not σ — use
+    /// [`to_std_dev`](Self::to_std_dev) for pixel radius).
     #[must_use]
     pub const fn get(self) -> u8 {
         self.0
     }
 
-    /// Add `delta` (signed) saturating against `[MIN, MAX]`. The delta is in
-    /// level units; geometric σ spacing makes equal deltas feel equal.
+    /// Add `delta` (level units) saturating against `[MIN, MAX]`.
     #[must_use]
     pub fn saturating_add(self, delta: i32) -> Self {
         let next = i32::from(self.0)
@@ -198,10 +183,8 @@ impl BlurAmount {
         u8::try_from(next).map_or(self, Self)
     }
 
-    /// Gaussian σ in logical pixels for this level. σ is interpolated
-    /// *geometrically* between the σ bounds (~2 px at [`MIN`](Self::MIN) and
-    /// ~64 px at [`MAX`](Self::MAX)), so uniform level steps land on a
-    /// Weber–Fechner-uniform (constant-ratio) σ progression.
+    /// Gaussian σ (logical px), interpolated geometrically between ~2 px at
+    /// [`MIN`](Self::MIN) and ~64 px at [`MAX`](Self::MAX).
     #[must_use]
     pub fn to_std_dev(self) -> f32 {
         let span = f32::from(Self::MAX.0 - Self::MIN.0);

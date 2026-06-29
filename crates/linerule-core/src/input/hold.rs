@@ -257,7 +257,7 @@ pub(crate) const fn classify(action: OverlayAction) -> Classification {
         A::ToggleOnOff => Classification::AwaitRelease {
             undo_on_long_press: A::ToggleOnOff,
         },
-        // A discrete toggle like Quit/Cycle: one fire per press, no repeat.
+        // One fire per press, no repeat.
         A::ToggleHudDetail | A::Quit => Classification::OneShot,
     }
 }

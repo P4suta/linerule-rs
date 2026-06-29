@@ -42,8 +42,7 @@ pub fn create_dwrite_factory() -> Result<IDWriteFactory> {
 
 /// Safe wrapper over `IDWriteFactory::CreateTextFormat`.
 ///
-/// `weight = SemiBold` (slightly bold, for titles) / style = Normal / stretch =
-/// Normal / locale = "en-us" (HUD labels are ASCII-only).
+/// `bold` -> SemiBold; locale is "en-us" (HUD labels are ASCII-only).
 ///
 /// # Errors
 /// When the font family is missing or arguments are invalid.
@@ -79,10 +78,7 @@ pub fn create_text_format(
     Ok(format)
 }
 
-/// One row's draw instruction (value type passing HUD layout to `draw_hud_rows`).
-///
-/// Borrow-based (`&str` / `&IDWriteTextFormat`) so the caller can build a Vec for
-/// one HUD frame and submit it in one call.
+/// One row's draw instruction for `draw_hud_rows` (borrows for one HUD frame).
 pub struct HudDrawRow<'a> {
     /// Surface-local draw rect (logical px, from the surface origin).
     pub rect: D2D_RECT_F,
@@ -102,17 +98,13 @@ pub struct HudDrawRule {
     pub color: Rgba,
 }
 
-/// Issues "transparent clear + rounded panel fill + rule fills + text rows" on
-/// an `ID2D1DeviceContext` whose drawing session is already open, applying the
-/// surface tile `offset` via `SetTransform`. begin/end are the caller's
-/// responsibility.
+/// Draws transparent clear + rounded panel fill + rule fills + text rows on a
+/// `dc` whose drawing session is already open (caller owns begin/end), applying
+/// surface tile `offset` via `SetTransform`.
 ///
-/// The background is painted as a rounded fill of the `panel` rect (not a
-/// full-surface `Clear`): the area outside the corners stays transparent, so
-/// the overlay shows through (Fluent style).
-///
-/// `opacity` (0.0–1.0) multiplies into the alpha of the background, rules, and
-/// every row color.
+/// Background is a rounded fill of `panel` (not a full-surface `Clear`) so the
+/// area outside the corners stays transparent. `opacity` (0.0–1.0) bakes into
+/// the alpha of background, rules, and every row color.
 ///
 /// # Errors
 /// When brush creation fails.
@@ -212,8 +204,8 @@ fn color_to_premultiplied_f(color: Rgba) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r, g, b, a }
 }
 
-/// Multiplies `Rgba::a` by `factor` (0.0–1.0). Bakes HUD frame opacity into each
-/// color's alpha instead of using a dcomp visual's opacity.
+/// Multiplies `Rgba::a` by `factor` (0.0–1.0): bakes HUD opacity into alpha
+/// rather than via a dcomp visual.
 fn scale_alpha(color: Rgba, factor: f32) -> Rgba {
     #[allow(
         clippy::cast_possible_truncation,

@@ -1,8 +1,4 @@
-//! Integration: state machine pipeline end-to-end.
-//!
-//! Tests that the reducer + frame builder compose correctly across
-//! multi-step action sequences. This is the pure-stack equivalent of
-//! "press Ctrl+Alt+R three times in a row" without the OS layer.
+//! Integration: reducer + frame builder composed across multi-step action sequences.
 
 use linerule_core::{
     Mode, OverlayAction, OverlaySample, Point, ScreenRect, State, SurroundEffect, frame,
@@ -151,8 +147,7 @@ fn cycle_effect_is_inert_in_off_mode() {
 
 #[test]
 fn quit_action_is_observable_via_state_unchanged() {
-    // Quit is a one-shot signal: the reducer does not mutate state, the
-    // tick pipeline emits the TickEffect::Quit. We verify reducer purity here.
+    // Quit is a one-shot signal emitted by the tick pipeline; reducer stays pure.
     let before = State::DEFAULT;
     let (after, delta) = reduce::apply(before, OverlayAction::Quit);
     assert_eq!(before, after);

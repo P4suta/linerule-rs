@@ -1,9 +1,7 @@
 //! Auto-quit timer for the `--duration-ms` CI smoke test.
 //!
-//! A background thread sleeps for `duration`, then posts `WM_APP_QUIT_TIMER`;
-//! the wndproc turns it into `PostQuitMessage(0)`, matching the `Ctrl+Alt+Q`
-//! graceful shutdown. Background-thread + `Drop`-join pattern, like
-//! `RenderClock`.
+//! Background thread sleeps `duration`, then posts `WM_APP_QUIT_TIMER`; the
+//! wndproc maps it to `PostQuitMessage(0)`.
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]

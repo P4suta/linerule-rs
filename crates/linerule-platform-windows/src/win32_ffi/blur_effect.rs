@@ -1,14 +1,6 @@
-//! Custom D2D effect-graph description for WinRT Composition.
-//!
-//! WinRT's only `IGraphicsEffect`-implementing D2D effect classes are in Win2D
-//! (UWP-only), so `IGraphicsEffectD2D1Interop` is implemented here as a generic
-//! `D2dEffectNode`. Each node holds a CLSID, a property list, and one source;
-//! plugging another node into a source builds the effect graph.
-//!
-//! Backdrop blur builds `backdrop → GaussianBlur(σ) → Saturation → Contrast` and
-//! passes the root to `Compositor::CreateEffectFactory`. Plugging a
-//! `CompositionBackdropBrush` into the leaf (blur) source yields an effect brush
-//! that blurs behind the window and lifts saturation/contrast.
+//! Custom D2D effect-graph for WinRT Composition: `IGraphicsEffectD2D1Interop`
+//! via a generic `D2dEffectNode` (Win2D's effect classes are UWP-only).
+//! Builds `backdrop → GaussianBlur(σ) → Saturation → Contrast`.
 
 #![allow(
     unsafe_code,
@@ -39,26 +31,17 @@ use windows::core::{Error, GUID, HSTRING, Interface, PCWSTR, Result as WinResult
 
 use crate::error::{Result, map_hr};
 
-/// Source parameter name passed to CompositionEffectFactory; the same name
-/// plugs the backdrop in via `SetSourceParameter`. Only the leaf (GaussianBlur)
-/// references it.
+/// Source param name; also plugs the backdrop via `SetSourceParameter`.
 const SOURCE_NAME: &str = "source";
 
-/// Default `Saturation` value. `D2D1_SATURATION_PROP_SATURATION` is `[0, 1]`
-/// (0.5 = identity, 1.0 = max); above 0.5 raises saturation.
+/// Default `Saturation`, `[0, 1]` (0.5 = identity).
 const BLUR_SATURATION: f32 = 0.70;
-/// Default `Contrast` value. `D2D1_CONTRAST_PROP_CONTRAST` is `[-1, 1]`
-/// (0 = identity); positive increases contrast.
+/// Default `Contrast`, `[-1, 1]` (0 = identity).
 const BLUR_CONTRAST: f32 = 0.15;
 
-/// Generic D2D effect node. Holds one CLSID, a property list (boxed in
-/// registered-schema order), and one source (a child node or the backdrop
-/// source param), interpreted by CreateEffectFactory as `IGraphicsEffectD2D1Interop`.
-///
-/// `CreateEffectFactory` validates that property count and types match each
-/// CLSID's registered schema and returns `E_INVALIDARG` on mismatch, so
-/// properties must be boxed in the right count, order, and type (e.g.
-/// `GaussianBlur` 3, `Saturation` 1, `Contrast` 2).
+/// Generic D2D effect node: one CLSID, a property list, one source.
+/// Properties must be boxed in the count/order/type of the CLSID's registered
+/// schema or `CreateEffectFactory` returns `E_INVALIDARG`.
 #[implement(IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectD2D1Interop)]
 struct D2dEffectNode {
     name: RefCell<HSTRING>,
@@ -67,7 +50,7 @@ struct D2dEffectNode {
     source: IGraphicsEffectSource,
 }
 
-// IGraphicsEffect inherits IGraphicsEffectSource, so implement the marker too.
+// IGraphicsEffect inherits IGraphicsEffectSource; implement the marker too.
 impl IGraphicsEffectSource_Impl for D2dEffectNode_Impl {}
 
 impl windows::Graphics::Effects::IGraphicsEffect_Impl for D2dEffectNode_Impl {
@@ -92,13 +75,11 @@ impl IGraphicsEffectD2D1Interop_Impl for D2dEffectNode_Impl {
         _index: *mut u32,
         _mapping: *mut GRAPHICS_EFFECT_PROPERTY_MAPPING,
     ) -> WinResult<()> {
-        // Name lookup unimplemented; single-arg CreateEffectFactory declares no
-        // animatable property, so this is never called. Return E_NOTIMPL.
+        // Never called: no animatable property declared.
         Err(Error::from(windows::Win32::Foundation::E_NOTIMPL))
     }
 
     fn GetPropertyCount(&self) -> WinResult<u32> {
-        // Checked against the registered schema; return the boxed count.
         Ok(u32::try_from(self.properties.len()).unwrap_or(u32::MAX))
     }
 
@@ -121,8 +102,7 @@ impl IGraphicsEffectD2D1Interop_Impl for D2dEffectNode_Impl {
     }
 }
 
-/// Builds a node and returns it as `IGraphicsEffect` (to feed it into the next
-/// source, `.cast::<IGraphicsEffectSource>()`).
+/// Builds a node, returned as `IGraphicsEffect`.
 fn node(
     name: &str,
     clsid: GUID,
@@ -138,8 +118,7 @@ fn node(
     .into()
 }
 
-/// Casts `IGraphicsEffect` to `IGraphicsEffectSource` for use as the next node's
-/// source.
+/// Casts `IGraphicsEffect` to `IGraphicsEffectSource` for the next node's source.
 fn as_source(effect: &IGraphicsEffect) -> Result<IGraphicsEffectSource> {
     effect
         .cast()
@@ -162,7 +141,7 @@ fn uint(v: u32) -> Result<IPropertyValue> {
         .map_err(map_hr("PropertyValue::cast (uint)"))
 }
 
-/// Boxes a BOOL property (D2D `D2D1_PROPERTY_TYPE_BOOL`; Boolean, as in Win2D).
+/// Boxes a BOOL property.
 fn boolean(v: bool) -> Result<IPropertyValue> {
     PropertyValue::CreateBoolean(v)
         .map_err(map_hr("PropertyValue::CreateBoolean"))?
@@ -179,8 +158,7 @@ fn env_f32(name: &str, default: f32) -> f32 {
         .unwrap_or(default)
 }
 
-/// Blur post-process tuning, parsed once from env (so the knobs are read at
-/// renderer construction, not on every brush rebuild).
+/// Blur post-process tuning, parsed once from env at renderer construction.
 #[derive(Clone, Copy)]
 pub struct BlurConfig {
     /// Saturation effect value, `[0, 1]` (0.5 = identity).
@@ -203,10 +181,8 @@ impl BlurConfig {
     }
 }
 
-/// Creates a `CompositionBrush` that Gaussian-blurs the backdrop and then lifts
-/// saturation/contrast. `standard_deviation` is in logical px (DPI scaling done
-/// by the caller). Saturation, contrast, and backdrop kind come from `blur`
-/// (`BlurConfig`, parsed once from env at startup).
+/// Creates a `CompositionBrush` that Gaussian-blurs the backdrop and lifts
+/// saturation/contrast. `standard_deviation` is logical px (caller does DPI scaling).
 ///
 /// # Errors
 /// When effect factory / brush creation fails.
@@ -221,9 +197,8 @@ pub fn create_backdrop_blur_brush(
         "CompositionEffectSourceParameter::cast<IGraphicsEffectSource>",
     ))?;
 
-    // backdrop → GaussianBlur → Saturation → Contrast.
-    // GaussianBlur properties: 0 StandardDeviation(FLOAT) / 1 Optimization(enum) /
-    // 2 BorderMode(enum) — 3 total (count/type must match schema or E_INVALIDARG).
+    // GaussianBlur schema: 0 StandardDeviation(FLOAT) / 1 Optimization(enum) /
+    // 2 BorderMode(enum).
     let blur_node = node(
         "LineruleBlur",
         CLSID_D2D1GaussianBlur,
@@ -235,7 +210,7 @@ pub fn create_backdrop_blur_brush(
         source_param,
     );
 
-    // Saturation properties: 0 Saturation(FLOAT) — 1 total.
+    // Saturation schema: 0 Saturation(FLOAT).
     let saturation_node = node(
         "LineruleSaturation",
         CLSID_D2D1Saturation,
@@ -243,7 +218,7 @@ pub fn create_backdrop_blur_brush(
         as_source(&blur_node)?,
     );
 
-    // Contrast properties: 0 Contrast(FLOAT) / 1 ClampInput(BOOL) — 2 total.
+    // Contrast schema: 0 Contrast(FLOAT) / 1 ClampInput(BOOL).
     let root = node(
         "LineruleContrast",
         CLSID_D2D1Contrast,
@@ -258,11 +233,9 @@ pub fn create_backdrop_blur_brush(
         .CreateBrush()
         .map_err(map_hr("CompositionEffectFactory::CreateBrush"))?;
 
-    // Backdrop selection. For this transparent (WS_EX_NOREDIRECTIONBITMAP)
-    // overlay, `CreateBackdropBrush` samples behind the window (other apps /
-    // desktop), since there is no redirection surface. `CreateHostBackdropBrush`
-    // returns black for such windows. `LINERULE_BLUR_HOST=1` switches to host
-    // backdrop for comparison.
+    // For this transparent (WS_EX_NOREDIRECTIONBITMAP) overlay,
+    // `CreateBackdropBrush` samples behind the window; `CreateHostBackdropBrush`
+    // returns black for such windows. `LINERULE_BLUR_HOST=1` selects host backdrop.
     let backdrop = if blur.host_backdrop {
         compositor
             .CreateHostBackdropBrush()
