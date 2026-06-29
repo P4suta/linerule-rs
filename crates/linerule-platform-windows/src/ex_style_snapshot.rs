@@ -1,7 +1,4 @@
-//! Diagnostic helper: reads `GetWindowLongPtrW(GWL_EXSTYLE)` and logs whether
-//! key ex-style flags (`WS_EX_LAYERED`, `WS_EX_TRANSPARENT`,
-//! `WS_EX_NOREDIRECTIONBITMAP`, etc.) are set, for checkpoints during overlay
-//! window setup.
+//! Diagnostic helper: logs key `GWL_EXSTYLE` flags during overlay setup.
 
 #![forbid(unsafe_code)]
 

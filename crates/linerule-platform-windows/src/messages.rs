@@ -10,8 +10,7 @@ pub const HTTRANSPARENT: i32 = -1;
 /// `WM_APP` band message: pacer thread notifies the UI thread of a vsync tick.
 pub const WM_APP_TICK: u32 = 0x8001;
 
-/// Auto-quit message for the CI smoke test. The wndproc converts it to
-/// `PostQuitMessage(0)`, matching the `Ctrl+Alt+Q` graceful shutdown.
+/// Auto-quit message for the CI smoke test; wndproc maps it to `PostQuitMessage(0)`.
 pub const WM_APP_QUIT_TIMER: u32 = 0x8002;
 
 /// Posted from the `ForegroundHook` callback (which runs on the OS hook thread)

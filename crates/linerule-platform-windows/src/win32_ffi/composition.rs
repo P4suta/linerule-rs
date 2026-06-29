@@ -1,15 +1,8 @@
-//! Overlay composition host built on WinRT `Windows.UI.Composition`.
+//! Overlay composition host on WinRT `Windows.UI.Composition`.
 //!
-//! Alternative path to Win32 DirectComposition (`graphics.rs`). `Compositor` +
-//! `CreateDesktopWindowTarget` targets the overlay HWND; `SpriteVisual` +
-//! `CompositionColorBrush` draw the dim/indicator and `CompositionDrawingSurface`
-//! draws the HUD. `CreateBackdropBrush` + a Gaussian blur effect provide the
-//! surround blur (Win32 DComp alone cannot do backdrop blur).
-//!
-//! This file absorbs the unsafe of WinRT interop (`ICompositorDesktopInterop`
-//! etc.) and `CreateDispatcherQueueController`. WinRT object method calls are
-//! safe in the windows crate, so per-frame visual work lives in
-//! `winrt_composition_renderer` / `winrt_hud_renderer` (`#![forbid(unsafe_code)]`).
+//! Chosen over Win32 DComp (`graphics.rs`) because only WinRT can do backdrop
+//! blur. Absorbs the unsafe WinRT interop / `CreateDispatcherQueueController`;
+//! per-frame visual work (safe) lives in the `winrt_*_renderer` modules.
 
 #![allow(
     unsafe_code,
@@ -40,10 +33,8 @@ use crate::error::{PlatformError, Result};
 use crate::win32_ffi::graphics::{self, D2dStack};
 
 thread_local! {
-    /// UI-thread DispatcherQueueController that drives WinRT Composition commits.
-    /// Only one can be created per thread (recreation errors), so it is
-    /// established once in thread_local and reused across pipeline rebuilds
-    /// (device-lost). Dropped at thread exit.
+    /// UI-thread controller driving WinRT Composition commits. Only one per
+    /// thread (recreation errors), so set once and reused across rebuilds.
     static DISPATCHER_QUEUE: OnceCell<windows::System::DispatcherQueueController> =
         const { OnceCell::new() };
 }
@@ -229,10 +220,8 @@ pub fn create_drawing_surface(
         })
 }
 
-/// Begins D2D drawing on a `CompositionDrawingSurface`. Issue draw commands on
-/// the returned `ID2D1DeviceContext`, then call `end_surface_draw`. `offset` is
-/// the top-left within the surface tile (apply it to the `SetTransform`
-/// translation).
+/// Begins D2D drawing; pair with `end_surface_draw`. Returned `offset` is the
+/// top-left within the surface tile (apply to the `SetTransform` translation).
 ///
 /// # Errors
 /// When `BeginDraw` fails.

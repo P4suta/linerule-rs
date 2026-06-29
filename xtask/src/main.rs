@@ -1,18 +1,7 @@
 //! linerule-rs build automation (xtask pattern).
 //!
-//! Subcommands:
-//! - `dep-graph`: parses `cargo metadata` and asserts the one-way dependency
-//!   `linerule-app` → `linerule-platform-windows` → `linerule-core`. This is
-//!   the only project-specific lint that no clippy / cargo-deny configuration
-//!   can replicate.
-//! - `lint`: runs the full local lint pipeline (fmt, clippy, deny, typos,
-//!   actionlint, dep-graph, machete).
-//! - `ci`: replays the CI test/build matrix locally.
-//! - `version`: prints the channel-aware build version (dev|nightly|stable);
-//!   CI exports it as `LINERULE_VERSION` for the build-stamp.
-//!
-//! xtask is a CLI boundary: stdout/stderr printing and panic-on-misconfig
-//! are intentional, hence the narrow crate-level lint relaxations below.
+//! CLI boundary: stdout/stderr printing and panic-on-misconfig are intentional
+//! (hence the crate-level lint relaxations below).
 
 #![forbid(unsafe_code)]
 #![allow(

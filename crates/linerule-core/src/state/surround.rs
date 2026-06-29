@@ -1,33 +1,21 @@
-//! Surround effect: how the area *around* the slit is treated.
+//! Surround effect: treatment of the masked region around the (clear) slit.
 //!
-//! The slit itself stays clear; the "surround" is the masked region above and
-//! below (or beside) it. Variants are a flat color (`DimBlack`, `WhiteWash`) or
-//! a backdrop blur (`Blur`). They form a runtime cycle that mirrors
-//! [`crate::state::Mode`]; each variant supplies its own mask/tint color and a
-//! contrasting indicator color so the corner indicator stays visible on any
-//! background.
-//!
-//! Effect *parameters* (the exact colors) are compile-time constants here;
-//! only the *selection* is runtime-mutable, exactly like `Mode`.
+//! Colors are compile-time constants; only the selection is runtime-mutable.
 
 use serde::{Deserialize, Serialize};
 
 use crate::color::Rgba;
 
-/// Treatment applied to the region surrounding the slit. The cycle is
-/// `DimBlack → WhiteWash → Blur → DimBlack`.
+/// Treatment of the region surrounding the slit. Cycle: `DimBlack → WhiteWash → Blur`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SurroundEffect {
     /// Darken the surround with a translucent black mask.
     #[default]
     DimBlack,
-    /// Wash the surround with a translucent white mask — suited to bright
-    /// environments / white-background documents.
+    /// Translucent white mask; suited to bright environments / white documents.
     WhiteWash,
-    /// Blur the screen content behind the surround — a pure backdrop blur with
-    /// no color veil over it. Rendered as a true backdrop blur by the `WinRT`
-    /// composition backend (the sole composition backend).
+    /// Pure backdrop blur, no color veil (rendered by the `WinRT` backend).
     Blur,
 }
 
@@ -42,10 +30,8 @@ impl SurroundEffect {
         }
     }
 
-    /// Base mask color (RGB) for the flat effects. The caller overrides alpha
-    /// with the current [`crate::color::Opacity`], so only the RGB channels carry
-    /// meaning here. `Blur` has no fill color (it is a pure backdrop blur); its
-    /// value here is unused and kept only to make the match total.
+    /// Base mask RGB for flat effects; caller overrides alpha so only RGB
+    /// matters. `Blur` has no fill — its value is unused, kept to total the match.
     #[must_use]
     pub const fn mask_color(self) -> Rgba {
         match self {
@@ -60,10 +46,8 @@ impl SurroundEffect {
         matches!(self, Self::Blur)
     }
 
-    /// Style-crossfade target for the renderer's `style_mix` channel:
-    /// `DimBlack` = `0`, `WhiteWash` = `255`. `Blur` maps to `0`: it carries no
-    /// color veil, so the surround does not consume `style_mix` while blurred
-    /// (flat ⇄ blur switches ride the master envelope instead).
+    /// Crossfade target for the renderer's `style_mix`: `DimBlack`/`Blur` = 0,
+    /// `WhiteWash` = 255. `Blur` is 0 (no veil); flat⇄blur rides the master envelope.
     #[must_use]
     pub const fn mix_target(self) -> u8 {
         match self {
@@ -72,9 +56,7 @@ impl SurroundEffect {
         }
     }
 
-    /// Indicator color that contrasts against this effect's mask. White on a
-    /// dim (black) mask or blur; near-black on a white wash so the corner
-    /// indicator never vanishes into the surround.
+    /// Indicator color contrasting this effect's mask, so it never vanishes.
     #[must_use]
     pub const fn indicator_color(self) -> Rgba {
         match self {

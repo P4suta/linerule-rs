@@ -1,110 +1,91 @@
-# 0018 — ビルドチャンネル分離 (dev / nightly / stable) とバージョン埋め込み
+# 0018 — Build channel separation (dev / nightly / stable) and version embedding
 
-**Status:** Accepted (2026-06-30)。[[0017-release-signing-and-attestation]] の stable 配布を前提に、
-**リリース以外**のビルドを識別可能にする層を足す (置換ではない)。ブランチ/タグ保護の rulesets 化は
-[[0019-branch-and-tag-protection-as-code]] に分離。
+**Status:** Accepted (2026-06-30). Adds a layer on top of [[0017-release-signing-and-attestation]] stable distribution
+to identify non-release builds. Branch/tag protection split out to [[0019-branch-and-tag-protection-as-code]].
 
-**See also:** [[0011-phase-j-slim-down]] (1 binary 配布) / [[0014-immutable-release-asset-flow]] /
-[[0017-release-signing-and-attestation]]。runbook は docs/SUPPLY_CHAIN.md・CONTRIBUTING.md。
+**See also:** [[0011-phase-j-slim-down]] / [[0014-immutable-release-asset-flow]] /
+[[0017-release-signing-and-attestation]]. Runbooks: docs/SUPPLY_CHAIN.md, CONTRIBUTING.md.
 
-## 文脈
+## Context
 
-stable リリースパイプライン (release-please → release-assets、署名 + SBOM + attestation) は完成済み。
-一方で **リリース以外のビルドが自分を識別できない**:
+The stable pipeline is complete, but non-release builds can't identify themselves: `cargo build`, CI, and the shipped
+EXE all report `linerule 0.4.1` and can be mistaken for stable. There's also no official home for nightly-style trial
+builds. Port the dev / nightly / stable 3-channel layout from sibling find-my-files.
 
-- 普段の `cargo build`・CI の release-build・出荷 EXE がすべて `linerule 0.4.1` と名乗る。
-- 開発で吐き出したビルドが「リリースではない」と自己申告できず、stable と取り違えうる。
-- nightly 的な「最新 main の試用ビルド」を配る公式の置き場が無い (artifact を都度 download するしかない)。
+## Decision
 
-姉妹プロジェクト find-my-files は **dev / nightly / stable** の 3 チャンネルを *バージョン文字列のサフィックス*
-だけで識別し、nightly を未署名 Actions artifact、stable を署名付き Release として配置済み。同じ構成を
-linerule の単一 Rust ワークスペース事情に合わせて移植する。
+**Identify the channel via the version string, embedded into the binary at build time.** Don't use GitHub's prerelease flag.
 
-## 判断
+### Version format (`cargo xtask version --channel <dev|nightly|stable> [--date YYYYMMDD]`)
 
-**チャンネルをバージョン文字列で識別し、ビルド時にバイナリへ埋め込む。** GitHub の prerelease フラグは使わない。
-
-### バージョン書式 (`cargo xtask version --channel <dev|nightly|stable> [--date YYYYMMDD]`)
-
-| channel | 書式 | 用途 |
+| channel | format | use |
 |---|---|---|
-| stable | `X.Y.Z` | リリース tag そのもの (クリーン) |
-| dev | `X.Y.Z-dev+g<sha>` (git 無し→`-dev`、dirty→`.dirty`) | 普段の `cargo build` の既定 |
-| nightly | `X.Y.Z-nightly.<date>+g<sha>` (date は 8 桁厳格検証) | 日次の未署名ビルド |
+| stable | `X.Y.Z` | the release tag itself (clean) |
+| dev | `X.Y.Z-dev+g<sha>` (no git → `-dev`, dirty → `.dirty`) | default for everyday `cargo build` |
+| nightly | `X.Y.Z-nightly.<date>+g<sha>` (date strictly validated as 8 digits) | daily unsigned build |
 
-- base `X.Y.Z` は `env!("CARGO_PKG_VERSION")`。xtask も linerule-app も `version.workspace = true` を継承する
-  ので、これは `[workspace.package].version` (release-please が bump する値) に等しい。**TOML パース不要**
-  (find-my-files は別 crate 構成のため `toml_edit` を使うが、本リポジトリでは不要)。
-- 書式の単一ソースは `xtask/src/version.rs` の純粋関数 `compute()` (git/FS に触れずユニットテスト)。
+- base `X.Y.Z` is `env!("CARGO_PKG_VERSION")` (= `[workspace.package].version`, bumped by release-please).
+  Every crate inherits `version.workspace = true`, so no TOML parse needed.
+- Single source of the format is the pure function `compute()` in `xtask/src/version.rs` (unit-tested, no git/FS access).
 
-### 埋め込みは別 crate ではなく `linerule-app/build.rs` 拡張
+### Embed via a `linerule-app/build.rs` extension, not a separate crate
 
-- find-my-files が `fmf-buildstamp` を**別 crate**にしたのは、それがバイナリ群の*依存*で、`.git` 変化時に
-  `fmf-core`/`fmf-ffi` を巻き込み再ビルドさせない隔離が要るため。
-- linerule では `linerule-app` が**依存グラフの頂点 (leaf)** (`xtask dep-graph` が app → platform-windows →
-  core の一方向を強制)。`.git/HEAD` の変化は linerule-app の build script 再実行と app 自身の再コンパイル
-  だけで完結し、その懸念が**存在しない**。
-- よって `build.rs` を拡張し `LINERULE_VERSION` を `cargo:rustc-env` で emit、`src/version.rs` の
-  `const VERSION = env!("LINERULE_VERSION")` で受ける。新規 member 不要、`xtask dep-graph`・`docs/modules/`・
-  `docs/dep-graph.svg` を**一切汚さない** (別 crate なら 3 つ全部 + drift 再生成が必要だった)。
+- `linerule-app` is the leaf of the dependency graph (`xtask dep-graph` enforces app → platform-windows → core), so
+  a `.git/HEAD` change only rebuilds app — no reason to isolate it in a separate crate (find-my-files uses a separate crate).
+- `build.rs` emits `LINERULE_VERSION` via `cargo:rustc-env`, received by `const VERSION = env!("LINERULE_VERSION")`
+  in `src/version.rs`. Doesn't pollute `xtask dep-graph`, `docs/modules/`, or `docs/dep-graph.svg`.
 
-### `LINERULE_VERSION` 優先順位 (build.rs)
+### `LINERULE_VERSION` precedence (build.rs)
 
-1. env `LINERULE_VERSION` (非空) → **そのまま採用** (CI が stable/nightly でセット)。
-2. `{CARGO_PKG_VERSION}-dev+g{short_sha}[.dirty]` (git 到達可)。
-3. `{CARGO_PKG_VERSION}-dev` (git / `.git` 不在)。
+1. env `LINERULE_VERSION` (non-empty) → used as-is (CI sets it for stable/nightly).
+2. `{CARGO_PKG_VERSION}-dev+g{short_sha}[.dirty]` (git reachable).
+3. `{CARGO_PKG_VERSION}-dev` (git / `.git` absent).
 
-no-git 経路を含め**常に**一つ emit する (さもないと `env!` でコンパイル不能)。
+Always emit one so `env!` compiles.
 
-### 出力経路
+### Output paths
 
-`version` サブコマンド・clap ネイティブ `--version`/`-V`・boot バナーがすべて `crate::version::VERSION` を読む。
-独自 `version` サブコマンドは後方互換で残す。
+The `version` subcommand, clap-native `--version`/`-V`, and the boot banner all read `crate::version::VERSION`.
+The custom `version` subcommand stays for backward compatibility.
 
-### nightly = 未署名 Actions artifact (`.github/workflows/nightly.yml`)
+### nightly = unsigned Actions artifact (`.github/workflows/nightly.yml`)
 
-- 日次 cron + `workflow_dispatch`。`git log --since='24 hours ago'` で main 無変化ならスキップ (dispatch は
-  バイパス)。
-- release プロファイルで build、nightly バージョンをスタンプ、CI release-build と同じ Horizontal+Blur GUI
-  スモーク、**未署名 exe + SHA256SUMS を 14 日保持の Actions artifact** (`linerule-nightly`) に upload。
-- **意図的に** SBOM/署名/attestation/tag/Release を作らない。署名済み・attested・immutable な stable
-  ([[0014-immutable-release-asset-flow]]/[[0017-release-signing-and-attestation]]) と明確に区別する。取得は
-  `gh run download --name linerule-nightly`。
+- Daily cron + `workflow_dispatch`. Skips if `git log --since='24 hours ago'` shows no change on main (dispatch bypasses).
+- Release build, nightly stamp, the same Horizontal+Blur GUI smoke as CI, then uploads the unsigned exe + SHA256SUMS to a
+  14-day Actions artifact (`linerule-nightly`). Fetch via `gh run download --name linerule-nightly`.
+- Deliberately no SBOM/signing/attestation/tag/Release, to keep it clearly distinct from stable.
 
-### `on: schedule` ポリシー例外
+### `on: schedule` policy exception
 
-`ci.yml` は「No `on: schedule`」を方針としてきた。nightly.yml は**唯一の意図的なスケジュール**であり、
-製品バイナリの日次ビルド専用。CI 本体は引き続きスケジュールを持たない。`ci.yml` のヘッダコメントを更新し
-本 ADR を参照する。
+`ci.yml` follows a "No `on: schedule`" policy. nightly.yml is the sole intentional schedule (dedicated to the daily
+product-binary build). The CI body itself has no schedule.
 
-## 影響
+## Consequences
 
-| 項目 | Before | After (本 ADR) |
+| item | Before | After (this ADR) |
 |---|---|---|
-| dev/CI/出荷の version 表記 | 全部 `0.4.1` | dev=`-dev+g<sha>` / nightly=`-nightly.<date>+g<sha>` / stable=`0.4.1` |
-| 埋め込み機構 | `env!("CARGO_PKG_VERSION")` のみ | `build.rs` が `LINERULE_VERSION` を emit、`src/version.rs` 経由 |
-| `--version` フラグ | 無し (独自 `version` のみ) | clap ネイティブ `--version`/`-V` を追加 (独自 `version` も維持) |
-| nightly 配布 | 無し | 未署名 Actions artifact (14 日・checksum 付き) |
-| `release-assets.yml` | version env 無し | build 前に `--channel stable` をスタンプ (下記リスク) |
-| schedule 方針 | CI に schedule 無し | nightly.yml が唯一の例外 |
+| dev/CI/shipped version string | all `0.4.1` | dev=`-dev+g<sha>` / nightly=`-nightly.<date>+g<sha>` / stable=`0.4.1` |
+| embedding mechanism | `env!("CARGO_PKG_VERSION")` only | `build.rs` emits `LINERULE_VERSION`, via `src/version.rs` |
+| `--version` flag | none (custom `version` only) | adds clap-native `--version`/`-V` (custom `version` kept too) |
+| nightly distribution | none | unsigned Actions artifact (14-day, with checksum) |
+| `release-assets.yml` | no version env | stamps `--channel stable` before build (see risk below) |
+| schedule policy | no schedule in CI | nightly.yml is the sole exception |
 
-## 検証
+## Validation
 
-- `cargo test -p xtask`: `compute()` の 7 ユニットテスト緑。`cargo xtask version --channel {dev,nightly,stable}`
-  を手動実行し書式を目視 (nightly は `--date` 必須・8 桁検証、未知 channel は clap が拒否)。
-- `cargo build -p linerule-app` 後 `linerule version` / `--version` / `-V` が `0.4.1-dev+g<sha>[.dirty]` を出力。
-  既存 `cli_smoke.rs` (`"linerule "` 前置 + base triple 包含) / `boot.rs` (stamped 値の包含) 緑。
-- nightly: `gh workflow run nightly.yml` (dispatch で freshness バイパス) → `gh run download --name
-  linerule-nightly` → exe が `-nightly.<date>+g<sha>` を名乗り `sha256sum -c SHA256SUMS.txt` 一致。
-- stable 回帰: 次リリース (または `workflow_dispatch tag=main publish=false` の署名スモーク) で生成 EXE が
-  `-dev` を含まずクリーンな `X.Y.Z` を名乗る。
+- `cargo test -p xtask`: 7 `compute()` unit tests green. Manually checked `cargo xtask version --channel {dev,nightly,stable}`
+  (nightly requires `--date` with 8-digit validation; clap rejects unknown channels).
+- After `cargo build -p linerule-app`, `linerule version` / `--version` / `-V` output `0.4.1-dev+g<sha>[.dirty]`.
+  `cli_smoke.rs`, `boot.rs` green.
+- nightly: `gh workflow run nightly.yml` → `gh run download --name linerule-nightly` → exe reports
+  `-nightly.<date>+g<sha>` and `sha256sum -c SHA256SUMS.txt` matches.
+- stable regression: the next release (or `workflow_dispatch tag=main publish=false`) EXE reports a clean `X.Y.Z`
+  with no `-dev`.
 
 ## Open questions / Followup
 
-- **最重要リスク**: `build.rs` が既定で `-dev` を刻むため、`release-assets.yml` に
-  `LINERULE_VERSION=$(cargo xtask version --channel stable)` のスタンプ step を**必ず**入れる。さもないと
-  出荷 EXE が `-dev` を名乗り供給網の整合 (self-reported version = tag) が壊れる。マージ後の最初の release
-  より前に入れること。
-- release-please の version 同期は追加配線不要 (workspace version を bump → 全 crate が継承 → 全チャンネルの
-  base が自動追従)。
-- nightly の cron 時刻 (04:00 UTC) と保持 14 日は暫定。運用実績を見て調整する。
+- **Top risk**: since `build.rs` stamps `-dev` by default, `release-assets.yml` must include a stamp step
+  `LINERULE_VERSION=$(cargo xtask version --channel stable)`. Otherwise the shipped EXE reports `-dev` and the supply-chain
+  invariant (self-reported version = tag) breaks. Add it before the first release.
+- release-please version sync needs no extra wiring (workspace version bump → all crates inherit).
+- nightly cron time (04:00 UTC) and 14-day retention are provisional.

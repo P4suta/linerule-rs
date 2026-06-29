@@ -1,12 +1,8 @@
-//! Renderer that applies an `OverlayFrame` to a WinRT composition visual tree.
+//! Applies an `OverlayFrame` to a WinRT composition visual tree.
 //!
-//! Per-layer brush:
-//! - `Brush::Solid` -> `SpriteVisual` + `CompositionColorBrush`.
-//! - `Brush::Blur`  -> `SpriteVisual` + backdrop blur brush (no color veil).
-//!
-//! Straight-alpha `Rgba` is passed as-is (WinRT premultiplies). WinRT
-//! auto-commits on the DispatcherQueue tick. Visual offset is `rect.left()/top()`,
-//! size is `rect.width/height`.
+//! Per layer: `Brush::Solid` -> `CompositionColorBrush`; `Brush::Blur` ->
+//! backdrop blur brush (no color veil). Straight-alpha `Rgba` passed as-is
+//! (WinRT premultiplies); WinRT auto-commits on the DispatcherQueue tick.
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
@@ -80,10 +76,9 @@ impl WinrtCompositionRenderer {
     /// # Errors
     /// When creating or updating a visual or brush fails.
     pub fn apply(&mut self, frame: &linerule_core::OverlayFrame) -> Result<()> {
-        // Rebuild the pool when the brush-kind signature changes. Per-slot
-        // swaps would break z-order, so a mismatch tears down and rebuilds in
-        // index order. Sigma is baked into the blur brush (not settable via
-        // SetColor), so it is part of the signature and triggers a rebuild too.
+        // Rebuild on brush-kind signature change; per-slot swaps would break
+        // z-order. Blur sigma is baked into the brush, so it is part of the
+        // signature and forces a rebuild too.
         let want_kinds: Vec<Option<BlurAmount>> = frame
             .layers()
             .iter()
@@ -156,8 +151,7 @@ impl WinrtCompositionRenderer {
             .map_err(map_hr("Compositor::CreateSpriteVisual"))?;
 
         let kind = if let Some(amount) = want {
-            // Sigma is in logical px. Put the backdrop blur brush directly on
-            // the visual (no color veil).
+            // Sigma in logical px; blur brush goes directly on the visual (no veil).
             let blur_brush =
                 create_backdrop_blur_brush(compositor, amount.to_std_dev(), &self.blur)?;
             visual
@@ -185,23 +179,19 @@ impl WinrtCompositionRenderer {
 
 fn apply_brush_color(visual: &SpriteVisual, kind: &SpriteKind, brush: Brush) -> Result<()> {
     match (kind, brush) {
-        // Solid sprites bake all alpha (opacity × master envelope) into the
-        // brush color, so the visual's own opacity is never touched here.
+        // Solid sprites bake all alpha into the brush color; visual opacity untouched.
         (SpriteKind::Solid(color_brush), Brush::Solid(c)) => color_brush
             .SetColor(rgba_to_color(c))
             .map_err(map_hr("CompositionColorBrush::SetColor")),
-        // Blur sprites have no color and sigma changes are handled in
-        // rebuild_pool; only the master-envelope opacity is applied here, at
-        // the visual level, so show/hide fades never rebuild the pool. The
-        // perceptual curve matches the Solid path's envelope handling
-        // (`composite_alpha` in linerule-core).
+        // Blur sprites have no color; apply only master-envelope opacity at the
+        // visual level so show/hide fades never rebuild the pool. Perceptual
+        // curve matches the Solid envelope (`composite_alpha` in linerule-core).
         (SpriteKind::Blur { .. }, Brush::Blur { opacity, .. }) => visual
             .SetOpacity(linerule_core::color::perceptual::smooth(
                 f32::from(opacity) / 255.0,
             ))
             .map_err(map_hr("SpriteVisual::SetOpacity (blur)")),
-        // Other combinations are unreachable (the pool signature matches the
-        // frame), so no-op.
+        // Other combinations unreachable (pool signature matches frame).
         _ => Ok(()),
     }
 }

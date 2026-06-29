@@ -1,12 +1,5 @@
 //! Bootstrap called from clap dispatch.
-//!
-//! Flow:
-//! 1. Init tracing + crash dump first, so a panic report can be written.
-//! 2. Attach a console for CLI commands.
-//! 3. Dispatch subcommands:
-//!    - `Run`: Windows only; delegates to `linerule-platform-windows`.
-//!    - `Diagnostics`: pretty-prints the contents of the data dir.
-//!    - `Version`: version info.
+//! Inits tracing + crash dump, attaches a console, dispatches subcommands.
 
 #![forbid(unsafe_code)]
 
@@ -18,10 +11,8 @@ use crate::{console, crash_dump, logging};
 
 /// Real main.
 ///
-/// `run_id` is passed to both the panic hook and the tracing root span so that
-/// `events.jsonl` and `crash-<run_id>-*.json` can be correlated. The span
-/// covers all of boot, so every subcommand's `tracing` events carry the
-/// `run_id` field.
+/// `run_id` goes to both the panic hook and the tracing root span so
+/// `events.jsonl` and `crash-<run_id>-*.json` correlate.
 ///
 /// # Errors
 /// When a subcommand fails.
@@ -34,8 +25,7 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
         console::ensure_console_attached();
     }
 
-    // Enter root span after subscriber init so every event in scope carries
-    // run_id in its events.jsonl line.
+    // Root span after subscriber init so in-scope events carry run_id.
     let root = tracing::info_span!("linerule_run", run_id = %run_id);
     let _entered = root.enter();
     tracing::info!(run_id = %run_id, version = crate::version::VERSION, "linerule boot");
@@ -43,8 +33,8 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
     dispatch_command(cli)
 }
 
-/// Body of `boot()` without global subscriber init or panic hook install, so
-/// tests can drive it under `#[traced_test]`.
+/// `boot()` body without subscriber/panic-hook install, so tests can drive it
+/// under `#[traced_test]`.
 ///
 /// # Errors
 /// When a subcommand fails.
@@ -78,7 +68,7 @@ pub(crate) fn dispatch_command(cli: Cli) -> Result<()> {
     }
 }
 
-/// Flags for the `diagnostics` subcommand, kept out of the body fn signature.
+/// Flags for the `diagnostics` subcommand.
 #[derive(Debug, Clone, Copy, Default)]
 struct DiagnosticsArgs {
     dry_run: bool,
@@ -102,9 +92,8 @@ fn run_overlay(
         set_dpi_aware,
     };
 
-    // Set DPI awareness to Per-Monitor V2 before creating any window. Failure
-    // is non-fatal: classify via AppError and, if recoverable, defer the HUD
-    // notification until the overlay handle exists.
+    // Set DPI awareness Per-Monitor V2 before creating any window. Non-fatal:
+    // defer the HUD notification until the overlay handle exists.
     let mut early_recoverable: Vec<String> = Vec::new();
     if let Err(e) = set_dpi_aware() {
         let app_err: crate::error::AppError = e.into();
@@ -114,13 +103,12 @@ fn run_overlay(
     }
 
     let config = UserConfig::DEFAULT;
-    // Use the virtual screen bounds (rect covering all monitors) so the overlay
-    // HWND can draw slits across monitor boundaries.
+    // Virtual screen bounds (all monitors) so the overlay can draw slits across
+    // monitor boundaries.
     let monitor = monitor_info::virtual_screen_bounds()?;
 
-    // Override the initial TickWorld state when initial_mode/initial_effect
-    // are given (CI smoke). `State::with_mode` keeps the mode/last_active
-    // invariant.
+    // Override initial TickWorld state when initial_mode/initial_effect given
+    // (CI smoke). `State::with_mode` keeps the mode/last_active invariant.
     let initial_world = if initial_mode.is_some() || initial_effect.is_some() {
         let mut state = initial_mode.map_or(State::DEFAULT, |m| State::with_mode(m.into()));
         if let Some(e) = initial_effect {
@@ -131,16 +119,15 @@ fn run_overlay(
         TickWorld::INITIAL
     };
 
-    // Drop order matters: the `_clock`/`_auto_quit` threads and
-    // `_foreground_hook` callback may `PostMessageW` to the overlay HWND, so
-    // they must be torn down before it. Declared overlay → _foreground_hook →
-    // _clock → _auto_quit to get the right reverse-order Drop.
+    // Drop order matters: `_clock`/`_auto_quit` threads and `_foreground_hook`
+    // may `PostMessageW` to the overlay HWND, so they must drop before it.
+    // Declare overlay first so reverse-order Drop tears it down last.
     let mut overlay =
         OverlayWindow::new_with_initial_world(monitor, config.hud, config.anim, initial_world)?;
     overlay.attach_compositor()?;
     overlay.register_hotkeys(&config.hotkeys, config.input.tap_step)?;
-    // Keep the overlay topmost after other apps come to the foreground (e.g.
-    // Alt+Tab). Non-fatal on failure: WS_EX_TOPMOST already covers most cases.
+    // Keep the overlay topmost after Alt+Tab etc. Non-fatal: WS_EX_TOPMOST
+    // already covers most cases.
     let _foreground_hook = match ForegroundHook::install(overlay.hwnd()) {
         Ok(h) => Some(h),
         Err(e) => {
@@ -149,7 +136,7 @@ fn run_overlay(
         },
     };
 
-    // Push recoverable errors collected during boot as 10s HUD notifications.
+    // Surface boot-time recoverable errors as 10s HUD notifications.
     for message in early_recoverable {
         overlay
             .state()
@@ -187,24 +174,21 @@ fn run_overlay(
 fn diagnostics(args: DiagnosticsArgs) -> Result<()> {
     let data_dir = logging::data_dir()?;
 
-    // `--data-dir`: print the path to stdout and exit.
     if args.data_dir {
         println!("{}", data_dir.display());
         tracing::info!(data_dir = %data_dir.display(), "linerule --data-dir");
         return Ok(());
     }
 
-    // `--last-crash`: pretty-print the latest crash-*.json.
     if args.last_crash {
         return print_last_crash(&data_dir);
     }
 
-    // `--recent-events N`: pretty-print the last N lines of events.jsonl.<today>.
     if let Some(n) = args.recent_events {
         return print_recent_events(&data_dir, n);
     }
 
-    // Default (or `--dry-run`): just list the data dir.
+    // Default / `--dry-run`: list the data dir.
     println!("linerule data dir: {}", data_dir.display());
     tracing::info!(data_dir = %data_dir.display(), "linerule data dir");
     if data_dir.exists() {
@@ -215,7 +199,7 @@ fn diagnostics(args: DiagnosticsArgs) -> Result<()> {
     } else {
         println!("  (directory does not exist yet — no events / crashes)");
     }
-    let _ = args.dry_run; // no I/O beyond listing, so dry_run is a no-op here
+    let _ = args.dry_run; // listing-only, so dry_run is a no-op here
     Ok(())
 }
 
@@ -253,7 +237,7 @@ fn print_recent_events(data_dir: &std::path::Path, n: usize) -> Result<()> {
         println!("(no events — data dir does not exist)");
         return Ok(());
     }
-    // Pick the most recent `events.jsonl.YYYY-MM-DD` by mtime.
+    // Most recent `events.jsonl.YYYY-MM-DD` by mtime.
     let latest_log = std::fs::read_dir(data_dir)?
         .filter_map(std::result::Result::ok)
         .filter(|e| e.file_name().to_string_lossy().starts_with("events.jsonl"))
@@ -283,9 +267,8 @@ fn print_recent_events(data_dir: &std::path::Path, n: usize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    //! Log-assertion tests for `dispatch_command`. These exercise the post-
-    //! initialization code path under a `#[traced_test]`-installed subscriber,
-    //! letting us assert that key user-visible events are actually emitted.
+    //! Log-assertion tests for `dispatch_command` under a `#[traced_test]`
+    //! subscriber: assert key user-visible events are emitted.
 
     use super::*;
     use clap::Parser;
@@ -305,8 +288,7 @@ mod tests {
             logs_contain(crate::version::VERSION),
             "info event should include the stamped LINERULE_VERSION"
         );
-        // The stamped string always carries the workspace base version, so a
-        // dev/nightly suffix never drops the X.Y.Z triple.
+        // Stamped string always carries the base X.Y.Z, even with a dev suffix.
         assert!(
             logs_contain(env!("CARGO_PKG_VERSION")),
             "stamped version should contain the base CARGO_PKG_VERSION"
@@ -317,9 +299,8 @@ mod tests {
         );
     }
 
-    /// Assert that log lines carry `run_id` via boot's `linerule_run` span.
-    /// Build the span by hand (calling `boot()` would install the global
-    /// subscriber + panic hook) and call `dispatch_command` under it.
+    /// Log lines carry `run_id` via boot's `linerule_run` span. Build the span
+    /// by hand since `boot()` would install the global subscriber + panic hook.
     #[traced_test]
     #[test]
     fn root_span_propagates_run_id_into_log_lines() {
@@ -353,9 +334,8 @@ mod tests {
     #[traced_test]
     #[test]
     fn diagnostics_dispatch_emits_data_dir_event() {
-        // diagnostics() touches the OS data dir but tolerates missing
-        // directories. We just check that the data-dir info event fired
-        // before any I/O failure.
+        // diagnostics() tolerates a missing data dir; check the data-dir event
+        // fires before any I/O failure.
         let _ = dispatch_command(parse(&["diagnostics", "--dry-run"]));
         assert!(
             logs_contain("linerule data dir"),

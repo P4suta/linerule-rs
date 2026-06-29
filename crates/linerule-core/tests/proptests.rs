@@ -1,14 +1,8 @@
-//! Property-based tests for `linerule-core`.
-//!
-//! Each test states an invariant (idempotency, commutativity, round-trip)
-//! and asks `proptest` to falsify it across thousands of random inputs.
-//! These complement the per-module unit tests by exercising parameter
-//! spaces that example-based tests can't enumerate.
+//! Property-based invariant tests for `linerule-core`.
 
-// Integration tests live outside a `#[cfg(test)]` module, so clippy's
-// `allow-expect-in-tests` setting does not apply. Allow `expect` here
-// explicitly: every use sits behind a generator that constrains its input,
-// so the `None` case is provably unreachable.
+// Integration tests sit outside `#[cfg(test)]`, so clippy's
+// `allow-expect-in-tests` does not apply; every `expect` here is behind a
+// constraining generator, so `None` is unreachable.
 #![allow(
     clippy::expect_used,
     reason = "integration-test file; constrained generators make None unreachable"
@@ -34,8 +28,8 @@ fn any_active_mode() -> impl Strategy<Value = ActiveMode> {
     prop_oneof![Just(ActiveMode::Horizontal), Just(ActiveMode::Vertical)]
 }
 
-/// Invariant-respecting state generator: when `mode` is active,
-/// `last_active` must agree with it; only while `Off` is it free.
+/// State generator: when `mode` is active, `last_active` must agree with it;
+/// free only while `Off`.
 fn any_state() -> impl Strategy<Value = State> {
     (any_mode(), any_active_mode()).prop_map(|(mode, generated_last)| State {
         mode,
@@ -45,8 +39,7 @@ fn any_state() -> impl Strategy<Value = State> {
 }
 
 proptest! {
-    /// `CycleMode` applied twice is the identity on the mode field: an axis
-    /// toggle while on, a rejected no-op while off.
+    /// `CycleMode` twice is identity on the mode field.
     #[test]
     fn cycle_mode_has_period_two(mode in any_mode()) {
         let s = State { mode, ..State::DEFAULT };
@@ -55,8 +48,7 @@ proptest! {
         prop_assert_eq!(b.mode, mode);
     }
 
-    /// `ToggleOnOff` applied twice is the identity on the *full* state.
-    /// (Valid because `any_state()` respects the mode/last_active invariant.)
+    /// `ToggleOnOff` twice is identity on the full state.
     #[test]
     fn toggle_on_off_twice_is_identity(state in any_state()) {
         let (a, _) = reduce::apply(state, OverlayAction::ToggleOnOff);
@@ -64,8 +56,7 @@ proptest! {
         prop_assert_eq!(b, state);
     }
 
-    /// Every action preserves the invariant: when `mode` is active,
-    /// `last_active` agrees with it.
+    /// Every action preserves the active-mode/`last_active` invariant.
     #[test]
     fn invariant_preserved_by_every_action(state in any_state(), action in any_action()) {
         let (next, _) = reduce::apply(state, action);
@@ -74,8 +65,7 @@ proptest! {
         }
     }
 
-    /// `BumpThickness` while `Off` leaves the state untouched and reports a
-    /// rejection (never a state delta).
+    /// `BumpThickness` while `Off` leaves state untouched and reports a rejection.
     #[test]
     fn bump_thickness_is_rejected_in_off_mode(delta in -1024_i32..1024) {
         let s = State { mode: Mode::Off, ..State::DEFAULT };
@@ -85,8 +75,7 @@ proptest! {
         prop_assert_eq!(d.rejected, Some(RejectReason::AdjustWhileOff));
     }
 
-    /// Every adjustment action (bumps, effect cycle, axis flip) is rejected
-    /// while `Off`, for any Off-state `last_active`.
+    /// Every adjustment action is rejected while `Off`.
     #[test]
     fn off_adjustments_are_rejected(
         last in any_active_mode(),
@@ -125,8 +114,7 @@ proptest! {
         }
     }
 
-    /// `BumpThickness` in an active mode either changes thickness or saturates
-    /// — never returns a different mode or restore target.
+    /// `BumpThickness` in an active mode touches only thickness, never mode or restore target.
     #[test]
     fn bump_thickness_only_touches_config(state in any_state(), delta in -1024_i32..1024) {
         if matches!(state.mode, Mode::Off) {
@@ -139,13 +127,11 @@ proptest! {
         prop_assert_eq!(next.config.effect, state.config.effect);
     }
 
-    /// Cycling to `Off` then toggling restores the mode that was active just
-    /// before `Off` — the "last active" semantics, end to end.
+    /// Toggle off then on restores the axis active just before `Off`.
     #[test]
     fn flip_then_toggle_restores_the_flipped_axis(start in any_active_mode()) {
         let s = State::with_mode(Mode::from(start));
-        // Flip the axis, toggle off, toggle back on: the restored mode must be
-        // the flipped axis (last_active follows the flip).
+        // Flip, toggle off, toggle on: restored mode is the flipped axis.
         let (flipped, _) = reduce::apply(s, OverlayAction::CycleMode);
         let (off, _) = reduce::apply(flipped, OverlayAction::ToggleOnOff);
         prop_assert_eq!(off.mode, Mode::Off);
@@ -159,8 +145,6 @@ proptest! {
         let o = Opacity::try_new(start).unwrap();
         let n = o.saturating_add(delta);
         prop_assert!(n.get() >= 1);
-        // No precondition on whether the result equals MIN/MAX; only that
-        // it lives inside the legal range and behaves monotonically.
         if delta > 0 {
             prop_assert!(n.get() >= o.get());
         } else if delta < 0 {
@@ -177,15 +161,13 @@ proptest! {
         prop_assert!(n.get() <= Thickness::MAX.get());
     }
 
-    /// `Letter::from_ascii` is total over `u8` and gives `Some` exactly when
-    /// the byte is ASCII alphabetic.
+    /// `Letter::from_ascii` gives `Some` exactly when the byte is ASCII alphabetic.
     #[test]
     fn letter_from_ascii_is_total(b in any::<u8>()) {
         prop_assert_eq!(Letter::from_ascii(b).is_some(), b.is_ascii_alphabetic());
     }
 
-    /// `Modifiers` bitset `contains` agrees with raw bit testing for every
-    /// 4-bit value.
+    /// `Modifiers::contains` agrees with raw bit testing for every 4-bit value.
     #[test]
     fn modifiers_contains_agrees_with_raw_bits(bits in 0_u8..16_u8) {
         let mods = Modifiers::from_bits_truncate(bits);
@@ -199,8 +181,7 @@ proptest! {
         }
     }
 
-    /// `chord_to_win32` is total over the full `(Modifiers, KeyCode)` product:
-    /// the result `vk` is always a non-zero, valid Win32 virtual-key code.
+    /// `chord_to_win32` yields a valid non-zero Win32 vk for every `(Modifiers, KeyCode)`.
     #[test]
     fn chord_to_win32_total_over_inputs(
         mod_bits in 0_u8..16_u8,
@@ -208,10 +189,9 @@ proptest! {
     ) {
         let mods = Modifiers::from_bits_truncate(mod_bits);
         let (m, vk) = chord_to_win32(ChordSpec::new(mods, key));
-        // Modifiers must be a subset of the four legal flags.
+        // Modifiers are a subset of the four legal flags.
         prop_assert_eq!(m & !(MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN), 0);
-        // VK must be a documented value: ASCII letter range or specific
-        // VK_OEM_* / VK_arrow constants.
+        // vk: ASCII letter range or specific VK_OEM_* / VK_arrow constants.
         let known = matches!(
             vk,
             0x41..=0x5A | 0xDB | 0xDD | 0xBD | 0xBB | 0x25..=0x28,
@@ -219,8 +199,7 @@ proptest! {
         prop_assert!(known, "unexpected vk={vk:#x}");
     }
 
-    /// `frame()` always emits one full-width band (above or below the slit)
-    /// when in Horizontal mode and the cursor is inside the monitor.
+    /// In Horizontal mode with the cursor inside the monitor, `frame()` emits a full-width band.
     #[test]
     fn horizontal_frame_has_full_width_band(
         x in 0_i32..1920,
@@ -242,9 +221,7 @@ proptest! {
         prop_assert!(any_full_width, "horizontal mode at ({x},{y}) lacks a full-width band");
     }
 
-    /// `reduce::apply`'s returned delta accurately reports whether the next
-    /// state differs from the previous one. If `delta.is_any()` is false, the
-    /// state must be unchanged.
+    /// When `delta.is_any()` is false, the state is unchanged.
     #[test]
     fn reduce_delta_implies_state_change(
         state in any_state(),
@@ -257,7 +234,7 @@ proptest! {
     }
 }
 
-// ---- helper strategies -------------------------------------------------
+// helper strategies
 
 fn any_key_code() -> impl Strategy<Value = KeyCode> {
     prop_oneof![
@@ -286,9 +263,8 @@ fn any_action() -> impl Strategy<Value = OverlayAction> {
     ]
 }
 
-/// Chord parser round-trip on a curated table. (Random ASCII fuzzing would
-/// require generating valid chord shapes, which is essentially re-implementing
-/// the parser — these examples cover the canonical surface.)
+/// Chord parser round-trip on a curated table (random fuzzing would mean
+/// re-implementing the parser to generate valid shapes).
 #[test]
 fn chord_parser_round_trips_on_known_chords() {
     let cases = [

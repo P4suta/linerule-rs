@@ -1,112 +1,86 @@
-# ADR 0002 — アーキテクチャ原則
+# ADR 0002 — Architecture Principles
 
-- 日付: 2026-05-20
-- ステータス: accepted
-- 提案者: P4suta
+- Date: 2026-05-20
+- Status: accepted
+- Proposer: P4suta
 
-## 文脈
+## Context
 
-`linerule-rs` の最重要事項は **アーキテクチャの美しさ** である。動けば良いではなく、
-モダン・スマート・クリーンな実装を優先する。本 ADR は「美しさ」を機械的に検証可能な
-原則に分解する。
+Architectural beauty is the top priority. This ADR decomposes "beauty" into mechanically verifiable principles.
 
-## 決定
+## Decision
 
-### 原則 1 — 一方向依存
+### Principle 1 — One-way dependency
 
-依存方向は `linerule-app → linerule-platform-windows → linerule-core` の一方向に
-限定する。逆引きや peer-to-peer 依存は禁止。
+Dependencies flow one way only: `linerule-app → linerule-platform-windows → linerule-core`. Reverse and peer-to-peer dependencies are forbidden.
 
-検証: `cargo xtask dep-graph` が `cargo metadata` を解析して違反を検出する。CI 必須ゲート。
+Verification: `cargo xtask dep-graph` parses `cargo metadata` to detect violations. Required CI gate.
 
-### 原則 2 — クレートごとの不変条件
+### Principle 2 — Per-crate invariants
 
-| クレート | 役割 | クレート属性 | 持たないもの |
+| Crate | Role | Crate attributes | Must not have |
 |---|---|---|---|
-| `linerule-core` | 純粋ロジック、ADT、reducer、parser | `#![forbid(unsafe_code)]` | 副作用、`windows` クレート、`std::env`/`std::fs`、グローバル状態 |
-| `linerule-platform-windows` | Win32 / COM 実装 | `#![cfg(windows)] #![deny(unsafe_op_in_unsafe_fn)]` | ドメインロジック (reducer/render は core から呼ぶだけ) |
-| `linerule-app` | 結線とエントリーポイント | `#![forbid(unsafe_code)]` (`console` のみ局所例外) | ドメインロジック |
-| `xtask` | ビルド自動化 | `#![forbid(unsafe_code)]` | 本番ビルドへの影響 |
+| `linerule-core` | Pure logic, ADTs, reducer, parser | `#![forbid(unsafe_code)]` | Side effects, the `windows` crate, `std::env`/`std::fs`, global state |
+| `linerule-platform-windows` | Win32 / COM implementation | `#![cfg(windows)] #![deny(unsafe_op_in_unsafe_fn)]` | Domain logic (reducer/render only called from core) |
+| `linerule-app` | Wiring and entry point | `#![forbid(unsafe_code)]` (local exception for `console` only) | Domain logic |
+| `xtask` | Build automation | `#![forbid(unsafe_code)]` | Impact on production builds |
 
-`std::time::Instant` などの非決定性は `linerule-core` の関数引数として外から渡し、
-core 内では一切のグローバルアクセスを行わない。
+Non-determinism such as `std::time::Instant` is passed into `linerule-core` functions as arguments from outside; core performs no global access whatsoever.
 
-### 原則 3 — 抽象の遅延
+### Principle 3 — Defer abstraction
 
-trait / generic を予防的に作らない。**最低 2 実装が現れてから** 抽象に昇格する。
-port-and-adapter trait は作らず、テスト用 mock は `cfg(test)` の別実装か closure
-注入で書く。
+Do not create traits / generics preemptively. Promote to an abstraction only **after at least 2 implementations appear**. Do not build port-and-adapter traits; write test mocks as a separate `cfg(test)` implementation or via closure injection.
 
-### 原則 4 — RAII 徹底
+### Principle 4 — Strict RAII
 
-COM オブジェクト / HWND / Hook / Hotkey / JoinHandle はすべて `Drop` で確実に解放する。
-`ComLifetime` 手動 Release、`ManuallyDrop`、`std::mem::forget`、`Box::leak` の
-プロダクション利用を禁止。
+COM objects / HWND / Hook / Hotkey / JoinHandle are all released reliably via `Drop`. Production use of manual `ComLifetime` Release, `ManuallyDrop`, `std::mem::forget`, and `Box::leak` is forbidden.
 
-### 原則 5 — Exhaustive match
+### Principle 5 — Exhaustive match
 
-状態遷移とコマンド処理は `match` の exhaustive 性に依拠する。`_ => …` をプロダクション
-コードで使わない (test fixture のみ許容)。新ケース追加時にコンパイラが網羅性違反を
-検出する状態を保つ。
+State transitions and command handling rely on `match` exhaustiveness. Do not use `_ => …` in production code (allowed only in test fixtures). Keep a state where the compiler detects non-exhaustiveness when a new case is added.
 
-検証: `xtask strict-code` の `no-wildcard-match` ルール。
+Verification: the `no-wildcard-match` rule of `xtask strict-code`.
 
-### 原則 6 — `Result + ?` の自然な flow
+### Principle 6 — Natural `Result + ?` flow
 
-`BootDag<Phase<TIn,TOut>>` のような独自 monad / Kleisli 機構を持ち込まない。順序は
-コンパイラ強制 (関数本文の行順) で十分。エラー型は `thiserror::Error` で構造化する。
+Do not introduce custom monad / Kleisli machinery such as `BootDag<Phase<TIn,TOut>>`. Compiler-enforced ordering (line order in function bodies) is sufficient. Structure error types with `thiserror::Error`.
 
-### 原則 7 — `unsafe` の局所化
+### Principle 7 — Localized `unsafe`
 
-`unsafe` ブロックは可能な限り狭く、ブロックの直前にコメントで invariants を明示する。
-`#![deny(unsafe_op_in_unsafe_fn)]` により `unsafe fn` 内でも明示を要求する。
+Keep `unsafe` blocks as narrow as possible and state the invariants in a comment immediately before the block. `#![deny(unsafe_op_in_unsafe_fn)]` requires this even inside an `unsafe fn`.
 
-ファイル冒頭の `#![allow(unsafe_code)]` は禁止 (`xtask strict-code` の
-`no-file-wide-unsafe-allow` で検出)。`linerule-platform-windows` のみ
-`#![allow(unsafe_code)]` をクレート属性で許可するが、これは `#![cfg(windows)]` の
-直下に限定する。
+A file-wide `#![allow(unsafe_code)]` at the top of a file is forbidden (detected by `no-file-wide-unsafe-allow` of `xtask strict-code`). Only `linerule-platform-windows` may allow `#![allow(unsafe_code)]` as a crate attribute, and only directly below `#![cfg(windows)]`.
 
-### 原則 8 — データ駆動 + 単方向
+### Principle 8 — Data-driven + unidirectional
 
-`OverlayAction → State + StateDelta → OverlayFrame → render` の単方向。state mutation は
-`StateDelta::apply` の一点に集約する。直接 `state.field = x` を散在させない。
+`OverlayAction → State + StateDelta → OverlayFrame → render` is unidirectional. State mutation is concentrated at the single point `StateDelta::apply`. Do not scatter direct `state.field = x` assignments.
 
-### 原則 9 — WndProc instance 結合
+### Principle 9 — WndProc instance binding
 
-`SetWindowLongPtr(GWLP_USERDATA)` で HWND ↔ 構造体ポインタを結合する。`static mut`、
-`OnceLock<Mutex<Option<Box<dyn Fn>>>>` 風の静的ディスパッチャは禁止 (テスト時に
-複数 HWND が干渉する経路を作らない)。
+Bind HWND ↔ struct pointer via `SetWindowLongPtr(GWLP_USERDATA)`. `static mut` and `OnceLock<Mutex<Option<Box<dyn Fn>>>>`-style static dispatchers are forbidden (do not create a path where multiple HWNDs interfere during tests).
 
-検証: `xtask strict-code` の `no-static-mut` ルール、および設計レビュー。
+Verification: the `no-static-mut` rule of `xtask strict-code`, plus design review.
 
-### 原則 10 — `#[allow]` の最小局所化
+### Principle 10 — Minimal, localized `#[allow]`
 
-`#[allow]` はファイル冒頭ではなく属性付与対象の直前に書く。広域 `#[allow(clippy::all)]`
-や `#[allow(warnings)]` は禁止。
+Write `#[allow]` immediately before the target item, not at the top of the file. Broad `#[allow(clippy::all)]` and `#[allow(warnings)]` are forbidden.
 
-検証: `xtask strict-code` の `no-broad-allow-clippy` / `no-broad-allow-warnings` ルール。
+Verification: the `no-broad-allow-clippy` / `no-broad-allow-warnings` rules of `xtask strict-code`.
 
-### 原則 11 — Boundary 限定の panic
+### Principle 11 — Boundary-only panic
 
-`unwrap()` / `expect()` は boundary 限定 (`main.rs`、`xtask` クレート、`#[cfg(test)]`)。
-それ以外では `?` + `thiserror` で構造化エラーを返す。clippy `unwrap_used = deny`、
-`expect_used = warn` を workspace lints で強制し、`xtask strict-code` の
-`no-unwrap-outside-boundary` ルールで補完する。
+`unwrap()` / `expect()` are boundary-only (`main.rs`, the `xtask` crate, `#[cfg(test)]`). Elsewhere, return structured errors via `?` + `thiserror`. Enforce clippy `unwrap_used = deny` and `expect_used = warn` in workspace lints, complemented by the `no-unwrap-outside-boundary` rule of `xtask strict-code`.
 
-### 原則 12 — `mod.rs` 禁止
+### Principle 12 — No `mod.rs`
 
-`mod.rs` を使わず `module_name.rs` + `module_name/` の 2018+ 標準形に統一する。
-clippy `mod_module_files = deny` を workspace lints で強制。
+Do not use `mod.rs`; standardize on the 2018+ form of `module_name.rs` + `module_name/`. Enforce clippy `mod_module_files = deny` in workspace lints.
 
-### 原則 13 — ワイルドカード import 禁止
+### Principle 13 — No wildcard imports
 
-`use foo::*` を禁止。clippy `wildcard_imports = deny` を workspace lints で強制。
-prelude モジュールを作らない (例外: `linerule_core::prelude` を作る場合は本 ADR を
-更新)。
+Forbid `use foo::*`. Enforce clippy `wildcard_imports = deny` in workspace lints. Do not create prelude modules (exception: update this ADR if creating `linerule_core::prelude`).
 
-## 結果
+## Consequences
 
-- `cargo xtask strict-code` と `cargo xtask dep-graph` が CI 必須ゲートとなる
-- 新規モジュール追加時に原則を見直す
-- 原則の追加・削除・変更は ADR 改訂を必須とする (本 ADR のメンテナンスが原則一覧の
-  source of truth)
+- `cargo xtask strict-code` and `cargo xtask dep-graph` become required CI gates
+- Revisit the principles when adding a new module
+- Adding, removing, or changing a principle requires an ADR revision (maintaining this ADR is the source of truth for the principle list)

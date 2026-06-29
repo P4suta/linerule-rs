@@ -1,8 +1,5 @@
 //! Keyboard chord (modifiers + key) parsed from `"Ctrl+Alt+R"`-style strings.
-//!
-//! Parsing is total and reversible: every accepted form round-trips through
-//! [`ChordSpec::display`], and unknown tokens produce structured [`ChordError`]
-//! values with the original input surfaced for diagnostics.
+//! Parsing round-trips through [`ChordSpec::display`]; bad tokens yield [`ChordError`].
 
 use std::fmt;
 
@@ -55,8 +52,7 @@ impl fmt::Display for ChordSpec {
 }
 
 bitflags! {
-    /// Modifier set as a bitflag-style newtype. Combine with `|`, query with
-    /// [`Modifiers::contains`] / [`Modifiers::is_empty`].
+    /// Modifier bitset.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct Modifiers: u8 {
         /// Control key.
@@ -70,8 +66,7 @@ bitflags! {
     }
 }
 
-/// Keys linerule recognizes. A small closed set — every new chord-able key
-/// needs an explicit variant here so the parser stays exhaustive.
+/// Keys linerule recognizes (closed set; parser stays exhaustive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyCode {
@@ -121,14 +116,12 @@ pub enum Direction {
     Right,
 }
 
-/// `Letter` is a newtype guaranteeing the byte is uppercase ASCII `A..=Z`.
+/// Newtype guaranteeing the byte is uppercase ASCII `A..=Z`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Letter(u8);
 
 impl Letter {
-    /// Construct from an ASCII byte. Case is folded to upper.
-    ///
-    /// Returns `None` for bytes outside `A..=Z` / `a..=z`.
+    /// Construct from an ASCII byte (case-folded to upper); `None` outside `A..=Z`/`a..=z`.
     #[must_use]
     pub const fn from_ascii(b: u8) -> Option<Self> {
         match b {
@@ -192,7 +185,6 @@ pub enum ChordError {
 /// ```
 /// use linerule_core::input::chord;
 /// let spec = chord::parse("Ctrl+Alt+R").expect("default chord");
-/// // The parsed form round-trips back to the canonical string:
 /// assert_eq!(spec.display(), "Ctrl+Alt+R");
 /// ```
 ///

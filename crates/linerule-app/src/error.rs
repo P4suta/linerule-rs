@@ -1,19 +1,8 @@
 //! App-layer error aggregator `AppError`.
 //!
-//! Merges core and platform errors while keeping the dependency direction
-//! `app → platform-windows → core`. `LineruleError → AppError` and
-//! `PlatformError → AppError` come from thiserror `#[from]`; I/O and serde
-//! failures land in the same enum.
-//!
-//! `LineruleError` has no `Platform` variant (orphan rule + keeping the
-//! dependency direction clean): core stays unaware of platform-windows, and the
-//! merge point lives in the app layer.
-//!
-//! `main()` keeps `anyhow::Result`; thiserror's `Into<anyhow::Error>` lets a
-//! single `?` lift `AppError` into anyhow at the boundary.
-//!
-//! The `Platform` variant exists on Windows targets only (platform-windows is
-//! itself cfg-gated under `[target.'cfg(windows)'.dependencies]`).
+//! Merges core/platform/I/O/serde errors. The merge lives in the app layer so
+//! core stays unaware of platform-windows (orphan rule + dependency direction
+//! `app → platform-windows → core`). `Platform` variant is Windows-only.
 
 #![forbid(unsafe_code)]
 
@@ -22,12 +11,10 @@ use linerule_core::{ErrorClass, LineruleError};
 use linerule_platform_windows::PlatformError;
 use thiserror::Error;
 
-/// Aggregate error type for linerule-app, unifying core / platform / I/O /
-/// serde.
+/// Aggregate error type unifying core / platform / I/O / serde.
 ///
-/// Classified via `class()` on `boot::run_overlay`'s error path. That caller is
-/// Windows-only, so on Linux the `dead_code` allow is applied; on Windows the
-/// type is always consumed.
+/// `dead_code` allow on Linux: the only consumer (`boot::run_overlay`) is
+/// Windows-only.
 #[cfg_attr(
     not(target_os = "windows"),
     allow(
@@ -40,11 +27,11 @@ pub(crate) enum AppError {
     /// From `linerule-core` (`CoreError` / `ChordError`).
     #[error(transparent)]
     Core(#[from] LineruleError),
-    /// From `linerule-platform-windows`. Windows target only.
+    /// From `linerule-platform-windows`. Windows only.
     #[cfg(target_os = "windows")]
     #[error(transparent)]
     Platform(#[from] PlatformError),
-    /// I/O (e.g. `std::fs::read_dir` on the diagnostics path).
+    /// I/O.
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
     /// `serde_json::Error` (crash dump read/write).
@@ -53,11 +40,7 @@ pub(crate) enum AppError {
 }
 
 impl AppError {
-    /// Delegates to the inner error's `class()`. `Io` / `Serde` default to
-    /// `Fatal`.
-    ///
-    /// On Linux the only caller (`classify_and_log`) is cfg-gated away, hence
-    /// the Linux-only `dead_code` allow.
+    /// Delegates to the inner error's `class()`; `Io` / `Serde` are `Fatal`.
     #[cfg_attr(
         not(target_os = "windows"),
         allow(
@@ -75,9 +58,8 @@ impl AppError {
     }
 }
 
-/// Log an `AppError` by its [`ErrorClass`]. `Recoverable` returns `Continue`,
-/// `Fatal` / `ProgrammerError` return `Stop`. The caller handles any HUD push
-/// (the overlay handle is context-dependent).
+/// Log an `AppError` by its [`ErrorClass`]. `Recoverable` -> `Continue`;
+/// `Fatal` / `ProgrammerError` -> `Stop`. Caller handles any HUD push.
 #[cfg(target_os = "windows")]
 pub(crate) fn classify_and_log(err: &AppError) -> RunDecision {
     let class = err.class();
@@ -98,8 +80,7 @@ pub(crate) fn classify_and_log(err: &AppError) -> RunDecision {
     }
 }
 
-/// Return value of [`classify_and_log`]. `Continue` means push to the HUD and
-/// keep going; `Stop` means bubble up to main via `?`.
+/// Return value of [`classify_and_log`].
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RunDecision {

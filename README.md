@@ -1,170 +1,160 @@
 # linerule-rs
 
-Rust 製の Windows 用 reading ruler（読書補助オーバーレイ）。透明 click-through ウィンドウで画面上に水平／垂直のスリットを表示し、視線追跡を助ける。
+A Rust reading ruler for Windows (reading-aid overlay). A transparent, click-through window draws a horizontal/vertical slit on screen to help track your gaze.
 
-実機での操作:
+Live controls:
 
-- `Ctrl+Alt+H`: ON/OFF トグル（Off ⇄ 直前のアクティブモード。最後に使った向きを覚えている）。
-  表示の出し入れはこのキー専任で、表示してから下のキーで調整する
-- `Ctrl+Alt+R`: 軸切替（Horizontal ⇄ Vertical）
-- `Ctrl+Alt+E`: 周囲効果切替（Dim（暗幕）→ White（白マスク）→ Blur（背後ぼかし）→ Dim）
-- `Ctrl+Alt+Up` / `Ctrl+Alt+Down`: スリット厚さ ±（長押しで連続調整）
-- `Ctrl+Alt+Right` / `Ctrl+Alt+Left`: 不透明度 ±（長押しで連続調整）。`Blur` 効果中は
-  代わりに **ぼかし量（Gaussian σ, px）** を増減する（Blur では不透明度は inert で、
-  調整対象はぼかし量に切り替わる）
-- `Ctrl+Alt+K`: HUD 表示切替（常駐チップ ⇄ ホットキーガイドつきフルパネル）
-- `Ctrl+Alt+Q`: 終了
+- `Ctrl+Alt+H`: ON/OFF toggle (Off ⇄ last active mode). Dedicated to show/hide only
+- `Ctrl+Alt+R`: axis toggle (Horizontal ⇄ Vertical)
+- `Ctrl+Alt+E`: surround effect cycle (Dim → White → Blur → Dim)
+- `Ctrl+Alt+Up` / `Ctrl+Alt+Down`: slit thickness ± (hold for continuous adjust)
+- `Ctrl+Alt+Right` / `Ctrl+Alt+Left`: opacity ± (hold for continuous adjust). Under the `Blur`
+  effect opacity is inert; instead this changes the **blur amount (Gaussian σ, px)**
+- `Ctrl+Alt+K`: HUD toggle (resident chip ⇄ full panel)
+- `Ctrl+Alt+Q`: quit
 
-「非表示」は `Mode::Off` ただ一つ。Off 中に軸・厚さ・不透明度・効果のキーを押しても
-設定は変更されず、HUD に「Overlay is off — Ctrl+Alt+H to show」の toast が出る
-（見えない状態がこっそり変わるサプライズを排除）。
+"Hidden" is only `Mode::Off`. Pressing an adjust key while Off changes no settings;
+the HUD shows an "Overlay is off — Ctrl+Alt+H to show" toast.
 
-Bump 系（厚さ・不透明度／ぼかし量）は長押しで連続発火する。軸切替・ON/OFF トグル・
-効果切替・終了は誤連打を避けるため 1 押下 1 発火に固定。割り当てが OEM 系キー（`[`/`]`/`=`/`-`）
-ではなく Arrow キーなのは、Windows の IME / keyboard layout で OEM キーの VK が化けて
-`RegisterHotKey` がキャプチャを取り逃すケースがあったため（JIS keyboard × ENG IME で再現）。
+Bump actions (thickness, opacity/blur) auto-repeat on hold. Axis toggle, ON/OFF, effect cycle,
+and quit fire once per press to prevent accidental repeats. Arrow keys are used instead of OEM
+keys (`[`/`]`/`=`/`-`) because Windows IME / keyboard layout mangles the VK of OEM keys so
+`RegisterHotKey` misses the capture (reproduced on JIS keyboard × ENG IME).
 
-表示・軸切替・効果切替・厚さ / 不透明度の変更は、すべて 200ms 未満の ease-out
-トランジションで滑らかに遷移する（長押し中の連続調整は retarget で 1 つの連続モーションに
-合流する）。Dim ⇄ White はマスク色の RGB クロスフェード、flat ⇄ Blur はブラシ種が変わる
-（スプライトプール再構築）ためマスター包絡によるソフトカットで切り替わる。
+Each transition is a sub-200ms ease-out (continuous adjust during a hold merges into one motion
+via retarget). Dim ⇄ White is an RGB crossfade of the mask color; flat ⇄ Blur changes the brush
+kind (sprite-pool rebuild), so a master-envelope soft cut covers it.
 
-**HUD は二段階表示**: 普段は画面右上に極小の常駐チップだけが出る。チップが出すのは
-フルパネルへの導線のみ — 表示中は `Ctrl+Alt+K`、Off 中は `Off · Ctrl+Alt+H`（軸・効果・
-数値は画面を見れば分かるのでチップには出さない）。起動直後の数秒はホットキーガイドつきの
-フルパネルが表示され、その後チップへ自動的に畳まれる。操作を忘れたら `Ctrl+Alt+K` で
-いつでもフルパネル（Mode / Thickness / Opacity / Effect / Refresh Hz とホットキー一覧）に
-展開できる（`Blur` 効果中は Opacity 行が `Blur: N px`（ぼかし量）に切り替わる）。
-フルパネルのホットキー一覧は**いま押して意味のあるキーだけ**を出す — Off 中は
-On/Off・HUD 表示切替・終了の 3 つに絞られ、表示中は全キーが並ぶ。スリットやカーソルが
-HUD に近づくと譲ってフェードアウトする。multi-monitor 環境では virtual screen 全体に
-overlay が広がる。
+**The HUD is two-tier**: normally only a tiny resident chip in the top-right (its sole purpose is
+to lead into the full panel — `Ctrl+Alt+K` while shown, `Off · Ctrl+Alt+H` while Off). For the
+first few seconds after launch it shows the full panel, then auto-folds into the chip. `Ctrl+Alt+K`
+expands the full panel anytime (Mode / Thickness / Opacity / Effect / Refresh Hz and a hotkey list;
+under `Blur` the Opacity row reads `Blur: N px`). The hotkey list shows **only the keys that mean
+something right now** (while Off: the 3 of On/Off, HUD toggle, quit). When the slit or cursor nears
+the HUD it yields and fades out. On multi-monitor the overlay spans the whole virtual screen.
 
-### Blur 効果と composition backend
+### Blur effect and composition backend
 
-composition backend は WinRT `Windows.UI.Composition` 単一（旧 Win32 DirectComposition
-backend と `LINERULE_COMPOSITOR` 環境変数は撤去、ADR 0016）。`Blur`（背後ぼかし）は
-WinRT backdrop blur で常時レンダリングされる。色ベール（tint）は重ねないが、純粋なぼかしだけ
-だと実機での見えが「のっぺり」するため、ぼかしの後段に彩度（Saturation）とコントラスト
-（Contrast）を持ち上げる D2D エフェクトを連結し、摺りガラス的な素材感を出している
-（`backdrop → GaussianBlur → Saturation → Contrast`）。彩度/コントラストの強さは実機調整用に
-環境変数 `LINERULE_BLUR_SATURATION`（`[0,1]`、既定 0.70、0.5 で原画）/ `LINERULE_BLUR_CONTRAST`
-（`[-1,1]`、既定 0.15、0 で原画）で再ビルド無しに上書きできる。ぼかし量（Gaussian σ）は
-`Ctrl+Alt+Right/Left` で調整でき（既定 ≈9px、範囲 ≈2–64px）、ステップは Weber–Fechner 則に
-沿って σ を幾何級数的に変化させる（内部の知覚レベルを等間隔に動かす）ため、どの強さでも
-1 タップの体感変化がほぼ一定になる。ぼけ方は実機の GPU / compositor に依存するため見え方は
-ハードウェアで確認すること。背後サンプリングが効かず単色に見える場合は
-`LINERULE_BLUR_HOST=1` で backdrop 取得方法（`CreateBackdropBrush` ↔ `CreateHostBackdropBrush`）を
-切り替えて比較できる。
+The composition backend is the single WinRT `Windows.UI.Composition` (ADR 0016). `Blur` renders
+continuously via WinRT backdrop blur. Pure blur alone looks flat, so a D2D effect chain that raises
+saturation and contrast is appended for a frosted-glass feel
+(`backdrop → GaussianBlur → Saturation → Contrast`). Strength is overridable without a rebuild via
+the env vars `LINERULE_BLUR_SATURATION` (`[0,1]`, default 0.70, 0.5 = original) /
+`LINERULE_BLUR_CONTRAST` (`[-1,1]`, default 0.15, 0 = original). Blur amount (Gaussian σ) is adjusted
+with `Ctrl+Alt+Right/Left` (default ≈9px, range ≈2–64px); the step moves σ geometrically per the
+Weber–Fechner law so each tap feels like a constant change. The look depends on the real GPU /
+compositor, so verify on hardware. If backdrop sampling fails and it looks like a flat color, set
+`LINERULE_BLUR_HOST=1` to switch the backdrop acquisition method
+(`CreateBackdropBrush` ↔ `CreateHostBackdropBrush`) for comparison.
 
-## 構成
+## Structure
 
-| Crate | 役割 |
+| Crate | Role |
 |---|---|
-| `linerule-core` | 純粋ロジック層。ADT / reducer / render / chord parser / hold FSM / tick pipeline。`#![forbid(unsafe_code)]` |
-| `linerule-platform-windows` | Win32 / COM 実装層。WinRT Composition + Direct2D + DXGI + D3D11 を直接叩く。`#![cfg(windows)]` |
-| `linerule-app` | 単一バイナリ `linerule.exe` のエントリポイント。`windows_subsystem = "windows"` + サブコマンドで GUI / CLI 切替 |
-| `xtask` | ビルド自動化。`lint` / `dep-graph` / `ci` |
+| `linerule-core` | Pure logic layer. ADT / reducer / render / chord parser / hold FSM / tick pipeline. `#![forbid(unsafe_code)]` |
+| `linerule-platform-windows` | Win32 / COM implementation layer. Drives WinRT Composition + Direct2D + DXGI + D3D11 directly. `#![cfg(windows)]` |
+| `linerule-app` | Entry point of the single binary `linerule.exe`. `windows_subsystem = "windows"` + subcommands switch GUI / CLI |
+| `xtask` | Build automation. `lint` / `dep-graph` / `ci` |
 
-依存方向は一方向: `linerule-app → linerule-platform-windows → linerule-core`。`cargo xtask dep-graph` で機械検証する。
+Dependencies flow one way: `linerule-app → linerule-platform-windows → linerule-core`. Verified mechanically with `cargo xtask dep-graph`.
 
-## クイックスタート
+## Quick start
 
-### 開発環境
+### Dev environment
 
-経路は2つ: **Docker**（ホストには Docker と [`just`](https://github.com/casey/just) があれば良く、すべての Rust ツール (`cargo`, `cargo-xwin`, `cargo-deny`, `cargo-nextest`, `cargo-machete`, `cargo-llvm-cov`, `cargo-audit`, `cargo-sort`, `typos`, `taplo`, `biome`, `yamlfmt`, `lefthook`, `actionlint`, `commitlint`) はコンテナ内に揃う）か、**ネイティブ Windows**（Docker 無しで開発・実機検証する。下記「ネイティブ Windows 開発」を参照）。`just` がどちらかを自動判定する。
-
-```bash
-just bootstrap      # 一発セットアップ: docker build + git hooks + xwin sysroot prefetch + doctor
-```
-
-`just bootstrap` がやること:
-
-1. **dev image を取得** — `docker compose pull` で `ghcr.io/p4suta/linerule-rs-dev:latest` を取りに行き、無ければ `docker compose build` にフォールバック（フォールバック時は `gh auth token` から `GITHUB_TOKEN` を自動拾って cargo-binstall の api.github.com レートリミット回避）。CI (`.github/workflows/dev-image.yml`) が週次 + Dockerfile 変更時にイメージを更新するので、通常は ~30s の pull
-2. `docker compose up -d dev` — 永続コンテナを立てて以降の `just <recipe>` を高速化
-3. `lefthook install` — pre-commit / commit-msg / pre-push git hooks を `.git/hooks/` に配置
-4. `bun install` — commit-msg hook が使う commitlint を入れる（npm ではなく [Bun](https://bun.sh/) を採用、爆速）
-5. `just doctor` — 全ツールの疎通確認
-
-Windows クロスコンパイル用の MSVC CRT / Windows SDK（~500 MB）は dev image に焼き込まれているので、初回の `just cross-check` も即座に通る。
-
-困ったら `just doctor` を打てば、どのツールが落ちているかすぐ分かる。
-
-#### ネイティブ Windows 開発（Docker なし）
-
-Docker は再現性のためのクロスプラットフォーム経路だが、これは Windows 専用アプリなので **Windows ホスト上で Docker 無しに開発するのが一級の道**として用意されている（オーバーレイの実機描画は Linux コンテナでは原理的にできない）。`just` は実行モードを自動判定する: `INSIDE_CONTAINER=1` ならコンテナ内、Docker が無ければ **native**、Docker があれば docker 経由。Docker があるホストで native を強制したいときは `LINERULE_NATIVE=1 just <recipe>`。
-
-ホストのツールは [mise](https://mise.jdx.dev/) で揃える（リポジトリ root の `mise.toml` に pin 済み）:
+Two paths: **Docker** (host needs only Docker and [`just`](https://github.com/casey/just); the Rust tools (`cargo`, `cargo-xwin`, `cargo-deny`, `cargo-nextest`, `cargo-machete`, `cargo-llvm-cov`, `cargo-audit`, `cargo-sort`, `typos`, `taplo`, `biome`, `yamlfmt`, `lefthook`, `actionlint`, `commitlint`) live in the container) or **native Windows** (see below). `just` auto-detects.
 
 ```bash
-mise install        # cargo-nextest / cargo-deny / biome / yamlfmt 等を一括導入
-just bootstrap      # native を自動判定: rustup component + git hooks + doctor-native
-just doctor-native  # 必須ツールの疎通確認（mold/clang/xwin は native では対象外）
+just bootstrap      # one-shot setup: docker build + git hooks + xwin sysroot prefetch + doctor
 ```
 
-native でしか得られない強み:
+What `just bootstrap` does:
+
+1. **Pull the dev image** — `docker compose pull` for `ghcr.io/p4suta/linerule-rs-dev:latest`, falling back to `docker compose build` if absent (picking up `GITHUB_TOKEN` from `gh auth token` to dodge the cargo-binstall api.github.com rate limit). CI (`.github/workflows/dev-image.yml`) refreshes it weekly + on Dockerfile changes, so it's usually ~30s
+2. `docker compose up -d dev` — a persistent container that speeds up later `just <recipe>`
+3. `lefthook install` — places pre-commit / commit-msg / pre-push hooks in `.git/hooks/`
+4. `bun install` — installs the commitlint the commit-msg hook uses ([Bun](https://bun.sh/))
+5. `just doctor` — connectivity check of all tools
+
+The MSVC CRT / Windows SDK (~500 MB) for Windows cross-compilation is baked into the dev image, so the first `just cross-check` passes immediately.
+
+If stuck, `just doctor` shows which tool is broken.
+
+#### Native Windows dev (no Docker)
+
+Since this is a Windows-only app, **developing on a Windows host without Docker is the first-class path** (real overlay rendering is impossible in a Linux container). `just` auto-detects the run mode: `INSIDE_CONTAINER=1` means in-container, no Docker means **native**, with Docker means via docker. To force native on a Docker-equipped host, use `LINERULE_NATIVE=1 just <recipe>`.
+
+Provision host tools with [mise](https://mise.jdx.dev/) (pinned in `mise.toml`):
 
 ```bash
-just run                    # 実際にオーバーレイが描画される（コンテナでは不可）
-just verify                 # GUI smoke: 数秒起動して events.jsonl で健全性を判定
-just verify-blur            # Horizontal + Blur で起動し WinRT backdrop-blur を検証
-just verify-scenario        # Ctrl+Alt chord を SendInput で注入し state 遷移を assert
-just publish-windows-native # 出荷用 linerule.exe を native ビルド
+mise install        # bulk-install cargo-nextest / cargo-deny / biome / yamlfmt etc.
+just bootstrap      # auto-detects native: rustup component + git hooks + doctor-native
+just doctor-native  # connectivity check of required tools (mold/clang/xwin are out of scope for native)
 ```
 
-`just verify` は CI の release-build と同じ判定ロジック（`cargo xtask verify`）を共有する — 起動後 `events.jsonl` を読み、ERROR 0 件 / `tick processing failed` 無し / crash dump 無し / `Win32 message loop exited` 到達を確認する（headless 特有の WinRT teardown 非ゼロ終了は許容、実機は exit 0）。
+Strengths only native gives you:
 
-> 改行コード: リポジトリは `.gitattributes` で LF を強制する（rustfmt / biome / taplo / yamlfmt はすべて LF 前提）。本ファイル追加以前にできた既存の Windows clone は、一度だけ `git add --renormalize . && git checkout .` を実行して作業ツリーを LF に揃えると `just fmt` / `just lint` / commit hook が通る。
+```bash
+just run                    # the overlay actually renders (impossible in a container)
+just verify                 # GUI smoke: launch for a few seconds and judge health via events.jsonl
+just verify-blur            # launch with Horizontal + Blur and verify WinRT backdrop-blur
+just verify-scenario        # inject Ctrl+Alt chords via SendInput and assert state transitions
+just publish-windows-native # native-build the shippable linerule.exe
+```
 
-#### 高速化の根拠（測定済み）
+`just verify` shares the same judgment logic as CI's release-build (`cargo xtask verify`) — after launch it reads `events.jsonl` and confirms 0 ERROR / no `tick processing failed` / no crash dump / `Win32 message loop exited` reached (a nonzero exit from headless-specific WinRT teardown is tolerated; on real hardware it exits 0).
 
-| 構成 | フレッシュクローン → cross-check 通る状態まで |
+> Line endings: `.gitattributes` enforces LF (rustfmt / biome / taplo / yamlfmt assume LF). An old Windows clone can align its working tree to LF once with `git add --renormalize . && git checkout .`, after which `just fmt` / `just lint` / the commit hook pass.
+
+#### Why it's fast (measured)
+
+| Setup | Fresh clone → cross-check passing |
 |---|---|
-| Token 無しで build（cargo-binstall が api.github.com 60/h で 403 → 120s × N retry → source fallback、その後 xwin 7m download） | **約 20 分** |
-| Token 有りで build（cargo-binstall は prebuilt、xwin sysroot を image に焼き込み済み） | **約 2.4 分** |
-| ghcr.io pull（CI がビルドして push、xwin sysroot 込みで ~1.7 GB pull） | **約 30 秒** |
+| Build without a token (cargo-binstall hits api.github.com 60/h → 403 → 120s × N retry → source fallback, then 7m xwin download) | **~20 min** |
+| Build with a token (cargo-binstall uses prebuilt, xwin sysroot baked into image) | **~2.4 min** |
+| ghcr.io pull (CI builds and pushes, ~1.7 GB pull including xwin sysroot) | **~30 sec** |
 
-### ビルド・テスト・リント
+### Build / test / lint
 
 ```bash
 just build          # cargo build --workspace --all-targets
 just test           # cargo nextest run --workspace
 just lint           # fmt + clippy + cargo-deny + typos + actionlint + cargo-machete + dep-graph
-just run            # cargo run -p linerule-app (Windows host のみ動作)
+just run            # cargo run -p linerule-app (Windows host only)
 ```
 
-### クロスコンパイル確認
+### Cross-compile check
 
-Windows ターゲットの型／構文ドリフトを Linux 上で検出するために `cargo-xwin` を使う:
+Use `cargo-xwin` to catch Windows-target type/syntax drift on Linux:
 
 ```bash
 just cross-check        # cargo xwin check --target x86_64-pc-windows-msvc --workspace
-just publish-windows-cross  # 反復用のクロスビルド (shippable ではない)
+just publish-windows-cross  # iteration cross-build (not shippable)
 ```
 
-shippable な `linerule.exe` は CI の windows-latest runner からのみ produce される（ABI / SEH 事故回避のため）。
+The shippable `linerule.exe` is produced only from CI's windows-latest runner (to avoid ABI / SEH mishaps).
 
-### 配布物
+### Artifacts
 
-GitHub Release では tag push のたびに以下が attach される (`.github/workflows/release-assets.yml`、ADR-0010 / ADR-0011)。
+Each tag push attaches the following to the GitHub Release (`.github/workflows/release-assets.yml`, ADR-0010 / ADR-0011).
 
-- `linerule-vX.Y.Z-win-x64.exe` — `cargo build --release -p linerule-app` の native Windows ビルド (Phase J 以降 1 binary のみ、PDB / `dist-dev` profile は廃止)
-- `linerule-vX.Y.Z-sbom.cdx.json` — `cargo-sbom` が生成する CycloneDX 1.6 JSON 形式の Software Bill of Materials。`linerule-app` の依存閉包をスキャナで直接読める
+- `linerule-vX.Y.Z-win-x64.exe` — native Windows build of `cargo build --release -p linerule-app`
+- `linerule-vX.Y.Z-sbom.cdx.json` — CycloneDX 1.6 SBOM generated by `cargo-sbom` (dependency closure of `linerule-app`)
 
-### ログとクラッシュダンプ
+### Logs and crash dumps
 
-ランタイム時に `linerule.exe` と同じディレクトリの `events.jsonl.YYYY-MM-DD` へ tracing JSON Lines を流す（portable 運用、ADR-0011）。panic 時は同階層に `crash-<run_id>-<unix_ms>.json` が出る。
+Emits tracing JSON Lines to `events.jsonl.YYYY-MM-DD` alongside `linerule.exe` (portable operation, ADR-0011). On panic, a `crash-<run_id>-<unix_ms>.json` lands in the same directory.
 
 ```bash
-just logs-tail subsystem=wnd_proc  # subsystem フィルタ
-just logs-pretty                    # 全件 pretty-print
-just crash-list                     # クラッシュダンプ一覧
-just crash-latest                   # 最新クラッシュダンプ
+just logs-tail subsystem=wnd_proc  # subsystem filter
+just logs-pretty                    # pretty-print everything
+just crash-list                     # list crash dumps
+just crash-latest                   # latest crash dump
 ```
 
 ## Library API overview
 
-下のブロックは `crates/linerule-core/src/lib.rs` の crate-level doc から `cargo rdme` で自動同期されます。手書きで中身を編集しないこと（`just docs` で再生成）。
+The block below is auto-synced from the crate-level doc of `crates/linerule-core/src/lib.rs` via `cargo rdme`. Do not hand-edit (regenerate with `just docs`).
 
 <!-- cargo-rdme start -->
 
@@ -198,22 +188,20 @@ depends on no other linerule-rs crate.
 
 <!-- cargo-rdme end -->
 
-## モジュールツリー・依存グラフ
+## Module tree / dependency graph
 
-- [`docs/modules/`](docs/modules/) — 各クレートの `cargo modules structure` 出力（自動生成）
-- [`docs/dep-graph.svg`](docs/dep-graph.svg) — workspace 依存グラフ（`cargo depgraph` 自動生成）
+- [`docs/modules/`](docs/modules/) — `cargo modules structure` output per crate (auto-generated)
+- [`docs/dep-graph.svg`](docs/dep-graph.svg) — workspace dependency graph (`cargo depgraph` auto-generated)
 
-更新は `just docs` で一括実行。`lefthook` の pre-commit が drift を検出し、生成物が古いまま commit されることを防ぐ。
+Update with `just docs`. The `lefthook` pre-commit detects drift and blocks committing stale generated artifacts.
 
-## 設計・運用ドキュメント
+## Design / operations docs
 
-設計判断は [`docs/adr/`](docs/adr/) に ADR として記録する。一方向依存 / RAII /
-exhaustive match / unsafe 局所化などの merge ブロッカー原則は
-[`docs/adr/0002-architecture-principles.md`](docs/adr/0002-architecture-principles.md) を参照。
+Design decisions are recorded as ADRs in [`docs/adr/`](docs/adr/). For merge-blocker principles like one-way dependencies / RAII / exhaustive match / unsafe localization, see [`docs/adr/0002-architecture-principles.md`](docs/adr/0002-architecture-principles.md).
 
-## ライセンス
+## License
 
-このプロジェクトは MIT または Apache-2.0 のいずれかでデュアルライセンスされます (お好みで)。
+Dual-licensed MIT or Apache-2.0 (your choice).
 
 - [`LICENSE-MIT`](LICENSE-MIT)
 - [`LICENSE-APACHE`](LICENSE-APACHE)

@@ -1,44 +1,24 @@
-# 0015 — WinRT Composition backend と backdrop blur
+# 0015 — WinRT Composition backend and backdrop blur
 
-**Status:** Accepted。二重 backend 構成 (DComp fallback + `LINERULE_COMPOSITOR` 切替) は
-[[0016-default-composition-backend-winrt]] で撤去され、WinRT 単一に移行した。
+**Status:** Accepted. The dual-backend setup was removed in [[0016-default-composition-backend-winrt]], moving to WinRT only.
 
-**See also:** [[0016-default-composition-backend-winrt]] (DComp 撤去・WinRT 一本化),
-[[0003-unsafe-isolation]] (`unsafe` を `win32_ffi/` に集約), [[0006-dwrite-ffi-isolation]] (HUD 描画).
+**See also:** [[0016-default-composition-backend-winrt]], [[0003-unsafe-isolation]], [[0006-dwrite-ffi-isolation]].
 
-## 文脈
+## Context
 
-周囲効果に「ボカシ」(スリットはくっきり・周囲だけ背後をぼかす) を追加したい。Win32
-DirectComposition 単体では backdrop blur ができない (`IDCompositionVisual::SetEffect` は
-visual 自身のサブツリーをぼかすだけで、topmost click-through 窓の背後はぼかせない)。
+Backdrop blur that blurs only the surroundings is a requirement. Win32 DirectComposition alone cannot do it (`IDCompositionVisual::SetEffect` covers only the visual's own subtree). The only path is WinRT `Windows.UI.Composition`'s `CreateDesktopWindowTarget` + `CreateBackdropBrush` + a Gaussian blur `CompositionEffectBrush`. `CreateBackdropBrush` captures what is behind a `WS_EX_NOREDIRECTIONBITMAP` window and excludes our own drawing (no feedback). `CreateDesktopWindowTarget` and Win32 `CreateTargetForHwnd` cannot coexist on the same HWND, so the whole composition host moves to WinRT.
 
-唯一の正攻法は WinRT `Windows.UI.Composition`: `Compositor` +
-`ICompositorDesktopInterop::CreateDesktopWindowTarget` + `CreateBackdropBrush` +
-Gaussian blur の `CompositionEffectBrush`。`CreateBackdropBrush` は `WS_EX_NOREDIRECTIONBITMAP`
-窓 (本 overlay は既にそう) で背後内容を捕捉し、自分の描画は含めない (feedback 無し)。
-WinRT の `CreateDesktopWindowTarget` と Win32 の `CreateTargetForHwnd` は同一 HWND に
-共存できないため、overlay の composition host ごと WinRT へ移す必要がある。
+## Decision
 
-## 決定
+Add a WinRT Composition backend and switch between it and Win32 DComp via `LINERULE_COMPOSITOR` (default `dcomp`). Keep DComp as a fallback until WinRT is stable on real hardware.
 
-WinRT Composition backend を追加し、`LINERULE_COMPOSITOR` 環境変数で Win32 DComp と切り替える
-(既定 `dcomp`、`winrt` で WinRT)。WinRT 経路が実機で安定するまで DComp を fallback として残す。
+- `unsafe` for WinRT interop / DispatcherQueue / the hand-written COM effect lives in `win32_ffi/composition.rs` and `win32_ffi/blur_effect.rs` (ADR-0003). Per-frame safe visual operations live in `winrt_composition_renderer.rs` / `winrt_hud_renderer.rs` (`#![forbid(unsafe_code)]`).
+- Since Win2D is UWP-only, Gaussian blur implements `IGraphicsEffectD2D1Interop` by hand (`CLSID_D2D1GaussianBlur` + StandardDeviation, `blur_effect.rs`).
+- DispatcherQueue is stood up on the UI thread with `DQTYPE_THREAD_CURRENT` + `DQTAT_COM_STA` and drained by the existing GetMessage loop. WinRT auto-commits per tick, so no explicit commit is needed.
+- Backends are bound by the enums in `renderer_backend.rs` (`OverlayBackend` / `HudBackend`); device-lost rebuild reconstructs the chosen backend.
 
-- WinRT interop / DispatcherQueue / 自作 COM effect の `unsafe` は `win32_ffi/composition.rs` と
-  `win32_ffi/blur_effect.rs` に集約 (ADR-0003)。毎フレームの visual 操作 (windows crate では
-  safe) は `winrt_composition_renderer.rs` / `winrt_hud_renderer.rs` (`#![forbid(unsafe_code)]`)。
-- Gaussian blur は Win2D が UWP 専用なので、`IGraphicsEffectD2D1Interop` を自前実装し
-  `CLSID_D2D1GaussianBlur` + StandardDeviation を記述する (`blur_effect.rs`)。
-- DispatcherQueue は `DQTYPE_THREAD_CURRENT` + `DQTAT_COM_STA` で UI thread に立て、既存の
-  GetMessage ループで drain する。WinRT は per-tick で自動 commit するので明示 commit は不要。
-- backend は `renderer_backend.rs` の enum (`OverlayBackend` / `HudBackend`) で束ね、
-  `OverlayWndState` がどちらかを保持する。device-lost rebuild は採用 backend を再構築する。
+## Consequences
 
-## 結果
-
-- 新規: `win32_ffi/composition.rs` (WinRT pipeline)、`win32_ffi/blur_effect.rs` (自作 effect)、
-  `winrt_composition_renderer.rs`、`winrt_hud_renderer.rs`、`renderer_backend.rs`。
-- `OverlayConfig` の `SurroundEffect` に `Blur` を追加、`Brush` に `Blur { tint }` を追加。
-  DComp backend は `Brush::Blur` を tint の単色塗りに degrade する。
-- 検証は Linux では cross-compile (`cargo xwin check`) のみ。見た目・click-through・DPI・
-  multi-monitor・device-lost・DispatcherQueue 駆動は Windows 実機で確認する。
+- New: `win32_ffi/composition.rs`, `win32_ffi/blur_effect.rs`, `winrt_composition_renderer.rs`, `winrt_hud_renderer.rs`, `renderer_backend.rs`.
+- Add `Blur` to `SurroundEffect` and `Blur { tint }` to `Brush`. The DComp backend degrades `Brush::Blur` to a solid tint fill.
+- On Linux, verification is cross-compile only (`cargo xwin check`). Appearance, click-through, DPI, multi-monitor, device-lost, and DispatcherQueue operation are confirmed on real Windows hardware.

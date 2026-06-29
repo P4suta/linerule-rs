@@ -1,46 +1,33 @@
-# 0008 — `ErrorClass` 分類と `AppError` aggregator
+# 0008 — `ErrorClass` classification and `AppError` aggregator
 
 **Status:** Accepted (2026-05-20).
 
-**See also:** [[0002-architecture-principles]] (closed sum / 一方向依存), [[0003-unsafe-isolation]], [[0007-debug-build-and-panic-strategy]].
+**See also:** [[0002-architecture-principles]] (closed sum / one-way dependency), [[0003-unsafe-isolation]], [[0007-debug-build-and-panic-strategy]].
 
-## 文脈
+## Context
 
-これまでエラー型は:
+Error types used `thiserror::Error` + `#[from]` to keep the `?` chain, but two things were missing:
 
-```
-linerule-core::diagnostics
-  ├── CoreError { Opacity, Thickness }
-  ├── ChordError { Empty, EmptyToken, UnknownPart, MultipleKeys, NoKey }
-  └── LineruleError { Core(CoreError), Chord(ChordError) }
-        Severity { Error|Warn|Info|Debug|Trace }   # logging level lattice
+1. Recoverability was not expressed in the type; callers `match`ed it case by case.
+2. There was no `PlatformError → LineruleError` merge path, so the app layer relied on `anyhow` or manual matching.
 
-linerule-platform-windows::error
-  └── PlatformError { NullHandle, BoolFalse, BadHr, LastError, Chord(ChordError) }
-```
+Adding a `Platform` variant to `LineruleError` would invert the `core → platform-windows` dependency and break dependency-direction purity ([[0002-architecture-principles]] §1). The orphan rule also forbids writing `impl From<PlatformError> for LineruleError` on the platform side.
 
-を備え、`thiserror::Error` + `#[from]` で `?` chain を維持していた。一方で:
+## Decision
 
-1. **エラーの「回復可能性」を型で表現していなかった**。HUD に出すべき `Recoverable` か、プロセス終了で残すべき `Fatal` か、プログラマ誤りの `ProgrammerError` かは、すべて caller が `match` で個別判断する必要があった。
-2. **`PlatformError → LineruleError` の経路がなかった**。`?` 1 つで合流できるのは `ChordError` だけ。アプリ層で「core も platform も同じ surface で受けたい」とき、`anyhow::Error` か手動 match に頼っていた。
+### 1. Add `ErrorClass` to `linerule-core::diagnostics`
 
-`linerule-core::LineruleError` に `Platform(PlatformError)` variant を生やせば 2 は解決するが、`linerule-core` が `linerule-platform-windows` に依存することになり、依存方向 `app → platform-windows → core` の純度が崩れる ([[0002-architecture-principles]] §1)。`orphan rule` でも `impl From<PlatformError> for LineruleError` を platform 側に書くのは不可 (LineruleError は core 製で local じゃない)。
-
-## 判断
-
-### 1. `ErrorClass` を `linerule-core::diagnostics` に追加
-
-`Severity` (logging level) とは完全に別 enum。意味論が違うので名前も別:
+A separate enum, orthogonal to `Severity` (logging level):
 
 ```rust
 pub enum ErrorClass {
-    Recoverable,       // log + fallback で継続
-    Fatal,             // プロセス終了 + crash report
-    ProgrammerError,   // 静的バグ tag (debug_assert! の余地)
+    Recoverable,       // log + fallback, continue
+    Fatal,             // terminate process + crash report
+    ProgrammerError,   // static bug tag (room for debug_assert!)
 }
 ```
 
-各エラー型に `class()` method を生やす:
+Each error type gets a `class()`:
 
 ```rust
 impl CoreError { pub const fn class(self) -> ErrorClass { ProgrammerError } }
@@ -49,11 +36,11 @@ impl LineruleError { pub const fn class(&self) -> ErrorClass { /* delegate */ } 
 impl PlatformError { pub fn class(&self) -> ErrorClass { /* operation-aware */ } }
 ```
 
-`PlatformError::class` は `operation: &'static str` で `RegisterHotKey` / `UnregisterHotKey` 等の既知 recoverable API を白リスト式に分岐し、それ以外は `Fatal` を返す。
+`PlatformError::class` branches on `operation: &'static str`, whitelisting known-recoverable APIs like `RegisterHotKey`; everything else is `Fatal`.
 
-### 2. `AppError` aggregator を `linerule-app/src/error.rs` に新設
+### 2. Add an `AppError` aggregator in `linerule-app/src/error.rs`
 
-`linerule-core::LineruleError` には Platform variant を追加せず、合流点を app 層に持たせる:
+Put the merge point in the app layer; do not add a Platform variant to `LineruleError`:
 
 ```rust
 // linerule-app/src/error.rs
@@ -67,43 +54,29 @@ pub(crate) enum AppError {
 }
 
 impl AppError {
-    pub(crate) fn class(&self) -> ErrorClass { /* 内部に委譲 */ }
+    pub(crate) fn class(&self) -> ErrorClass { /* delegate internally */ }
 }
 ```
 
-`Platform` variant は `[target.'cfg(windows)'.dependencies]` の cfg gate 下にあるので、`#[cfg(target_os = "windows")]` で variant 自体を Windows 限定にする。Linux テストでは `AppError::{Core, Io, Serde}` の 3 variant のみが見える。
+The `Platform` variant is under a cfg gate, so `#[cfg(target_os = "windows")]` limits it to Windows. Linux tests see only 3 variants. `main()` stays `anyhow::Result<()>` and rises into anyhow via the `?` chain through `#[from]`.
 
-`main()` は引き続き `anyhow::Result<()>`。`AppError` は thiserror の `#[from]` 経由で `Into<anyhow::Error>` を自動派生するので `?` chain 1 つで anyhow に上がる。
+## Outcome
 
-## 結果
+- `linerule-core/src/diagnostics.rs`: enum + 4 methods + 7 tests (~140 LOC)
+- `linerule-platform-windows/src/error.rs`: `class()` + recoverable whitelist + 6 tests (~80 LOC)
+- New `linerule-app/src/error.rs` (`AppError` + tests, ~125 LOC)
+- Added `thiserror` dep to `linerule-app/Cargo.toml`, re-export `linerule-core::ErrorClass`
 
-- 新規 enum + 4 method + 7 unit tests を `linerule-core/src/diagnostics.rs` に追加 (~140 LOC)
-- `PlatformError::class()` + recoverable operation 白リスト + 6 unit tests を `linerule-platform-windows/src/error.rs` に追加 (~80 LOC)
-- 新規 `linerule-app/src/error.rs` (`AppError` aggregator + tests, ~125 LOC)
-- `linerule-app/Cargo.toml` に `thiserror` 依存を追加
-- `linerule-core::ErrorClass` を lib.rs から re-export
+Dependency direction `app → platform-windows → core` purity is preserved (verified with `cargo xtask dep-graph`).
 
-`linerule-core` は依然として `linerule-platform-windows` を知らない (`cargo xtask dep-graph` で確認)。`app → platform-windows → core` の純度は維持。
+## Alternatives considered
 
-## 検討した代替案
+- **A. Add `LineruleError::Platform(PlatformError)` to core** — rejected: dependency inversion.
+- **B. `Platform(Box<dyn Error + Send + Sync>)`** — rejected: loses type info, requires downcasting, violates closed sum ([[0002]] §3).
+- **C. `From<PlatformError> for LineruleError` on the platform side** — rejected: forbidden by orphan rule.
+- **D. Fold `ErrorClass` into `Severity`** — rejected: orthogonal semantics. Every combination (`Recoverable + Warn`, etc.) is meaningful.
 
-### A. `LineruleError::Platform(PlatformError)` を core に追加
+## Related
 
-却下: `linerule-core` から `linerule-platform-windows` への依存逆転。orphan rule にも該当しない。
-
-### B. `LineruleError::Platform(Box<dyn std::error::Error + Send + Sync>)`
-
-却下: 型情報が消えて downcast に頼る必要が出る。closed sum の精神 ([[0002]] §3) に反する。
-
-### C. `From<PlatformError> for LineruleError` を platform 側に書く
-
-却下: orphan rule で impl 不可 (`LineruleError` も `From` trait も外、`PlatformError` だけ local — Rust が拒否)。
-
-### D. `ErrorClass` を `Severity` に統合する
-
-却下: 意味論が違う。`Severity` は「log の出力フィルタの閾値」、`ErrorClass` は「アプリの反応」。両者は直交していて、`Recoverable + Warn`、`Fatal + Error`、`ProgrammerError + Error` 等のすべての組み合わせが意味を持つ。
-
-## 関連
-
-- ADR-0007 — Debug Build profile (`dist-dev`) を `panic = "unwind"` にすることで `catch_unwind` 経路が live になり、`ProgrammerError` を debug build でも runtime に観測可能に
-- ADR-0013 — `AppError::class()` を消費し、`Recoverable` を HUD notification に push する経路を実装
+- ADR-0007 — sets `dist-dev` to `panic = "unwind"` to make the `catch_unwind` path live, so `ProgrammerError` is observable even in debug builds.
+- ADR-0013 — consumes `AppError::class()` and pushes `Recoverable` to a HUD notification.

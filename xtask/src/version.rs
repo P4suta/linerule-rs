@@ -1,28 +1,16 @@
-//! `xtask version --channel <dev|nightly|stable> [--date YYYYMMDD]` — print the
-//! canonical channel-aware version string. This is the single source of the
-//! *format*: CI exports the result as `LINERULE_VERSION` so `linerule-app`'s
-//! `build.rs` stamps it verbatim into the shipped binary, and `nightly.yml`
-//! names the nightly artifact from it.
+//! `xtask version` — canonical channel-aware version string, exported by CI as
+//! `LINERULE_VERSION`. Formats only; release-please owns the actual bumping.
 //!
 //!   dev     → `0.4.1-dev+g<sha>`
 //!   nightly → `0.4.1-nightly.<date>+g<sha>`
-//!   stable  → `0.4.1`                        (clean; the release tag itself)
-//!
-//! The base `X.Y.Z` triple is `env!("CARGO_PKG_VERSION")`: xtask inherits
-//! `version.workspace = true`, so it equals `[workspace.package] version` — the
-//! value release-please bumps. No TOML parsing needed. The git sha is resolved
-//! at call time; when git / the `.git` dir is absent the metadata is omitted.
-//!
-//! Release *bumping* is NOT here — release-please owns version/tag/CHANGELOG.
-//! This subcommand only formats a build identity for the dev/nightly/stable lanes.
+//!   stable  → `0.4.1`
 
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 
-/// The base `X.Y.Z` triple, shared across the workspace via
-/// `version.workspace = true` (equals `[workspace.package] version`).
+/// Base `X.Y.Z` triple, inherited from `[workspace.package] version`.
 const BASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Build channel a version string is formatted for.
@@ -79,9 +67,8 @@ fn compute(base: &str, channel: Channel, date: Option<&str>, sha: Option<&str>) 
     })
 }
 
-/// Resolve the short git sha (without the `g` prefix `compute` adds). Returns
-/// `None` when git or the `.git` dir is absent, so source-tarball builds drop
-/// the metadata rather than failing.
+/// Short git sha, or `None` when git/`.git` is absent so source-tarball builds
+/// drop the metadata rather than fail.
 fn git_short_sha() -> Option<String> {
     let output = Command::new("git")
         .args(["rev-parse", "--short=7", "HEAD"])

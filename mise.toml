@@ -1,14 +1,6 @@
-# Native (Docker-less) dev toolchain for linerule-rs.
-#
-# The dev container (Dockerfile) bakes in every tool the Justfile recipes
-# invoke. On a native Windows host without Docker, mise provisions the same
-# set: run `mise install`, then `just doctor-native` to verify. The Rust
-# toolchain itself (channel / components / targets) is owned by
-# rust-toolchain.toml — mise only manages the auxiliary tools.
-#
-# Versions track the Dockerfile where it pins explicitly (yamlfmt); the rest
-# follow the Dockerfile's "latest"/binstall policy. `just doctor-native`
-# surfaces anything missing with the remediation.
+# Native (Docker-less) dev toolchain. Mirrors the Dockerfile's tools for hosts
+# without Docker: `mise install`, then `just doctor-native` to verify.
+# The Rust toolchain itself is owned by rust-toolchain.toml.
 
 [tools]
 # JS runtime for commitlint (commit-msg hook).
@@ -19,17 +11,15 @@ just = "latest"
 lefthook = "latest"
 taplo = "latest"
 biome = "latest"
-yamlfmt = "0.13.0"    # pinned to match the Dockerfile (format stability vs CI)
+yamlfmt = "0.13.0"    # pinned to match the Dockerfile (format stability)
 actionlint = "latest"
 typos = "latest"
 jq = "latest"
 
-# cargo-binstall lets the cargo: backend below fetch prebuilt binaries instead
-# of compiling each crate from source (mirrors the Dockerfile's binstall step).
+# Lets the cargo: backend fetch prebuilt binaries instead of compiling.
 cargo-binstall = "latest"
 
-# Cargo subcommands the recipes / xtask invoke. No mise registry short names
-# exist for these, so use the cargo: backend (binstalled via the setting below).
+# Cargo subcommands via the cargo: backend (no mise registry short names exist).
 "cargo:cargo-nextest" = "latest"
 "cargo:cargo-deny" = "latest"
 "cargo:cargo-audit" = "latest"
@@ -41,6 +31,5 @@ cargo-binstall = "latest"
 "cargo:cargo-depgraph" = "latest"
 
 [settings.cargo]
-# Pull prebuilt binaries via cargo-binstall for the cargo: backend tools above
-# rather than a from-source `cargo install` (much faster, matches Dockerfile).
+# Use cargo-binstall (prebuilt binaries) for cargo: backend tools, not source builds.
 binstall = true

@@ -1,17 +1,6 @@
-//! `cargo xtask verify` — local GUI smoke that mirrors the CI release-build
-//! verdict so the maintainer can run the exact same check a Windows runner does.
-//!
-//! It spawns `linerule.exe run [--initial-mode ..] [--initial-effect ..]
-//! --duration-ms N`, waits for the time-boxed graceful quit, then judges the
-//! resulting `events.jsonl` exactly as `.github/workflows/ci.yml` does:
-//! no `level":"ERROR"`, no `tick processing failed`, no `crash-*.json`, and
-//! either exit 0 or a clean `Win32 message loop exited` (the known headless
-//! `WinRT`-blur teardown artifact `0xE0464645`).
-//!
-//! This is the one check Docker/Linux cannot run — `run` raises a real window —
-//! so it does real work only under `cfg(windows)` and no-ops elsewhere. The
-//! pure verdict (`judge`) is platform-independent and unit-tested on every
-//! runner, locking the gate semantics shared with CI.
+//! `cargo xtask verify` — local GUI smoke mirroring the CI release-build verdict.
+//! Real work only under `cfg(windows)` (`run` raises a real window); `judge` is
+//! platform-independent and unit-tested everywhere to lock the gate shared with CI.
 
 /// Flags for `cargo xtask verify`.
 #[derive(Debug, clap::Args)]
@@ -34,31 +23,27 @@ pub(crate) struct VerifyArgs {
     /// Keep pre-existing events.jsonl / crash dumps instead of cleaning first.
     #[arg(long)]
     pub(crate) keep_logs: bool,
-    /// Drive a scripted Ctrl+Alt chord sequence (toggle on → flip axis → cycle
-    /// effect → quit) via `SendInput` and assert the resulting `state changed`
-    /// series. Windows + interactive desktop only.
+    /// Drive a scripted Ctrl+Alt chord sequence via `SendInput` and assert the
+    /// `state changed` series. Windows + interactive desktop only.
     #[arg(long)]
     pub(crate) scenario: bool,
 }
 
-/// Outcome of judging a GUI smoke run. Used by the Windows `run` and the unit
-/// tests; the non-Windows `run` is a no-op, so gate it to keep a Linux build
-/// (where only `VerifyArgs` is referenced) free of dead-code warnings.
+/// Outcome of judging a GUI smoke run. Gated to keep the Linux build (which
+/// only references `VerifyArgs`) free of dead-code warnings.
 #[cfg(any(target_os = "windows", test))]
 #[derive(Debug)]
 pub(crate) enum Verdict {
     /// Healthy run, exit 0.
     Pass(String),
-    /// Healthy render but a non-zero exit during teardown (tolerated unless
+    /// Healthy render, non-zero exit during teardown (tolerated unless
     /// `--strict`). Known headless-only `WinRT` blur artifact.
     Tolerated(String),
     /// Failed a health gate or crashed mid-run.
     Fail(String),
 }
 
-/// Judge a GUI smoke run from its `events.jsonl` body, whether a crash dump was
-/// left behind, the process exit code, and whether `--strict` was set. This is
-/// the single source of truth for the pass/fail criteria shared with CI; the
+/// Judge a GUI smoke run. Single source of truth for the pass/fail criteria;
 /// substring patterns match `.github/workflows/ci.yml` exactly.
 #[cfg(any(target_os = "windows", test))]
 pub(crate) fn judge(
@@ -112,15 +97,13 @@ pub(crate) fn judge(
 }
 
 /// `HotkeyMap` field names injected by `--scenario`, terminated by `quit` so the
-/// overlay quits gracefully instead of waiting out `--duration-ms`. Only the
-/// Windows `run_scenario` reads it (tests assert against `SCENARIO_EXPECTED`),
-/// so gate it to Windows to avoid a dead-code warning in a Linux test build.
+/// overlay quits gracefully instead of waiting out `--duration-ms`.
 #[cfg(target_os = "windows")]
 const SCENARIO_ACTIONS: &str = "toggle_on_off,cycle_mode,cycle_effect,quit";
 
-/// Expected `state changed` action Debug values, in order, for
-/// `SCENARIO_ACTIONS` (the `quit` action produces no state change). Matched as a
-/// prefix, so bump variants like `BumpThickness(8)` match a `BumpThickness` entry.
+/// Expected `state changed` action values, in order, for `SCENARIO_ACTIONS`
+/// (`quit` produces no state change). Prefix-matched, so `BumpThickness(8)`
+/// matches a `BumpThickness` entry.
 #[cfg(any(target_os = "windows", test))]
 const SCENARIO_EXPECTED: &[&str] = &["ToggleOnOff", "CycleMode", "CycleEffect"];
 
@@ -134,8 +117,7 @@ fn state_changed_actions(events_body: &str) -> Vec<String> {
         .collect()
 }
 
-/// Pull the `"action":"…"` value out of a JSON line by substring (no JSON dep,
-/// same spirit as the Tier 0/1 gates).
+/// Pull the `"action":"…"` value out of a JSON line by substring (no JSON dep).
 #[cfg(any(target_os = "windows", test))]
 fn extract_field_action(line: &str) -> Option<String> {
     let key = r#""action":""#;
@@ -224,7 +206,7 @@ mod win {
         }
 
         // Pre-clean stale events / crash dumps so a previous run can't produce a
-        // false verdict (CI does the same before the smoke step).
+        // false verdict (matches CI before the smoke step).
         if !keep_logs {
             clean_artifacts(&profile_dir);
         }
@@ -247,17 +229,16 @@ mod win {
 
         println!("=== verify: {} {} ===", exe.display(), run_args.join(" "));
 
-        // Spawn from Rust: `Command::status()` returns the true Windows exit
-        // code, sidestepping the MSYS2 "exit 127" illusion for GUI-subsystem
-        // binaries. Blocks until the AutoQuitTimer fires the graceful quit.
+        // `Command::status()` returns the true Windows exit code, sidestepping
+        // the MSYS2 "exit 127" illusion for GUI-subsystem binaries. Blocks until
+        // the AutoQuitTimer fires the graceful quit.
         let status = Command::new(&exe)
             .args(&run_args)
             .status()
             .with_context(|| format!("spawning {}", exe.display()))?;
         let exit_code = status.code();
 
-        // Pick the latest events.jsonl.<date> by mtime (same selection as
-        // `diagnostics --recent-events`).
+        // Latest `events.jsonl.<date>` by mtime (matches `diagnostics --recent-events`).
         let events_path = latest_events_file(&profile_dir);
         let events_body = match &events_path {
             Some(p) => Some(
@@ -286,10 +267,9 @@ mod win {
     }
 
     /// Tier 2: launch the overlay, drive a scripted Ctrl+Alt chord sequence via
-    /// the `inject_chords` example (`SendInput`), then assert the resulting
-    /// `state changed` series on top of the Tier 0/1 health gates. This is the
-    /// one path Docker/Linux can't run — synthetic input must reach a real,
-    /// interactive desktop session.
+    /// the `inject_chords` example, then assert the `state changed` series on top
+    /// of the Tier 0/1 health gates. Synthetic input needs a real interactive
+    /// desktop, so Docker/Linux can't run this.
     fn run_scenario(profile_dir: &Path, exe: &Path, duration_ms: u64, strict: bool) -> Result<()> {
         let injector = profile_dir.join("examples").join("inject_chords.exe");
         if !injector.exists() {
@@ -312,7 +292,7 @@ mod win {
             .with_context(|| format!("spawning {}", exe.display()))?;
 
         // Don't inject until the message loop is up: RegisterHotKey runs just
-        // before the pump, so earlier chords are simply lost.
+        // before the pump, so earlier chords are lost.
         if let Err(e) = wait_for_message_loop(profile_dir, Duration::from_secs(15)) {
             let _ = child.kill();
             let _ = child.wait();
@@ -332,8 +312,8 @@ mod win {
             anyhow::bail!("injector exited with {:?}", injected.code());
         }
 
-        // The injected Ctrl+Alt+Q quits the overlay; wait for it (the
-        // duration-ms safety net bounds this if a chord was dropped).
+        // Injected Ctrl+Alt+Q quits the overlay; the duration-ms safety net
+        // bounds this if a chord was dropped.
         let exit_code = child.wait().context("waiting for overlay exit")?.code();
 
         let events_path = latest_events_file(profile_dir);
@@ -526,10 +506,9 @@ mod tests {
 
     #[test]
     fn every_verdict_carries_a_nonempty_reason() {
-        // Reads the String payload of all three variants. On a non-Windows test
-        // build the production reader (`win::run`) is cfg'd out, so without this
-        // the fields are "never read" (dead_code); it also pins the contract
-        // that every verdict explains itself.
+        // Reads every variant's String payload: on non-Windows the production
+        // reader (`win::run`) is cfg'd out, so without this the fields are
+        // dead_code. Also pins that every verdict explains itself.
         for v in [
             judge(None, false, Some(0), false),
             judge(Some(CLEAN), false, Some(0), false),

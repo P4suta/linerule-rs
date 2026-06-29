@@ -1,11 +1,8 @@
 //! Color types and perceptual brightness curves.
 //!
-//! Submodules:
-//! - [`rgba`]: 8-bit sRGB color with straight alpha.
-//! - [`perceptual`]: gamma-2.2 and CIE L\* curves used when mapping a stored
-//!   linear opacity to its on-screen alpha byte.
-//! - [`units`]: bounded numeric newtypes ([`Opacity`], [`DimLevel`],
-//!   [`Thickness`], [`BlurAmount`]).
+//! [`perceptual`] maps a stored linear opacity to its on-screen alpha byte
+//! (gamma-2.2, CIE L\*); [`rgba`] is 8-bit sRGB with straight alpha; [`units`]
+//! holds bounded numeric newtypes.
 
 pub mod perceptual;
 pub mod rgba;

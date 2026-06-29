@@ -26,18 +26,13 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     /// Start the overlay (default).
     Run {
-        /// Auto-quit after the given milliseconds. Exits gracefully via
-        /// `PostQuitMessage`, like a hotkey quit. Omit to run until a hotkey
-        /// quit.
+        /// Auto-quit after N ms via `PostQuitMessage`; omit to run until hotkey quit.
         #[arg(long, value_name = "MILLIS")]
         duration_ms: Option<u64>,
-        /// Override the initial overlay mode. Default is `Off` (a slit appears
-        /// only after pressing Ctrl+Alt+H). Pass `horizontal` to exercise the
-        /// slit render path from startup.
+        /// Override the initial overlay mode (default `Off`).
         #[arg(long, value_enum, value_name = "MODE")]
         initial_mode: Option<InitialMode>,
-        /// Override the initial surround effect. Default is `Dim` (`DimBlack`).
-        /// Pass `blur` to exercise the backdrop-blur path from startup.
+        /// Override the initial surround effect (default `Dim`/`DimBlack`).
         #[arg(long, value_enum, value_name = "EFFECT")]
         initial_effect: Option<InitialEffect>,
     },
@@ -60,8 +55,7 @@ pub(crate) enum Command {
     Version,
 }
 
-/// Values for `--initial-mode`. Maps to `linerule_core::state::Mode`; defined
-/// here as an app-layer boundary type to keep linerule-core off clap.
+/// `--initial-mode` value; boundary type for `linerule_core::Mode` to keep linerule-core off clap.
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 #[clap(rename_all = "lowercase")]
 pub(crate) enum InitialMode {
@@ -84,9 +78,7 @@ impl From<InitialMode> for linerule_core::Mode {
     }
 }
 
-/// Values for `--initial-effect`. Maps to
-/// `linerule_core::state::SurroundEffect`; app-layer boundary type to keep
-/// linerule-core off clap.
+/// `--initial-effect` value; boundary type for `linerule_core::SurroundEffect` to keep linerule-core off clap.
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 #[clap(rename_all = "lowercase")]
 pub(crate) enum InitialEffect {

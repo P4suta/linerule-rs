@@ -1,41 +1,33 @@
 //! Coordinate-space-tagged geometry types.
 //!
-//! The phantom marker [`Logical`] / [`Physical`] guarantees that a
-//! `Point<Logical>` cannot be silently passed to a function expecting a
-//! `Point<Physical>` — the whole rendering pipeline operates in logical
-//! pixels and the conversion to physical happens at the GPU boundary in
-//! `linerule-platform-windows`.
+//! The phantom [`Logical`] / [`Physical`] marker stops a `Point<Logical>` being
+//! passed where `Point<Physical>` is expected; conversion happens at the GPU
+//! boundary in `linerule-platform-windows`.
 
 use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
 
-/// Sealing module: only the markers in this file may implement [`CoordSpace`].
+/// Seals [`CoordSpace`] to the markers in this file.
 mod sealed {
-    /// Sealing trait. Cannot be implemented outside `linerule_core::geometry`.
+    /// Sealing trait; not implementable outside this module.
     pub trait Sealed {}
 }
 
 /// Sealed marker trait for coordinate spaces.
 ///
-/// Only [`Logical`] and [`Physical`] satisfy it; downstream crates have no
-/// reason to implement it and are prevented from doing so by the
-/// `sealed::Sealed` supertrait.
-///
-/// The `Copy + Eq + Hash` supertraits let derives on `Point<S>` and
-/// `ScreenRect<S>` propagate cleanly through generic impl blocks (otherwise
-/// `S: CoordSpace` alone wouldn't satisfy the derive-emitted bounds).
+/// Only [`Logical`] and [`Physical`] satisfy it. The `Copy + Eq + Hash`
+/// supertraits satisfy the derive-emitted bounds on `Point<S>`/`ScreenRect<S>`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a coordinate space. Use `Logical` or `Physical`.",
     note = "`CoordSpace` is sealed; only types defined in `linerule_core::geometry` implement it."
 )]
 pub trait CoordSpace: sealed::Sealed + Copy + std::hash::Hash + std::cmp::Eq + 'static {
-    /// Short tag emitted by structured logging (`"logical"` / `"physical"`).
+    /// Logging tag (`"logical"` / `"physical"`).
     const NAME: &'static str;
 }
 
-/// Logical pixels — the units the user, the config file, and the FSM all
-/// reason in. DPI-independent.
+/// Logical (DPI-independent) pixels; the units of the config and FSM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Logical;
 impl sealed::Sealed for Logical {}
@@ -43,8 +35,7 @@ impl CoordSpace for Logical {
     const NAME: &'static str = "logical";
 }
 
-/// Physical (device) pixels — only `linerule-platform-windows` uses these,
-/// at the boundary where a `Point<Logical>` is multiplied by DPI scale.
+/// Physical (device) pixels; logical multiplied by DPI scale at the GPU boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Physical;
 impl sealed::Sealed for Physical {}
@@ -74,8 +65,7 @@ impl<S: CoordSpace> Point<S> {
     }
 }
 
-// `PhantomData<fn() -> S>` makes `#[derive(Serialize)]` skip the field, so we
-// implement Serialize manually and emit a `"space"` tag for log readability.
+// Manual Serialize (derive skips PhantomData) so logs carry a `"space"` tag.
 
 impl<S: CoordSpace> Serialize for Point<S> {
     fn serialize<Ser: serde::Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {

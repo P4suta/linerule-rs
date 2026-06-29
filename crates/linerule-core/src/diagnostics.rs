@@ -1,12 +1,7 @@
-//! Structured error and event types used by `linerule-core`.
+//! Structured error and event types for `linerule-core`.
 //!
-//! - [`CoreError`] is the only error returned from boundary validators inside
-//!   this crate (`try_new` constructors).
-//! - [`LineruleError`] is the crate's aggregate error, unifying every error
-//!   shape that travels through `?` from core to the app boundary. Use
-//!   [`crate::Result`] as the canonical `Result<T, LineruleError>`.
-//! - [`Severity`] is the diagnostic level lattice, parallel to
-//!   [`tracing::Level`].
+//! [`LineruleError`] is the crate's aggregate error (`crate::Result`);
+//! [`Severity`] parallels [`tracing::Level`].
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -32,11 +27,7 @@ pub enum CoreError {
     },
 }
 
-/// Aggregate error for `linerule-core`.
-///
-/// Anything that can fail in core converts into one of these variants via
-/// `#[from]`, so the app boundary can use a single `?` chain across the
-/// whole stack.
+/// Aggregate error for `linerule-core`; variants convert via `#[from]`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Error)]
 pub enum LineruleError {
     /// Boundary-validator failure (`Opacity` / `Thickness` `try_new`).
@@ -47,31 +38,21 @@ pub enum LineruleError {
     Chord(#[from] ChordError),
 }
 
-/// Recovery class for errors. Independent from [`Severity`] which is a logging
-/// level lattice; this captures *how the app should react* to a failure.
-///
-/// `Severity` answers "how loud should this log line be?" while `ErrorClass`
-/// answers "should the app continue, exit, or treat this as a programming bug?".
-/// Both axes are orthogonal — e.g. a `Recoverable` failure can be logged at
-/// `Warn`, and a `Fatal` panic at `Error`.
+/// Recovery class for errors: how the app should react. Orthogonal to
+/// [`Severity`] (log level).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorClass {
-    /// Recoverable via log + fallback (e.g. hotkey conflict, chord parse
-    /// failure, transient network loss). Candidate for a HUD toast.
+    /// Recoverable via log + fallback; candidate for a HUD toast.
     Recoverable,
-    /// Requires process exit + crash report (e.g. HWND creation or D3D11 init
-    /// failure). Propagated via `?` to `main`, converted to anyhow, exit code 1.
+    /// Requires process exit + crash report; propagated to `main`, exit code 1.
     Fatal,
-    /// An invariant violation that should be a panic, but rode `?` past a
-    /// boundary (e.g. a static `Opacity::try_new(0)` bug). Not treated as
-    /// recoverable; debug builds may catch it via `debug_assert!`.
+    /// Invariant violation that should be a panic but rode `?` past a boundary.
     ProgrammerError,
 }
 
 impl CoreError {
-    /// Recovery class. `try_new` boundary-validation failures are static
-    /// programmer errors, so this returns [`ErrorClass::ProgrammerError`].
+    /// Recovery class; always [`ErrorClass::ProgrammerError`].
     #[must_use]
     pub const fn class(self) -> ErrorClass {
         match self {
@@ -81,8 +62,7 @@ impl CoreError {
 }
 
 impl ChordError {
-    /// Every `ChordError` variant comes from user config / runtime input, so
-    /// all are [`ErrorClass::Recoverable`] (show in HUD, skip, continue).
+    /// Recovery class; always [`ErrorClass::Recoverable`] (user input).
     #[must_use]
     #[allow(
         clippy::unused_self,
@@ -98,7 +78,6 @@ impl LineruleError {
     #[must_use]
     pub const fn class(&self) -> ErrorClass {
         match self {
-            // `CoreError: Copy`, so the deref-copy `*e` is fine.
             Self::Core(e) => (*e).class(),
             Self::Chord(e) => e.class(),
         }
@@ -107,10 +86,7 @@ impl LineruleError {
 
 /// Severity lattice for diagnostic events.
 ///
-/// Matches the standard [`tracing::Level`] ordering (`Error < Warn < Info <
-/// Debug < Trace`) so a target-level filter on tracing immediately
-/// corresponds to a `Severity` cutoff. Use `Level::from(severity)` for the
-/// standard conversion.
+/// Ordered `Error < Warn < Info < Debug < Trace`, matching [`tracing::Level`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
@@ -147,8 +123,7 @@ impl From<Severity> for Level {
 /// - `D2DERR_RECREATE_TARGET` (0x8899000C): D2D render target lost
 #[must_use]
 pub const fn is_device_lost_hresult(hr: i32) -> bool {
-    // HRESULT is a signed 32-bit code; the literals exceed i32 range, so compare
-    // as u32 bit patterns.
+    // Literals exceed i32 range; compare as u32 bit patterns.
     #[allow(
         clippy::cast_sign_loss,
         reason = "u32 bit-pattern comparison, not a value-domain conversion"
@@ -160,8 +135,7 @@ pub const fn is_device_lost_hresult(hr: i32) -> bool {
     )
 }
 
-/// Outcome of `record_device_lost_failure`. `Retry` rebuilds and retries once,
-/// storing the new counter; `Quit` requests app shutdown.
+/// Outcome of `record_device_lost_failure`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeviceLostOutcome {
     /// Retry, carrying the new consecutive-failure count (`prev + 1`).

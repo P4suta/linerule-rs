@@ -11,7 +11,7 @@ linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
 [target.x86_64-pc-windows-msvc]
-# cargo-xwin が自動補完するため空。必要に応じて linker を上書き。
+# Empty; cargo-xwin fills this in. Override linker if needed.
 
 [term]
 color = "auto"

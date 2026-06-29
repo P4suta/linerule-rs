@@ -1,8 +1,5 @@
-//! Renderer that draws a `HudFrame` to a WinRT `CompositionDrawingSurface` via
-//! DWrite.
-//!
-//! Text drawing reuses `dwrite::draw_hud_rows`; only the surface is WinRT.
-//! Cursor-distance fade is applied via the SpriteVisual's opacity.
+//! Draws a `HudFrame` to a WinRT `CompositionDrawingSurface` via DWrite.
+//! Text reuses `dwrite::draw_hud_rows`; fade is the SpriteVisual's opacity.
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
@@ -123,8 +120,7 @@ impl WinrtHudRenderer {
             })
             .collect();
 
-        // Rules (divider lines etc.) translate to surface-local coordinates
-        // the same way as the rows.
+        // Rules translate to surface-local coords like the rows.
         let rules: Vec<dwrite::HudDrawRule> = frame
             .rules
             .iter()
@@ -142,8 +138,7 @@ impl WinrtHudRenderer {
                 }
             })
             .collect();
-        // The background fills the whole surface as a rounded panel; the area
-        // outside the corners stays transparent.
+        // Rounded panel filling the surface; outside corners stays transparent.
         let panel = D2D_RECT_F {
             left: 0.0,
             top: 0.0,

@@ -1,7 +1,5 @@
 //! Integration: tick pipeline state machine over multi-action sequences.
-//!
-//! The pure pipeline runs in user space — no clock, no OS — so we can step
-//! it deterministically with crafted `TickInput`s and observe effect lists.
+//! Pure pipeline (no clock/OS) stepped deterministically via crafted `TickInput`s.
 
 use std::time::Duration;
 

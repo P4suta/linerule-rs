@@ -61,7 +61,7 @@ pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 cargo = { level = "warn", priority = -1 }
 
-# 美しさのため明示昇格
+# Explicit promotions for cleanliness
 wildcard_imports = "deny"
 mod_module_files = "deny"
 or_fun_call = "deny"
@@ -73,15 +73,15 @@ unimplemented = "warn"
 dbg_macro = "deny"
 print_stdout = "warn"
 print_stderr = "warn"
-allow_attributes_without_reason = "deny" # `#[allow]` には reason 必須
-disallowed_macros = "deny"               # clippy.toml で禁止リスト
-disallowed_types = "deny"                # clippy.toml で禁止リスト
+allow_attributes_without_reason = "deny" # `#[allow]` requires a reason
+disallowed_macros = "deny"               # denylist in clippy.toml
+disallowed_types = "deny"                # denylist in clippy.toml
 disallowed_methods = "deny"
 
-# 例外（lint そのものの設計と本プロジェクトの方針が噛み合わないもの）
-module_name_repetitions = "allow" # `OverlayConfig` 等の自然な命名と衝突
-multiple_crate_versions = "allow" # 依存推移グラフ次第、本プロジェクトでは制御不能
-cargo_common_metadata = "allow"   # 内部 publish=false のため
+# Exceptions (lints whose design conflicts with this project's policy)
+module_name_repetitions = "allow" # clashes with natural names like `OverlayConfig`
+multiple_crate_versions = "allow" # depends on the transitive graph, uncontrollable here
+cargo_common_metadata = "allow"   # internal, publish=false
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -90,8 +90,8 @@ elided_lifetimes_in_paths = "warn"
 single_use_lifetimes = "warn"
 trivial_casts = "warn"
 trivial_numeric_casts = "warn"
-static_mut_refs = "deny"           # `static mut` 経由参照を禁止
-missing_docs = "warn"              # 全 public item に doc 必須 (CI -D warnings 下で実質 deny)
+static_mut_refs = "deny"           # forbid references through `static mut`
+missing_docs = "warn"              # doc required on every public item (effectively deny under CI -D warnings)
 
 [profile.release]
 lto = "fat"
@@ -105,7 +105,7 @@ overflow-checks = false
 opt-level = 0
 debug = "full"
 
-# 速い CI チェック用
+# For fast CI checks
 [profile.ci]
 inherits = "dev"
 debug = "line-tables-only"

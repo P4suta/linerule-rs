@@ -1,10 +1,6 @@
-//! Fixed-window tracker for tick latency and dropped frames. Feeds HUD
-//! telemetry as `HudTelemetry { tick_p99_ms, frames_dropped, commit_timeouts }`.
-//!
-//! - Window is 256 frames (~4s @ 60Hz, ~1.8s @ 144Hz); O(1) via `VecDeque`.
-//! - p99 sorts a copy at `snapshot()` time (called ~every 200ms, not per tick).
-//! - Callers pass elapsed `Duration` so the module stays pure and unit-testable.
-//! - `frames_dropped` / `commit_timeouts` are monotonic; never reset.
+//! Fixed-window (256-frame) tracker feeding HUD `HudTelemetry`.
+//! Callers pass elapsed `Duration` (keeps module pure); p99 sorts a copy at
+//! `snapshot()` time. `frames_dropped` / `commit_timeouts` are monotonic.
 
 #![forbid(unsafe_code)]
 
@@ -13,11 +9,10 @@ use std::time::Duration;
 
 use linerule_core::HudTelemetry;
 
-/// p99 sample window size. 256 frames ~= 4s @ 60Hz, ~= 1.8s @ 144Hz.
+/// p99 window size; 256 frames ~= 4s @ 60Hz, ~= 1.8s @ 144Hz.
 const WINDOW_CAPACITY: usize = 256;
 
-/// Rolling tracker for HUD telemetry: `record_tick` per frame, `snapshot` to
-/// produce [`HudTelemetry`].
+/// Rolling HUD telemetry tracker: `record_tick` per frame, `snapshot` to read.
 #[derive(Debug)]
 pub struct FrameTimingTracker {
     /// Fixed-window samples of per-tick elapsed time.
@@ -41,8 +36,8 @@ impl FrameTimingTracker {
         }
     }
 
-    /// Append one tick's elapsed time; bump the drop counter if over budget.
-    /// The caller decides `over_budget`; this module does not know the budget.
+    /// Append one tick's elapsed time; bump drop counter if over budget.
+    /// Caller decides `over_budget`; this module does not know the budget.
     pub fn record_tick(&mut self, elapsed: Duration, over_budget: bool) {
         if self.samples.len() >= WINDOW_CAPACITY {
             self.samples.pop_front();
@@ -53,14 +48,13 @@ impl FrameTimingTracker {
         }
     }
 
-    /// Record one composition commit failure/timeout. WinRT auto-commits via
-    /// the DispatcherQueue, so currently this has no callers (telemetry stays 0).
+    /// Record one composition commit failure/timeout. No callers yet: WinRT
+    /// auto-commits via the DispatcherQueue, so telemetry stays 0.
     pub fn record_timeout(&mut self) {
         self.commit_timeouts = self.commit_timeouts.saturating_add(1);
     }
 
-    /// Snapshot for the HUD. `tick_p99_ms` is the window's 99th percentile,
-    /// or 0.0 with no samples.
+    /// Snapshot for the HUD; `tick_p99_ms` is the window p99, 0.0 if empty.
     #[must_use]
     pub fn snapshot(&self) -> HudTelemetry {
         HudTelemetry {

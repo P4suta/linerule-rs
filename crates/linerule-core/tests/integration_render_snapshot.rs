@@ -1,12 +1,5 @@
-//! Integration: golden snapshots of `frame()` output via `insta`.
-//!
-//! These act as a regression guard against silent behavioral drift in
-//! the layer geometry. If anyone changes `split_around`, `band`, indicator
-//! placement, or the perceptual byte conversion, the YAML diff is the
-//! signal — `cargo insta accept` to confirm intentional changes.
-//!
-//! All snapshots use the settled sample (`OverlaySample::settled`), pinning
-//! the invariant that transitions never change where a settled frame lands.
+//! Golden `insta` snapshots of `frame()` output; guards layer-geometry drift.
+//! All use the settled sample, pinning that transitions don't move a settled frame.
 
 use linerule_core::{
     Mode, OverlayConfig, OverlayFrame, OverlaySample, Point, ScreenRect, SurroundEffect, frame,
@@ -78,16 +71,14 @@ fn snapshot_vertical_right_edge() {
 
 #[test]
 fn snapshot_horizontal_negative_cursor() {
-    // Cursor sample arrived outside monitor bounds (rare but observed on
-    // multi-monitor setups). The frame must still be well-formed.
+    // Cursor outside monitor bounds (seen on multi-monitor); frame must stay well-formed.
     let f = settled_frame(Mode::Horizontal, Point::new(-50, -50));
     insta::assert_debug_snapshot!(f);
 }
 
 #[test]
 fn snapshot_white_wash_horizontal_center() {
-    // White-wash surround: the dim halves carry white RGB. Geometry is
-    // identical to the dim-black case; only the brush colors differ.
+    // White-wash: dim halves carry white RGB; geometry same as dim-black.
     let config = OverlayConfig {
         effect: SurroundEffect::WhiteWash,
         ..OverlayConfig::DEFAULT
@@ -98,8 +89,7 @@ fn snapshot_white_wash_horizontal_center() {
 
 #[test]
 fn snapshot_blur_horizontal_center() {
-    // Blur surround: the before/after bands carry a `Brush::Blur` (pure
-    // backdrop blur, no veil). Geometry matches dim-black.
+    // Blur: bands carry `Brush::Blur` (no veil); geometry matches dim-black.
     let config = OverlayConfig {
         effect: SurroundEffect::Blur,
         ..OverlayConfig::DEFAULT

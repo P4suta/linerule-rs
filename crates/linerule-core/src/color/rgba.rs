@@ -16,8 +16,7 @@ pub struct Rgba {
 }
 
 impl Rgba {
-    /// Default overlay mask: opaque-black at ~80% alpha. Straight alpha; the
-    /// platform layer converts to premultiplied at the GPU boundary.
+    /// Default overlay mask: black at ~80% straight alpha (premultiplied at the GPU boundary).
     pub const DEFAULT_MASK: Self = Self::new(0x00, 0x00, 0x00, 0xCC);
 
     /// Fully transparent (all channels zero).
@@ -64,7 +63,6 @@ mod tests {
         let c = Rgba::new(0x12, 0x34, 0x56, 0x78);
         let d = c.with_alpha(0xFF);
         assert_eq!(d, Rgba::new(0x12, 0x34, 0x56, 0xFF));
-        // Original is unchanged (Copy).
         assert_eq!(c.a, 0x78);
     }
 }

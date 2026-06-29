@@ -1,22 +1,10 @@
-# tag push (`vX.Y.Z`) を起点に Windows EXE + CycloneDX SBOM を build し、
-# GitHub Release を **draft 状態で新規作成** → asset upload → publish の
-# 3-step で attach する。
-#
-# GitHub の immutable release 機能 (2025-10-28 GA) は publish 済み release への
-# 後付け asset を 422 で禁止する。一方 draft release は mutable なので、
-# 「draft 中に upload 全部 → 最後に publish (draft=false)」が公式推奨の唯一の
-# 自動化ルート。詳細は ADR-0014 (旧 ADR-0010 を supersede)。
-#
-# Trigger:
-#   - push: tags: ["v*"]              # release-please が `skip-github-release: true`
-#                                     # で push する tag に反応する
-#   - workflow_dispatch (inputs.tag)  # 失敗時の手動 retry。draft が残っていれば
-#                                     # `--clobber` で冪等に再アップロードできるが、
-#                                     # publish 済み release では 422 で fail する。
-#
-# release-please workflow (`release-please.yml`) は CHANGELOG / version bump /
-# tag push までを担当し、GitHub Release は本 workflow が draft → publish する。
-# `release-please-config.json` の `skip-github-release: true` で連携。
+# On tag push, build the Windows EXE + CycloneDX SBOM and attach them via a
+# 3-step draft release -> upload -> publish flow.
+# Immutable releases reject (422) adding assets to a published release, so
+# "upload everything while draft, then publish last" is the only automatable
+# path (ADR-0014).
+# release-please owns CHANGELOG / version / tag push (`skip-github-release:
+# true`); this workflow does the release attach.
 
 name: release-assets
 
@@ -26,11 +14,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to (re)build assets for (e.g. v0.4.1)"
+        description: "Release tag to (re)build assets for (e.g. v0.4.1)" # manual retry on failure
         required: true
 
 permissions:
-  contents: write # gh release create / upload / edit に必要
+  contents: write # needed for gh release create / upload / edit
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,12 +29,8 @@ jobs:
     name: build EXE + SBOM, draft release, upload, publish
     runs-on: windows-latest
     timeout-minutes: 30
-    # Gated behind the `release` GitHub Environment: a pushed `v*` tag
-    # (release-please) or a manual dispatch pauses for required-reviewer
-    # approval before the EXE is built and the GitHub Release is
-    # published. The environment also restricts deployments to `main` +
-    # `v*` refs. Only the ephemeral GITHUB_TOKEN is used here — the gate
-    # adds a human checkpoint before a release goes public.
+    # Gated behind the `release` Environment: required-reviewer approval +
+    # ref restricted to `main`/`v*` before a release goes public.
     environment: release
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -66,9 +50,7 @@ jobs:
         shell: pwsh
         run: |-
           $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # 1 binary 配布 (Phase J、ADR-0011) のため linerule-app の依存閉包のみを
-          # 対象にする。CycloneDX 1.6 JSON は GitHub Dependency Submission /
-          # SBOM scanner 全般で受理される。
+          # Single-binary distribution (ADR-0011): only linerule-app's dependency closure.
           cargo sbom --output-format=cyclone_dx_json_1_6 --cargo-package linerule-app `
             > "linerule-${tag}-sbom.cdx.json"
 
@@ -84,11 +66,7 @@ jobs:
         shell: pwsh
         run: |-
           $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # 既に draft が残っている (前回 publish 直前で失敗 / workflow_dispatch
-          # 再実行) なら再利用、無ければ新規作成。release-please の CHANGELOG
-          # 同期 commit を踏まえて `--generate-notes` が PR タイトル一覧から
-          # release notes を auto 生成する。release-please の changelog 形式
-          # とは別物だが core 情報 (PR 番号 + タイトル) は同じ。
+          # Reuse a leftover draft, else create one. Fail if already published, to avoid the 422.
           $existing = gh release view $tag --json isDraft --jq '.isDraft' 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag --draft --title "$tag" --generate-notes
@@ -105,7 +83,7 @@ jobs:
         shell: pwsh
         run: |-
           $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # `--clobber` で 2 回目以降の upload を冪等にする (manual retry 対策)。
+          # `--clobber` makes re-upload idempotent (for manual retry).
           gh release upload $tag `
             "linerule-${tag}-win-x64.exe" `
             "linerule-${tag}-sbom.cdx.json" `
@@ -117,5 +95,5 @@ jobs:
         shell: pwsh
         run: |-
           $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # この瞬間に immutable lock が掛かる。以降の asset 追加は 422 で禁止。
+          # Publishing locks it immutable; any later asset add returns 422.
           gh release edit $tag --draft=false --latest

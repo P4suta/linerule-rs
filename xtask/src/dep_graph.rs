@@ -1,9 +1,5 @@
-//! Asserts the one-way internal dependency graph:
-//! `linerule-app → linerule-platform-windows → linerule-core`.
-//!
-//! Any internal (path) dependency outside this DAG is a violation. Reverse
-//! edges, peer-to-peer edges between leaves, and `linerule-core` pulling on a
-//! sibling are all caught here.
+//! Asserts the one-way internal DAG `linerule-app → linerule-platform-windows
+//! → linerule-core`; any path dependency outside it is a violation.
 
 use std::collections::{BTreeMap, BTreeSet};
 

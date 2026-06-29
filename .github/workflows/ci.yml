@@ -1,15 +1,12 @@
 # linerule-rs CI.
 #
 # Policy:
-#   - CI itself has no `on: schedule`. `nightly.yml` is the one deliberate
-#     scheduled workflow (unsigned nightly artifact; see ADR-0018); Dependabot
-#     is the only other scheduled job.
-#   - Every action is SHA-pinned; Dependabot bumps weekly.
-#   - Cross-platform jobs run on ubuntu-latest; Windows-native build /
-#     test runs on windows-latest because the platform crate is `#![cfg(windows)]`.
-#   - Coverage is reported, not gated at 100%.
-#   - `Swatinem/rust-cache` is used in place of raw `actions/cache` for cargo
-#     state — it knows the right keys for `target/`, registry, and indexes.
+#   - No `on: schedule` here; `nightly.yml` is the one scheduled workflow (ADR-0018).
+#   - Actions SHA-pinned; Dependabot bumps weekly.
+#   - Cross-platform jobs on ubuntu-latest; Windows-native build/test on
+#     windows-latest (platform crate is `#![cfg(windows)]`).
+#   - Coverage reported, not gated at 100%.
+#   - `Swatinem/rust-cache` over raw `actions/cache` for cargo state.
 
 name: ci
 
@@ -17,8 +14,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Merge queue: every required check must report on the `merge_group`
-  # event, otherwise the queue waits forever and the merge fails.
+  # Every required check must report on `merge_group` or the queue stalls.
   merge_group:
   workflow_dispatch:
 
@@ -75,9 +71,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # clang backend = single 283 MB tarball from
-      # trcrsired/windows-msvc-sysroot (~25 s) vs clang-cl streaming
-      # 500 MB of MSVC shards from microsoft.com (~7 min).
+      # clang backend: single ~283 MB sysroot tarball (~25s) vs clang-cl
+      # streaming ~500 MB of MSVC shards (~7 min).
       XWIN_CROSS_COMPILER: clang
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -85,18 +80,14 @@ jobs:
       - uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
         with:
           tool: cargo-xwin
-      # Cache the unpacked sysroot so the second run skips even the 25 s
-      # tarball fetch. cargo-xwin v0.18+ stores it under
-      # ~/.cache/cargo-xwin/windows-msvc-sysroot/. Bump the key when
-      # upstream trcrsired/windows-msvc-sysroot publishes a major schema
-      # change.
+      # Cache unpacked sysroot so re-runs skip the 25s fetch. cargo-xwin v0.18+
+      # stores it under ~/.cache/cargo-xwin/. Bump key on upstream schema change.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-clang-sysroot-${{ runner.os }}
       - run: rustup target add x86_64-pc-windows-msvc
-      # `--all-targets` で examples / tests / benches も対象にし、Windows
-      # native CI (`cargo build --workspace --all-targets`) と検出範囲を揃える。
+      # `--all-targets` covers examples/tests/benches, matching Windows native CI's detection scope.
       - run: cargo xwin check --workspace --all-targets --target x86_64-pc-windows-msvc
 
   release-build:
@@ -107,15 +98,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: cargo build --release -p linerule-app
-      # P2-4: native smoke. The binary built above must actually start and
-      # respond to subcommands — bare-minimum "did clap parsing survive?"
-      # gate. Run hits stdout + exit code; we don't try to invoke `run` here
-      # because it blocks on the message pump.
-      #
-      # `linerule.exe` is `windows_subsystem = "windows"` (GUI), so pwsh's
-      # native call (`& $exe …`) returns immediately and `$LASTEXITCODE` is
-      # never populated. `Start-Process -Wait -PassThru` actually blocks
-      # until the process exits and exposes `ExitCode`.
+      # Native smoke: built binary must start and respond to subcommands (clap
+      # parse gate). linerule.exe is `windows_subsystem = "windows"` (GUI), so
+      # pwsh `& $exe` returns immediately and never sets `$LASTEXITCODE`;
+      # `Start-Process -Wait -PassThru` blocks and exposes `ExitCode`.
       - name: smoke - linerule.exe version
         shell: pwsh
         run: |
@@ -134,21 +120,16 @@ jobs:
             Write-Host "::error::linerule.exe diagnostics --dry-run exited with $($proc.ExitCode)"
             exit 1
           }
-      # P0 / Phase α: GUI smoke. Lifted into `cargo xtask verify` so CI and the
-      # local `just verify-blur` share one verdict implementation
-      # (xtask/src/verify.rs). Builds the release exe above, launches the real
-      # overlay for 3s via --duration-ms seeded into Horizontal + Blur (exercises
-      # the WinRT backdrop-blur COM path from startup), then judges events.jsonl:
-      # no `level":"ERROR"` / `tick processing failed` / crash dump, and a clean
-      # `Win32 message loop exited` (the known headless 0xE0464645 teardown
-      # artifact is tolerated; real hardware exits 0). Dynamically blocks the
-      # Phase I bug class (E_NOINTERFACE / D2D WRONG_STATE / missing commit /
-      # missing ShowWindow) the same way the old inline pwsh verdict did.
+      # GUI smoke via `cargo xtask verify` (shared with `just verify-blur`):
+      # launches the real overlay 3s in Horizontal+Blur (exercises WinRT
+      # backdrop-blur COM path), then judges events.jsonl — no ERROR / tick
+      # failure / crash dump, clean message-loop exit (headless 0xE0464645
+      # teardown tolerated). Blocks E_NOINTERFACE / D2D WRONG_STATE / missing
+      # commit / missing ShowWindow.
       - name: smoke - GUI (cargo xtask verify; mirrors local just verify-blur)
         run: cargo xtask verify --profile release --mode horizontal --effect blur
       - name: Upload binary artifact
-        # smoke が crash しても binary は upload する。実機ビルド環境が無くても
-        # この artifact を download して GUI / blur を目視確認できるようにする。
+        # Upload the binary even if smoke crashes (to eyeball GUI/blur without real hardware).
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -197,10 +178,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --exclude linerule-platform-windows -- -D warnings
 
   # Gate `cargo doc -D warnings` on PRs. The `docs` workflow only builds rustdoc
-  # on push-to-main (it also deploys to Pages), so doc-only breakage (e.g. a
-  # public→private intra-doc link) used to slip through PR CI and fail on main.
-  # This job mirrors that workflow's build command exactly, minus the Pages
-  # deploy. Keep the command in sync with `.github/workflows/docs.yml`.
+  # on push-to-main, so doc-only breakage (e.g. public→private intra-doc link)
+  # could slip through PR CI. Keep this command in sync with docs.yml.
   doc:
     name: doc (cargo doc)
     runs-on: ubuntu-latest
@@ -255,12 +234,10 @@ jobs:
       - uses: taiki-e/install-action@bffeee26d4db9be238a4ea78d8826604ebcb594d # v2.82.5
         with:
           tool: cargo-deny
-      # Workaround for upstream rustsec/advisory-db RUSTSEC-2026-0076.md which
-      # wraps its TOML frontmatter in triple-backtick fences and cannot be
-      # parsed by cargo-deny / cargo-audit. cargo-deny v0.18+ names the local
-      # clone `advisory-db-3157b0e258782691` (stable hash, see PR#745). Drop
-      # the malformed file there, then run with `--disable-fetch` so the
-      # next pass doesn't `git pull` the broken file back.
+      # Workaround for rustsec/advisory-db RUSTSEC-2026-0076.md (TOML wrapped in
+      # backtick fences, unparseable by cargo-deny/cargo-audit). cargo-deny v0.18+
+      # clones to advisory-db-3157b0e258782691; drop the bad file, then
+      # `--disable-fetch` so it isn't pulled back.
       - name: Pre-fetch advisory-db (RUSTSEC-2026-0076 workaround)
         run: |
           set -eux
@@ -301,9 +278,8 @@ jobs:
       - run: cargo audit --no-fetch --deny warnings
 
   coverage:
-    # P2-3: required gate. Scope = linerule-core + linerule-app
-    # (linerule-platform-windows is `#![cfg(windows)]` and excluded on the
-    # Linux runner; see docs/adr/0004-coverage-policy.md).
+    # Required gate. Scope = linerule-core + linerule-app (platform-windows is
+    # `#![cfg(windows)]`, excluded on the Linux runner; ADR-0004).
     name: coverage
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -342,17 +318,14 @@ jobs:
         with:
           fail-on-severity: high
           comment-summary-in-pr: true
-          # Don't render OpenSSF Scorecard annotations: most warnings come
-          # from transitive deps we don't control (e.g. vswhom/vswhom-sys
-          # pulled by embed-resource) and the noise drowns out real findings.
+          # Don't render OpenSSF Scorecard annotations: most warnings come from
+          # uncontrolled transitive deps and drown out real findings.
           show-openssf-scorecard: false
 
   conventional-commits:
     name: conventional commits
-    # Runs the real lint on pull_request. On merge_group it runs as a no-op
-    # that reports success: the PR commits were already linted, and the
-    # merge queue only needs this required check to report a result so the
-    # queue does not stall.
+    # Real lint on pull_request; no-op success on merge_group (PR commits already
+    # linted; the queue just needs this required check to report).
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -362,13 +335,10 @@ jobs:
       - uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed # v6.2.1
         if: github.event_name == 'pull_request'
 
-  # Single aggregation gate. Branch/tag protection (the `.github/rulesets/`
-  # JSONs) reference exactly one status context — `ci-required` — instead of
-  # enumerating every job above, so adding/renaming a job never desyncs the
-  # ruleset. `if: always()` so the gate still runs when an upstream job fails;
-  # `skipped` counts as pass, which is what lets PR-only jobs (dependency-review,
-  # conventional-commits) report green on the merge_group / push events where
-  # they don't run — otherwise the merge queue would stall forever. See ADR-0019.
+  # Single aggregation gate. Branch/tag protection (`.github/rulesets/`) reference
+  # one status context — `ci-required` — so adding/renaming a job never desyncs
+  # the ruleset. `if: always()` so it runs when an upstream job fails; `skipped`
+  # counts as pass, letting PR-only jobs report green on merge_group/push. See ADR-0019.
   ci-required:
     name: ci-required
     if: always()

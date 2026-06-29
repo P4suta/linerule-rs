@@ -1,15 +1,5 @@
-//! FFI boundary — the only `unsafe` area in `linerule-platform-windows`.
-//!
-//! Each submodule thinly safe-wraps a Win32 / COM API. Every other file in the
-//! crate is `#![forbid(unsafe_code)]` and touches Win32/COM only through here.
-//!
-//! - [`core`] — Window / message pump / instance state
-//! - [`graphics`] — D3D11 + DXGI + D2D device stack
-//! - [`composition`] — WinRT `Windows.UI.Composition` host (overlay + HUD)
-//! - [`blur_effect`] — backdrop Gaussian-blur effect for the `Blur` surround
-//! - [`hotkey`] — `RegisterHotKey`
-//! - [`pacer`] — `DwmFlush` + `PostMessageW`
-//! - [`dwrite`] — DirectWrite text formats + DrawText
+//! FFI boundary — the only `unsafe` area in the crate; submodules safe-wrap
+//! Win32/COM. Every other file is `#![forbid(unsafe_code)]`.
 
 pub mod core;
 

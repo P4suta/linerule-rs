@@ -1,51 +1,26 @@
-# 0016 — DComp 撤去、WinRT を単一 composition backend に
+# 0016 — Remove DComp, make WinRT the single composition backend
 
-**Status:** Accepted。[[0015-winrt-composition-backend]] の二重 backend 構成を一部 supersede する。
+**Status:** Accepted. Partially supersedes the dual-backend setup of [[0015-winrt-composition-backend]].
 
-**See also:** [[0015-winrt-composition-backend]] (WinRT backend 導入), [[0003-unsafe-isolation]] (`unsafe` を `win32_ffi/` に集約).
+**See also:** [[0015-winrt-composition-backend]], [[0003-unsafe-isolation]].
 
-## 文脈
+## Context
 
-[[0015-winrt-composition-backend]] で WinRT Composition backend を追加したとき、安定性が
-未実証だったため Win32 DirectComposition (DComp) を既定に残し、`LINERULE_COMPOSITOR=winrt`
-で切り替える二重 backend 構成にした。その結果:
+With dual backends (DComp default + `LINERULE_COMPOSITOR=winrt` toggle), `Blur` only produced real blur under WinRT; the default DComp path degraded to a flat tint fill indistinguishable from black dimming. If WinRT works, maintaining the DComp pipeline is not worth it.
 
-- `Blur` は WinRT backend でしか本物のぼかしにならず、既定 (DComp) では `Brush::Blur` が
-  tint (黒) の単色塗りに degrade する。普通に起動したユーザーには `Blur` が黒協調 (`DimBlack`)
-  と区別できず「効いていない」ように見えた。
-- 二重 backend (`OverlayBackend` / `HudBackend` enum 分岐、DComp 用 `composition_renderer.rs`
-  / `hud_renderer.rs` / `graphics.rs` の DComp パイプライン、env 切替) の保守コストが、
-  WinRT が動くなら割に合わない。
+## Decision
 
-## 決定
+Remove the DComp backend and the backend-switching abstraction; use **WinRT `Windows.UI.Composition` alone**. Drop the `LINERULE_COMPOSITOR` env var.
 
-DComp backend と backend 切替の抽象化を撤去し、**WinRT `Windows.UI.Composition` 単一**にする。
-`LINERULE_COMPOSITOR` 環境変数は廃止。
+- Delete: `composition_renderer.rs`, `hud_renderer.rs`, the DComp pipeline in `graphics.rs`, `dwrite.rs::draw_hud_to_surface`, the `Win32_Graphics_DirectComposition` feature of the `windows` crate, and the DComp-related disallowed-methods in `clippy.toml`.
+- Keep only the shared `D2dStack` / `create_d2d_stack` in `graphics.rs`.
+- Shrink `renderer_backend.rs` from enum dispatch to a thin `build_backends(hwnd, hud_config)`. `OverlayWndState` holds the WinRT renderer directly, and device-lost rebuild recreates WinRT directly.
+- With no fallback, WinRT init failure (`attach_compositor`) is a fatal error.
+- Setting `Blur`'s tint to the same opacity as `DimBlack` hides the blur behind the tint and looks black, so `surround_brush` scales the Blur tint alpha to about 1/3 of the perceptual byte (`render.rs::blur_tint_alpha`).
+- Add `--initial-effect {dim|white|blur}` to the CLI and launch the CI GUI smoke with `--initial-effect blur` to exercise the WinRT backdrop-blur COM path headless.
 
-- 削除: `composition_renderer.rs`、`hud_renderer.rs`、`graphics.rs` の DComp パイプライン
-  (`DcompPipeline` / `create_dcomp_pipeline` / 各 `IDComposition*` ヘルパ / `fill_surface` /
-  `commit`)、`dwrite.rs` の `draw_hud_to_surface`、`windows` crate の
-  `Win32_Graphics_DirectComposition` feature、`clippy.toml` の DComp 系 disallowed-methods。
-- `graphics.rs` は共有の `D2dStack` / `create_d2d_stack` (WinRT pipeline が使用) だけ残す。
-- `renderer_backend.rs` は enum 分岐を捨て、薄い `build_backends(hwnd, hud_config)` 構築ヘルパに
-  縮約。`OverlayWndState` は `WinrtCompositionRenderer` / `WinrtHudRenderer` を直接保持し、
-  `compositor_kind` の保持をやめる。device-lost rebuild も WinRT を直接作り直す。
-- フォールバックは無くなったので、WinRT 初期化失敗 (`attach_compositor`) は致命エラーになる。
-- `Blur` の tint は `DimBlack` と同じ不透明度 (既定 perceptual ≈ 85%) だと、ぼかしが濃い tint に
-  隠れてやはり黒に見える。`surround_brush` で Blur の tint アルファを perceptual byte の
-  約 1/3 にスケールし (`render.rs::blur_tint_alpha`、opacity ホットキー連動は維持)、ぼけが
-  透けるようにした。
-- CLI に `--initial-effect {dim|white|blur}` を追加し、CI GUI smoke を `--initial-effect blur`
-  で起動して WinRT backdrop-blur の COM 経路 (effect factory / 自作 interop / backdrop brush /
-  tint sprite) を headless でも exercise する。
+## Consequences
 
-## 結果
-
-- 単一 backend になり enum dispatch と DComp パイプラインが消えた。`Blur` は既定起動で
-  WinRT backdrop blur としてレンダリングされる。
-- リスク: WinRT 初期化に失敗する環境では fallback が無く致命となる。GitHub-hosted Windows
-  runner の headless GUI smoke も WinRT を走らせるため、runner が WinRT composition を
-  作れなければ CI が赤になる (= 検証信号。意図的にスモークを WinRT のまま走らせる)。
-- 検証は Linux では cross-compile (`cargo xwin check`) のみ。実際にぼけが背後をサンプルするか
-  (frosted vs flat tint) は Windows 実機で確認する。単色に見える場合は `LINERULE_BLUR_HOST=1`
-  で `CreateBackdropBrush` ↔ `CreateHostBackdropBrush` を切り替えて切り分ける。
+- Single backend; enum dispatch and the DComp pipeline are gone. `Blur` renders as WinRT backdrop blur by default.
+- Risk: no fallback where WinRT init fails, so it is fatal. If the runner cannot create WinRT composition, the headless GUI smoke turns CI red (intentional verification signal).
+- On Linux only cross-compile (`cargo xwin check`) is possible; whether blur actually samples the background on real hardware is unverified. If it is flat, toggle `LINERULE_BLUR_HOST=1` to switch `CreateBackdropBrush` ↔ `CreateHostBackdropBrush` and isolate the cause.

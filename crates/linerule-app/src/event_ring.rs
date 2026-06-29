@@ -1,18 +1,8 @@
-//! A layer that keeps the last N tracing events in an in-memory ring buffer,
-//! plus an API for the panic hook to read a snapshot.
+//! Ring buffer of the last N tracing events for the panic hook to snapshot into
+//! `crash_dump::CrashRecord::recent_events`.
 //!
-//! Purpose: bundle these into `crash_dump::CrashRecord::recent_events` on panic
-//! so the lead-up can be reconstructed without grepping `events.jsonl`.
-//!
-//! Design notes:
-//! - Global state via `static OnceLock<Mutex<VecDeque<RingEntry>>>` because the
-//!   panic hook (`'static`) must reach it.
-//! - Capacity 256 entries; with `env_filter` set to `warn`+ this is near zero
-//!   in release.
-//! - On lock poisoning during a panic, take the inner via
-//!   `PoisonError::into_inner()`; on other failure return an empty tail so the
-//!   crash dump is still written.
-//! - `RingBufferLayer` is `Send + Sync` via `Mutex + OnceLock`.
+//! Global `static` so the `'static` panic hook can reach it; on lock poisoning
+//! the snapshot takes the inner guard so the crash dump is still written.
 
 #![forbid(unsafe_code)]
 
@@ -24,19 +14,17 @@ use tracing::{Event, Subscriber};
 use tracing_subscriber::field::Visit;
 use tracing_subscriber::layer::{Context, Layer};
 
-/// Ring buffer cap. At ~16ms per frame, 256 entries holds roughly 4s of
-/// context; an `env_filter` of `warn`+ widens the window.
+/// Ring buffer cap; ~16ms/frame means 256 entries holds roughly 4s of context.
 const CAPACITY: usize = 256;
 
-/// Snapshot of one tracing event. `Serialize` so it embeds directly into the
-/// crash dump.
+/// Snapshot of one tracing event.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct RingEntry {
     /// Milliseconds since the Unix epoch.
     pub(crate) unix_ms: i64,
     /// Stringified `tracing::Level`.
     pub(crate) level: String,
-    /// `event.metadata().target()`, for subsystem filtering.
+    /// Event target, for subsystem filtering.
     pub(crate) target: String,
     /// The event's message field.
     pub(crate) message: String,
@@ -50,9 +38,7 @@ fn ring() -> &'static Mutex<VecDeque<RingEntry>> {
     RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(CAPACITY)))
 }
 
-/// Return a snapshot of the last `n` `RingEntry`s in oldest-to-newest order.
-/// Called from the panic hook; takes the inner via `PoisonError::into_inner()`
-/// when the lock is poisoned.
+/// Snapshot of the last `n` entries, oldest-to-newest; recovers a poisoned lock.
 pub(crate) fn snapshot_tail(n: usize) -> Vec<RingEntry> {
     let guard = match ring().lock() {
         Ok(g) => g,
@@ -69,8 +55,7 @@ pub(crate) fn len() -> usize {
     ring().lock().map_or(0, |g| g.len())
 }
 
-/// `tracing_subscriber::Layer` that pushes events into the ring buffer. Add via
-/// `.with(RingBufferLayer)` on the registry.
+/// `Layer` that pushes events into the ring buffer.
 pub(crate) struct RingBufferLayer;
 
 impl<S: Subscriber> Layer<S> for RingBufferLayer {
@@ -105,9 +90,8 @@ fn current_unix_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// `tracing_subscriber::Visit` impl that collects event fields into a
-/// `serde_json::Map`. The `message` field is pulled into its own column (same
-/// convention as `events.jsonl`).
+/// Collects event fields into a `serde_json::Map`; `message` is split out into
+/// its own column (same convention as `events.jsonl`).
 #[derive(Default)]
 struct FieldVisitor {
     message: String,
@@ -252,9 +236,7 @@ mod tests {
         assert_eq!(entry.target, "test_subsystem");
     }
 
-    /// The ring feeds `crash_dump`'s `recent_events`. Check the
-    /// event → ring → [`snapshot_tail`] → serialize → deserialize round-trip
-    /// preserves contents.
+    /// event -> ring -> [`snapshot_tail`] -> serialize -> deserialize preserves contents.
     #[test]
     fn ring_snapshot_round_trips_through_serde_json() {
         #[derive(serde::Deserialize)]
@@ -275,13 +257,10 @@ mod tests {
         let tail = snapshot_tail(64);
         assert_eq!(tail.len(), 2, "expected exactly 2 entries in the snapshot");
 
-        // Serialize ring entries (same shape as CrashRecord::recent_events).
         let json = serde_json::to_string(&tail).expect("serialize ring snapshot");
         assert!(json.contains("panic-adjacent"));
         assert!(json.contains("crash_dump_integration"));
 
-        // Deserialize via a structurally-equivalent shape, compatible with
-        // CrashRecord: level / target / message / fields read back.
         let parsed: Vec<ReadEntry> = serde_json::from_str(&json).expect("round-trip");
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].level, "WARN");

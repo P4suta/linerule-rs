@@ -32,8 +32,7 @@ pub fn primary_bounds() -> Result<ScreenRect<Logical>> {
 /// can draw slits across monitor boundaries.
 ///
 /// # Errors
-/// Does not currently fail; `Result` is kept for signature compatibility with a
-/// future `EnumDisplayMonitors`-based version.
+/// Never fails; `Result` kept for signature stability.
 #[allow(
     clippy::unnecessary_wraps,
     reason = "Result kept for a future EnumDisplayMonitors-based version"

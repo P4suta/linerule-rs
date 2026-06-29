@@ -1,17 +1,13 @@
 //! Differential update produced by [`crate::state::reduce::apply`].
 //!
-//! Carrying a delta (instead of just the new state) lets the platform layer
-//! decide cheaply whether anything visible changed. `mode` is `Option` for
-//! unchanged-vs-changed, with `config_changed` as a single bit because the
-//! config payload is large. `rejected` reports an action the reducer refused
-//! — state did not change, but the user is owed feedback.
+//! Lets the platform layer cheaply tell whether anything visible changed.
+//! `config_changed` is one bit because the config payload is large.
 
 use serde::{Deserialize, Serialize};
 
 use crate::state::Mode;
 
-/// Why the reducer refused an action (state left untouched) and the user
-/// should be told. Closed sum; new rejection causes get new variants.
+/// Why the reducer refused an action (state untouched) but the user is owed feedback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RejectReason {
@@ -26,8 +22,7 @@ pub struct StateDelta {
     pub mode: Option<Mode>,
     /// `true` when `OverlayConfig` changed in any field.
     pub config_changed: bool,
-    /// `Some(_)` when the action was rejected. Mutually exclusive with the
-    /// other fields — a rejection never changes state, so it is deliberately
+    /// `Some(_)` when rejected. Never co-occurs with state changes, so it is
     /// excluded from [`StateDelta::is_any`].
     pub rejected: Option<RejectReason>,
 }
@@ -40,8 +35,7 @@ impl StateDelta {
         rejected: None,
     };
 
-    /// `true` if any *state* field changed. Rejections are excluded: state
-    /// did not change, only a notification is owed.
+    /// `true` if any state field changed. Rejections excluded (no state change).
     #[must_use]
     pub const fn is_any(self) -> bool {
         self.mode.is_some() || self.config_changed

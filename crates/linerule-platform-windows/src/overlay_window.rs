@@ -1,8 +1,6 @@
 //! Lifecycle of the transparent, click-through, topmost overlay HWND.
 //!
-//! Attaches the WinRT composition renderer and installs it into
-//! `OverlayWndState`, and uses the same HWND as the `RegisterHotKey` target for
-//! `WM_HOTKEY` (no separate message-only HWND).
+//! Same HWND serves as renderer host and `RegisterHotKey`/`WM_HOTKEY` target.
 
 #![forbid(unsafe_code)]
 
@@ -25,13 +23,8 @@ use crate::overlay_state::{HotkeyConflict, HotkeyFailure, OverlayWndState};
 use crate::win32_ffi::hotkey as hotkey_ffi;
 use crate::{ex_style_snapshot, win32_ffi, window_class};
 
-/// Combined ex-style for the overlay window.
-///
-/// - `WS_EX_LAYERED` + `WS_EX_NOREDIRECTIONBITMAP` — DWM-composited per-pixel alpha (layered window)
-/// - `WS_EX_TRANSPARENT` — click-through at the DWM level
-/// - `WS_EX_NOACTIVATE` — never steals focus
-/// - `WS_EX_TOOLWINDOW` — excluded from Alt+Tab / taskbar
-/// - `WS_EX_TOPMOST` — always on top
+/// Combined ex-style: layered + no-redirection (per-pixel alpha), transparent
+/// (click-through), no-activate, tool-window, topmost.
 pub const OVERLAY_EX_STYLE: WINDOW_EX_STYLE = WINDOW_EX_STYLE(
     WS_EX_LAYERED.0
         | WS_EX_TRANSPARENT.0
@@ -151,8 +144,7 @@ impl OverlayWindow {
     /// renderers into `OverlayWndState`.
     ///
     /// # Errors
-    /// If any of D3D11 / DXGI / D2D / DWrite / WinRT composition init fails.
-    /// There is no fallback, so failure is fatal.
+    /// If D3D11 / DXGI / D2D / DWrite / WinRT composition init fails (fatal, no fallback).
     pub fn attach_compositor(&mut self) -> Result<()> {
         let hud_config = *self.state().hud_config();
         let (overlay, hud) = crate::renderer_backend::build_backends(self.hwnd, &hud_config)?;
@@ -167,14 +159,13 @@ impl OverlayWindow {
     /// successes; failed chords are warned and pushed to the conflict list.
     ///
     /// # Errors
-    /// Normally infallible (per-chord failures become conflicts). Reserved for a
-    /// future catastrophic OS-level failure.
+    /// Per-chord failures become conflicts; `Result` reserved for OS-level failure.
     pub fn register_hotkeys(&self, hotkeys: &HotkeyMap, tap_step: TapStepConfig) -> Result<()> {
-        // Retain the chords as the source for the HUD hotkey-help rows.
+        // Chords feed the HUD hotkey-help rows.
         self.state().record_hotkeys(*hotkeys);
         let bumps = (tap_step.thickness, tap_step.opacity);
-        // The `repeatable` field is `true` only for Bump actions (drops
-        // `MOD_NOREPEAT`) to allow hold-to-repeat; Toggle actions stay `false`.
+        // `repeatable` true only for Bump actions (drops `MOD_NOREPEAT` for
+        // hold-to-repeat); Toggle actions stay false.
         let pairs: [(i32, &'static str, OverlayAction, bool); 9] = [
             (1, hotkeys.cycle_mode, OverlayAction::CycleMode, false),
             (2, hotkeys.toggle_on_off, OverlayAction::ToggleOnOff, false),
@@ -203,9 +194,7 @@ impl OverlayWindow {
                 true,
             ),
             (7, hotkeys.quit, OverlayAction::Quit, false),
-            // Effect cycle is a discrete toggle ⇒ non-repeatable (MOD_NOREPEAT).
             (8, hotkeys.cycle_effect, OverlayAction::CycleEffect, false),
-            // HUD detail (chip ⇄ full) is a discrete toggle ⇒ non-repeatable.
             (9, hotkeys.toggle_hud, OverlayAction::ToggleHudDetail, false),
         ];
         for (id, spec, action, repeatable) in pairs {

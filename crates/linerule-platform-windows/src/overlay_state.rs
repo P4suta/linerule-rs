@@ -1,17 +1,10 @@
-//! Per-overlay-HWND instance state.
+//! Per-overlay-HWND instance state. Boxed into `GWLP_USERDATA`, recovered by
+//! the WndProc via `win32_ffi::get_userdata`, reclaimed on `WM_NCDESTROY`.
 //!
-//! Allocated via `Box::into_raw`, stored in `GWLP_USERDATA`, and recovered by
-//! the WndProc through `win32_ffi::get_userdata` as `NonNull<OverlayWndState>`.
-//!
-//! RefCell rule: mutable fields are `RefCell`s shared across the single UI
-//! thread. While a `borrow_mut()` is held, do NOT call a Win32 API that
-//! re-enters synchronously (`SendMessageW` / `DestroyWindow` / `MessageBoxW` /
-//! `BringWindowToTop` dispatch `WM_*` on the same stack); `PostMessageW` is
-//! async and safe. A violation panics in `borrow_mut` and is caught by
-//! `overlay_wnd_proc`'s `catch_unwind`.
-//!
-//! On `WM_NCDESTROY`, `take_userdata` reclaims the `Box`, dropping the
-//! renderers and releasing their COM objects.
+//! RefCell rule: while a `borrow_mut()` is held, do NOT call a re-entrant Win32
+//! API (`SendMessageW`/`DestroyWindow`/`MessageBoxW`/`BringWindowToTop` dispatch
+//! `WM_*` on the same stack); `PostMessageW` is async-safe. Violations panic in
+//! `borrow_mut` and are caught by `overlay_wnd_proc`'s `catch_unwind`.
 
 #![forbid(unsafe_code)]
 
@@ -55,17 +48,15 @@ pub enum HotkeyFailure {
     },
 }
 
-/// Overlay + HUD renderers. The HUD borrows the overlay's WinRT pipeline, so
-/// `hud` is declared first to Drop (and Release its COM objects) before
-/// `overlay`. Each keeps its own `RefCell` for independent borrows.
+/// Overlay + HUD renderers. `hud` declared first so it Drops (releasing COM)
+/// before `overlay`, whose WinRT pipeline it borrows.
 struct Renderers {
     hud: RefCell<Option<WinrtHudRenderer>>,
     overlay: RefCell<Option<WinrtCompositionRenderer>>,
 }
 
-/// Hotkey subsystem state: the action channel plus the id→action lookup, the
-/// display chord map, and the registration-conflict list. Each mutable field
-/// keeps its own `RefCell`.
+/// Hotkey subsystem state: action channel, id→action lookup, display chord
+/// map, and registration-conflict list.
 struct Hotkeys {
     /// `WM_HOTKEY` sends actions here; `Sender::send` takes `&self`.
     sender: Sender<OverlayAction>,
@@ -79,10 +70,7 @@ struct Hotkeys {
     conflicts: RefCell<Vec<HotkeyConflict>>,
 }
 
-/// WndProc instance state, referenced from every message handler.
-///
-/// Field declaration order is Drop order. `Renderers` is placed where the
-/// renderers used to be so the HUD still Drops before the overlay.
+/// WndProc instance state. Field declaration order is Drop order.
 pub struct OverlayWndState {
     log_span: Span,
     nchit_count: AtomicU64,
@@ -98,10 +86,9 @@ pub struct OverlayWndState {
     hud_config: HudConfig,
     /// Transition timing config, passed to `tick::step` every tick.
     anim_config: AnimConfig,
-    /// HUD panel rect actually applied by the last `RefreshHud`. The panel
-    /// size differs between chip and full tier, so the `SetHudOpacity`
-    /// distance fade computes against this cache (recomputing from config
-    /// would only ever yield the fixed full-tier size).
+    /// HUD panel rect applied by the last `RefreshHud`. Cached because panel
+    /// size differs by tier, so `SetHudOpacity`'s distance fade needs the
+    /// actual size (config yields only the fixed full-tier size).
     hud_panel_rect: Cell<ScreenRect<Logical>>,
     /// Short-lived runtime toasts (device-lost rebuild / DPI change), evicted on
     /// expiry by `live_notifications`.
@@ -180,13 +167,11 @@ impl OverlayWndState {
         &self.frame_timing
     }
 
-    /// Queue a toast, evicted by `live_notifications` after `lifetime_ms`.
-    /// Pass `i64::MAX` to persist it.
+    /// Queue a toast, evicted by `live_notifications` after `lifetime_ms`
+    /// (`i64::MAX` to persist).
     ///
-    /// If a toast with the same `(class, message)` already exists, its
-    /// lifetime is refreshed instead of stacking a duplicate (holding a
-    /// repeatable hotkey would otherwise pile up the same rejection toast on
-    /// every key repeat).
+    /// Same `(class, message)` refreshes the existing toast's lifetime instead
+    /// of stacking, so holding a repeatable hotkey doesn't pile up duplicates.
     pub fn push_notification(&self, class: NotificationClass, message: String, lifetime_ms: i64) {
         let until_ms = self.now_ms().saturating_add(lifetime_ms);
         let mut q = self.notifications.borrow_mut();
@@ -377,9 +362,8 @@ impl OverlayWndState {
     }
 }
 
-/// Fallback rect right after startup (before the first `RefreshHud` lands),
-/// sized for the full panel. The first tick's `RefreshHud` always overwrites
-/// it, so a plausible initial value matters more than precision.
+/// Fallback full-panel rect for startup before the first `RefreshHud`;
+/// overwritten next tick, so a plausible value suffices.
 fn initial_hud_panel_rect(hud: &HudConfig, monitor: ScreenRect<Logical>) -> ScreenRect<Logical> {
     let monitor_right = monitor.left() + i32::try_from(monitor.width).unwrap_or(i32::MAX);
     #[allow(
@@ -497,7 +481,6 @@ mod tests {
             .expect("sender alive");
         let drained = s.drain_hotkeys();
         assert_eq!(drained, vec![OverlayAction::CycleMode, OverlayAction::Quit]);
-        // Second drain is empty.
         assert!(s.drain_hotkeys().is_empty());
     }
 
@@ -541,9 +524,7 @@ mod tests {
         ));
     }
 
-    /// A toast with the same `(class, message)` doesn't stack; only its
-    /// lifetime refreshes. Pins that holding a repeatable hotkey doesn't
-    /// duplicate the rejection toast on every key repeat.
+    /// Same `(class, message)` refreshes lifetime instead of stacking.
     #[test]
     fn push_notification_dedups_same_class_and_message() {
         let s = fresh_state();

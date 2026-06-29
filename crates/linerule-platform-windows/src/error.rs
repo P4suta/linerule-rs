@@ -1,8 +1,5 @@
-//! Aggregate error type for `linerule-platform-windows`.
-//!
-//! Closed sum over Win32 / COM failure shapes plus [`linerule_core::ChordError`]
-//! via `#[from]`. FFI lives in `win32_ffi.rs`; this file only builds and formats
-//! error values.
+//! Aggregate error type for `linerule-platform-windows`: closed sum over
+//! Win32 / COM failure shapes plus [`linerule_core::ChordError`] via `#[from]`.
 
 #![forbid(unsafe_code)]
 
@@ -54,19 +51,12 @@ pub enum PlatformError {
 /// `Result` alias for `linerule-platform-windows`.
 pub type Result<T, E = PlatformError> = core::result::Result<T, E>;
 
-/// Win32 / COM operations whose failure the overlay can continue past, so
-/// `PlatformError::class()` reports [`ErrorClass::Recoverable`] for them.
-/// `RegisterHotKey` (conflicts surface a HUD notification and skip) and
-/// `UnregisterHotKey` (absorbed in `Drop`).
+/// Operations whose failure the overlay continues past: `RegisterHotKey`
+/// (conflicts skip with a HUD notice) and `UnregisterHotKey` (absorbed in `Drop`).
 const RECOVERABLE_WIN32_OPS: &[&str] = &["RegisterHotKey", "UnregisterHotKey"];
 
 impl PlatformError {
     /// Recovery class for this error.
-    ///
-    /// - `NullHandle` / `BadHr`: [`ErrorClass::Fatal`].
-    /// - `BoolFalse` / `LastError`: `Recoverable` if `operation` is in
-    ///   `RECOVERABLE_WIN32_OPS`, else `Fatal`.
-    /// - `Chord`: delegates to [`ChordError::class()`].
     #[must_use]
     pub fn class(&self) -> ErrorClass {
         match self {
@@ -99,10 +89,8 @@ pub fn decode_last_error(code: u32) -> &'static str {
     }
 }
 
-/// Build a [`PlatformError::BadHr`] tagged with `operation` from a windows-rs
-/// error. Used at the COM / `?` boundaries in the renderers and blur graph.
-// Fully-qualified `windows::core::Error` to avoid clashing with thiserror's
-// `Error` derive imported above.
+/// Build a [`PlatformError::BadHr`] tagged with `operation` from a windows-rs error.
+// Fully-qualified `windows::core::Error` to avoid clashing with thiserror's `Error` derive.
 pub(crate) fn map_hr(operation: &'static str) -> impl Fn(windows::core::Error) -> PlatformError {
     move |e| PlatformError::BadHr {
         operation,

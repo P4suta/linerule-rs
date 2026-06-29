@@ -1,8 +1,5 @@
 //! Microbenchmark: `frame()` on a 1080p monitor for each Mode.
-//!
-//! The frame builder is on the per-tick hot path; this guards against
-//! a refactor that accidentally allocates a Vec twice or walks the
-//! geometry list redundantly.
+//! Guards the per-tick hot path against redundant allocation/iteration.
 
 #![allow(
     missing_docs,
@@ -56,7 +53,7 @@ fn bench_frame(c: &mut Criterion) {
             )
         });
     });
-    // Also measure the mid-transition (non-settled sample) hot path.
+    // Mid-transition (non-settled sample) hot path.
     group.bench_function("horizontal_mid_fade", |b| {
         let mid = OverlaySample {
             master: 128,

@@ -1,14 +1,9 @@
 //! WndProc dispatch logic.
 //!
-//! The FFI entry point `overlay_wnd_proc` lives in `win32_ffi.rs` and calls
-//! `dispatch()` here with an already-recovered state ref, so this file needs no
-//! `unsafe`.
-//!
 //! RefCell rule: while a `borrow_mut()` is held, do NOT call a synchronously
 //! re-entrant Win32 API (`SendMessageW` / `DestroyWindow` / `MessageBoxW`);
 //! `PostMessageW` / `PostQuitMessage` are async and safe. A violation panics in
-//! `borrow_mut`, caught by `win32_ffi::overlay_wnd_proc`'s `catch_unwind`, which
-//! falls back to `DefWindowProcW`.
+//! `borrow_mut`, caught by `overlay_wnd_proc`'s `catch_unwind`.
 
 #![forbid(unsafe_code)]
 
@@ -35,8 +30,8 @@ use crate::win32_ffi;
 /// import used.
 const _: () = assert!(WM_APP_TICK >= WM_APP);
 
-/// `NotifyRejected` toast lifetime (ms). While a repeatable hotkey is held the
-/// dedup keeps refreshing the same toast's lifetime; it fades 3 s after release.
+/// `NotifyRejected` toast lifetime (ms); refreshed while a held hotkey repeats,
+/// fades 3 s after release.
 const REJECT_TOAST_MS: i64 = 3_000;
 
 /// Dispatch a message other than WM_NCCREATE / WM_NCDESTROY.
@@ -143,11 +138,9 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             None
         },
         WM_APP_REASSERT_TOPMOST => {
-            // Posted by the ForegroundHook callback; the actual
-            // SetWindowPos(HWND_TOPMOST) must run on the UI thread, so do it
-            // here. When the window already sits in the topmost band,
-            // reassert_topmost returns as a no-op (avoids z-order churn /
-            // flicker from redundant SetWindowPos calls).
+            // SetWindowPos(HWND_TOPMOST) must run on the UI thread, hence the
+            // post from the ForegroundHook callback. No-op when already topmost
+            // (avoids z-order flicker).
             if let Err(e) = win32_ffi::accessibility::reassert_topmost(hwnd) {
                 tracing::warn!(parent: state.span(), error = %e,
                     "reassert_topmost failed (foreground hook)");
@@ -294,11 +287,9 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                 cursor,
                 envelope,
             } => {
-                // Compute fade opacity from cursor distance (pure function),
-                // multiply in the HUD fade envelope (startup / chip ⇄ full
-                // swap), and apply it via `SpriteVisual::SetOpacity`; cursor
-                // moves and envelope progress alone don't redraw the surface
-                // (the baked color alpha is handled by RefreshHud).
+                // Apply distance fade x envelope via `SpriteVisual::SetOpacity`;
+                // cursor moves / envelope progress don't redraw the surface
+                // (baked color alpha is RefreshHud's job).
                 let distance = hud_fade::compute_opacity(
                     s,
                     cursor,
@@ -463,10 +454,8 @@ fn build_notifications(state: &OverlayWndState) -> Vec<linerule_core::HudNotific
     out
 }
 
-/// Round an applied `HudFrame`'s actual panel rect to `ScreenRect<Logical>`
-/// (i32). Cached on `OverlayWndState` as the distance-fade target for
-/// `compute_opacity` (the panel size differs between chip and full tier, so
-/// recomputing from config is not enough).
+/// Round a `HudFrame`'s panel rect to `ScreenRect<Logical>`; cached as the
+/// distance-fade target since panel size differs between chip and full tier.
 fn panel_rect_of(frame: &HudFrame) -> ScreenRect<Logical> {
     #[allow(
         clippy::cast_possible_truncation,

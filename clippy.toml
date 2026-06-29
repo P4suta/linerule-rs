@@ -14,7 +14,7 @@ allow-panic-in-tests = true
 allow-print-in-tests = true
 allow-dbg-in-tests = true
 
-# B.5: 旧 xtask strict-code の役割を clippy 設定 + cargo-deny に統合
+# B.5: fold the old xtask strict-code role into clippy config + cargo-deny
 disallowed-macros = [
     { path = "lazy_static::lazy_static", reason = "use std::sync::OnceLock or std::sync::LazyLock" },
 ]
@@ -23,8 +23,8 @@ disallowed-types = [
     { path = "once_cell::sync::OnceCell", reason = "use std::sync::OnceLock (stable since 1.70)" },
 ]
 disallowed-methods = [
-    { path = "std::env::set_var", reason = "boundary 以外で環境変数を変更しない" },
-    { path = "windows::Win32::Graphics::Direct2D::ID2D1RenderTarget::BeginDraw", reason = "Composition drawing surface 経由の context は drawing mode で返る (MS Docs)。D2D BeginDraw を重ねると D2DERR_WRONG_STATE → surface stuck のカスケード障害 (Phase I 続編)。SetTransform/Clear/DrawText を直接発行し win32_ffi::composition::end_surface_draw で閉じる。`ID2D1DeviceContext` は Deref<Target=ID2D1RenderTarget> 経由でこのメソッドを継承するため、親 trait の path で deny する。" },
-    { path = "windows::Win32::Graphics::Direct2D::ID2D1RenderTarget::EndDraw", reason = "同上。composition surface の EndDraw 経由で D2D session も内部的に閉じられる。" },
-    { path = "windows::Win32::UI::WindowsAndMessaging::ShowWindow", reason = "win32_ffi::show_window_noactivate() の wrapper 経由で呼ぶこと。直叩きは focus 奪取の事故源 (Phase I PR #60 で意図的 skip → 実環境で visible にならない事故後の予防策)。" },
+    { path = "std::env::set_var", reason = "do not mutate env vars outside the boundary" },
+    { path = "windows::Win32::Graphics::Direct2D::ID2D1RenderTarget::BeginDraw", reason = "context from a composition drawing surface is returned already in drawing mode (MS Docs). Nesting D2D BeginDraw yields D2DERR_WRONG_STATE -> surface-stuck cascade failure (Phase I sequel). Issue SetTransform/Clear/DrawText directly and close via win32_ffi::composition::end_surface_draw. `ID2D1DeviceContext` inherits this method via Deref<Target=ID2D1RenderTarget>, so deny on the parent trait path." },
+    { path = "windows::Win32::Graphics::Direct2D::ID2D1RenderTarget::EndDraw", reason = "as above. The composition surface's EndDraw also closes the D2D session internally." },
+    { path = "windows::Win32::UI::WindowsAndMessaging::ShowWindow", reason = "call via the win32_ffi::show_window_noactivate() wrapper. Direct calls are a focus-stealing hazard (guard added after Phase I PR #60 intentionally skipped it -> window never became visible in the real environment)." },
 ]

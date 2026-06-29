@@ -1,9 +1,7 @@
-//! Pure ADT and layout function for the HUD frame.
+//! Pure ADT and layout for the HUD frame; the platform layer draws it.
 //!
-//! Computes panel position, background, opacity, and text-row layout; the
-//! platform layer (`linerule-platform-windows::hud_renderer`) draws it with
-//! `DWrite` + `D2D`. Kept separate from [`crate::render::OverlayFrame`] because
-//! the HUD needs text, which `Layer`'s closed enum does not carry.
+//! Separate from [`crate::render::OverlayFrame`] because the HUD needs text,
+//! which `Layer`'s closed enum does not carry.
 
 use serde::Serialize;
 
@@ -81,15 +79,8 @@ pub enum HudFontKey {
     Mono,
 }
 
-/// HUD presentation tier.
-///
-/// - `Chip`: persistent one-line status (`H · 28px · 67%`). The default.
-/// - `Full`: full panel with the hotkey guide. Shown only for a few seconds
-///   after startup and on an explicit `ToggleHudDetail` hotkey.
-///
-/// The teaching UI is concentrated on the full tier so that during normal
-/// reading the HUD claims no more than one chip line (the cursor is a reading
-/// tool here, so hover-style triggers are deliberately not used).
+/// HUD presentation tier: `Chip` is the default one-line status; `Full` adds
+/// the hotkey guide and shows only briefly after startup / on `ToggleHudDetail`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HudTier {

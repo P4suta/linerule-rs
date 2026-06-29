@@ -1,21 +1,16 @@
 //! Pure reducer: `(State, OverlayAction) → (State, StateDelta)`.
-//!
-//! Every state mutation flows through this single function. The return is
-//! `(next_state, delta)` because consumers (tick pipeline, HUD) want both
-//! the new full state and a cheap "did anything change?" bit.
+//! The delta is a cheap "what changed?" bit for consumers (tick pipeline, HUD).
 
 use crate::{
     config::OverlayConfig,
     state::{ActiveMode, Mode, OverlayAction, RejectReason, State, StateDelta},
 };
 
-/// Apply `action` to `state`, returning the new state and a delta describing
-/// which fields changed.
+/// Apply `action` to `state`, returning the new state and a change delta.
 ///
 /// # Examples
 ///
-/// `CycleMode` flips the on-screen axis (`Horizontal ⇄ Vertical`); turning
-/// the overlay on or off is `ToggleOnOff`'s job alone:
+/// `CycleMode` flips the axis (`Horizontal ⇄ Vertical`); on/off is `ToggleOnOff`:
 ///
 /// ```
 /// use linerule_core::{Mode, OverlayAction, State, state::reduce};
@@ -25,8 +20,7 @@ use crate::{
 /// assert!(delta.is_any());
 /// ```
 ///
-/// `ToggleOnOff` toggles `Off ⇄ last_active`, so applying it twice is the
-/// identity:
+/// `ToggleOnOff` toggles `Off ⇄ last_active`, so twice is the identity:
 ///
 /// ```
 /// use linerule_core::{OverlayAction, State, state::reduce};
@@ -35,8 +29,7 @@ use crate::{
 /// assert_eq!(off, State::DEFAULT);
 /// ```
 ///
-/// `Quit` is a pure no-op at the reducer layer (the tick pipeline turns it
-/// into a `TickEffect::Quit`):
+/// `Quit` is a pure no-op here (the tick pipeline turns it into `TickEffect::Quit`):
 ///
 /// ```
 /// use linerule_core::{OverlayAction, State, state::reduce};
@@ -48,10 +41,9 @@ use crate::{
 pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
     use OverlayAction as A;
     match action {
-        // Flips the on-screen axis; deriving from `state.mode` (not
-        // `last_active`) also self-heals a state that violated the
-        // mode/last_active invariant. While Off the flip is rejected like the
-        // other adjustments — nothing visible would change.
+        // Deriving from `state.mode` (not `last_active`) self-heals a broken
+        // mode/last_active invariant. While Off the flip is rejected — nothing
+        // visible would change.
         A::CycleMode => state.mode.active().map_or_else(
             || (state, StateDelta::rejected(RejectReason::AdjustWhileOff)),
             |axis| {
@@ -67,19 +59,17 @@ pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
                 )
             },
         ),
-        // Goes through `bump_config`, so cycling while `Off` is rejected with
-        // HUD feedback instead of invisibly changing the surround.
+        // Via `bump_config`: cycling while `Off` is rejected with HUD feedback.
         A::CycleEffect => bump_config(state, |c| OverlayConfig {
             effect: c.effect.cycle(),
             ..c
         }),
         A::ToggleOnOff => {
             let (mode, last_active) = match state.mode {
-                // Off → restore the last active mode.
+                // Off → restore last active mode.
                 Mode::Off => (Mode::from(state.last_active), state.last_active),
-                // Active → Off, remembering what was on screen. Writing
-                // `last_active` here (instead of trusting it) also self-heals
-                // a state that violated the mode/last_active invariant.
+                // Active → Off; rewriting `last_active` self-heals a broken
+                // mode/last_active invariant.
                 Mode::Horizontal => (Mode::Off, ActiveMode::Horizontal),
                 Mode::Vertical => (Mode::Off, ActiveMode::Vertical),
             };
@@ -96,9 +86,8 @@ pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
             thickness: c.thickness.saturating_add(delta),
             ..c
         }),
-        // Under the `Blur` effect the opacity hotkeys retarget onto the blur σ
-        // amount (the brightness knob was dropped, so opacity is inert there);
-        // for the flat effects they tune opacity as before.
+        // Under `Blur`, opacity hotkeys retarget onto the blur σ amount (opacity
+        // is inert there); flat effects tune opacity.
         A::BumpOpacity(delta) => bump_config(state, |c| {
             if c.effect.is_blur() {
                 OverlayConfig {
@@ -112,17 +101,15 @@ pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
                 }
             }
         }),
-        // View-layer / process-layer actions: pure no-ops here. The tick
-        // pipeline interprets them (HUD tier flip / TickEffect::Quit).
+        // View/process-layer actions: no-ops here; the tick pipeline interprets
+        // them (HUD tier flip / TickEffect::Quit).
         A::ToggleHudDetail | A::Quit => (state, StateDelta::NONE),
     }
 }
 
-/// Apply a config-only mutation while `mode != Off`. While `Off` the action
-/// is rejected with [`RejectReason::AdjustWhileOff`] so the user gets HUD
-/// feedback instead of a silent nothing. No-op edges *within* an active mode
-/// (saturation against bounds, value unchanged) stay silent — the user can
-/// see the value is pinned.
+/// Apply a config-only mutation while `mode != Off`. While `Off` the action is
+/// rejected with [`RejectReason::AdjustWhileOff`] for HUD feedback. A no-op edge
+/// within an active mode (saturation, value unchanged) stays silent.
 fn bump_config(
     state: State,
     mutate: impl FnOnce(OverlayConfig) -> OverlayConfig,
@@ -147,8 +134,7 @@ fn config_unchanged(a: OverlayConfig, b: OverlayConfig) -> bool {
     a.thickness == b.thickness && a.opacity == b.opacity && a.effect == b.effect && a.blur == b.blur
 }
 
-// ----- private helpers on StateDelta to keep the reducer terse ----------------
-
+// Private StateDelta constructors.
 impl StateDelta {
     pub(crate) const fn mode(m: Mode) -> Self {
         Self {
@@ -201,8 +187,7 @@ mod tests {
         assert_eq!(s2.last_active, ActiveMode::Horizontal);
     }
 
-    /// Mode never reaches `Off` via `CycleMode`; while Off the flip is
-    /// rejected with HUD feedback (turning on is `ToggleOnOff`'s job).
+    /// While Off, `CycleMode` is rejected (turning on is `ToggleOnOff`'s job).
     #[test]
     fn cycle_mode_is_rejected_when_mode_is_off() {
         let s = State::DEFAULT;
@@ -254,8 +239,7 @@ mod tests {
         assert_eq!(d.rejected, None);
     }
 
-    /// Saturation inside an active mode is a *silent* no-op, not a rejection
-    /// — pins the `matches!(mode, Off)` guard against a `true` mutant.
+    /// Saturation inside an active mode is a silent no-op, not a rejection.
     #[test]
     fn bump_at_saturation_yields_no_delta_and_no_rejection() {
         let s0 = State {
@@ -280,9 +264,7 @@ mod tests {
         assert_eq!(d.rejected, None);
     }
 
-    /// `ToggleHudDetail` is a view-layer action: a pure no-op in the reducer
-    /// (not even a rejection), including while off. Flipping the tier is the
-    /// tick side's job.
+    /// `ToggleHudDetail` is a pure no-op in the reducer, even while off.
     #[test]
     fn toggle_hud_detail_is_a_pure_no_op_even_while_off() {
         for s0 in [State::DEFAULT, State::with_mode(Mode::Horizontal)] {
@@ -293,8 +275,7 @@ mod tests {
         }
     }
 
-    /// Cycling the effect while `Off` is rejected with HUD feedback instead of
-    /// invisibly changing the surround (same policy as the bump actions).
+    /// Cycling the effect while `Off` is rejected with HUD feedback.
     #[test]
     fn cycle_effect_is_rejected_when_mode_is_off() {
         let s0 = State::DEFAULT;
@@ -380,8 +361,8 @@ mod tests {
         assert!(d.config_changed);
     }
 
-    /// A blur-amount-only change still flags `config_changed`; guards against
-    /// `config_unchanged` dropping the `blur` comparison.
+    /// A blur-amount-only change still flags `config_changed` (`config_unchanged`
+    /// must compare `blur`).
     #[test]
     fn blur_amount_only_change_marks_config_changed() {
         use crate::state::SurroundEffect;

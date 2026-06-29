@@ -1,11 +1,6 @@
-//! Integration: `HotkeyMap::DEFAULT` round-trip through chord parser and
-//! `KeyCode → VK` mapping.
-//!
-//! Catches the regression class that bit us at v0.2.x release: every chord
-//! the binary registers at startup must actually be parseable *and* every
-//! resulting VK must be a non-zero Win32 virtual-key code. If either fails,
-//! `RegisterHotKey` rejects the chord at runtime and the overlay silently
-//! refuses to listen for that action.
+//! Integration: `HotkeyMap::DEFAULT` round-trips through the chord parser and
+//! `KeyCode → VK` mapping. Every registered chord must parse and yield a
+//! non-zero VK, else `RegisterHotKey` rejects it at runtime.
 
 use linerule_core::HotkeyMap;
 use linerule_core::input::chord::{self, Direction, KeyCode};
@@ -34,8 +29,7 @@ fn every_default_chord_parses_and_produces_nonzero_vk() {
             vk, 0,
             "{name} `{spec}`: vk must be non-zero (RegisterHotKey rejects vk=0)"
         );
-        // All default chords use Ctrl+Alt; assert that at minimum so a slip
-        // in HotkeyMap::DEFAULT (e.g. dropping a modifier) is caught here.
+        // All default chords use Ctrl+Alt; catches a dropped modifier.
         assert!(
             mods & MOD_CONTROL != 0,
             "{name}: expected Ctrl in modifier set, got {mods:#x}"
@@ -54,8 +48,7 @@ fn every_default_chord_parses_and_produces_nonzero_vk() {
     }
 }
 
-/// Round-trip property: `parse(s)` → `display()` → `parse(...)` must yield
-/// the same `ChordSpec` for every default chord.
+/// `parse → display → parse` must yield the same `ChordSpec`.
 #[test]
 fn every_default_chord_display_round_trips() {
     let map = HotkeyMap::DEFAULT;
@@ -81,11 +74,9 @@ fn every_default_chord_display_round_trips() {
     }
 }
 
-/// Bump / opacity default chords must resolve to arrow keys (layout-independent
-/// VKs). OEM keys (`[`/`]`/`=`/`-`) are layout / IME sensitive on Windows — JIS
-/// keyboard × English IME silently delivers different VKs and `RegisterHotKey`
-/// misses. This test fails immediately if someone restores OEM-key defaults
-/// without first solving the layout problem.
+/// Bump/opacity chords must use arrow keys: OEM keys (`[`/`]`/`=`/`-`) are
+/// layout/IME-sensitive on Windows and deliver different VKs (e.g. JIS keyboard
+/// × English IME), so `RegisterHotKey` misses.
 #[test]
 fn bump_and_opacity_default_chords_are_layout_independent_arrow_keys() {
     let map = HotkeyMap::DEFAULT;
@@ -113,8 +104,7 @@ fn bump_and_opacity_default_chords_are_layout_independent_arrow_keys() {
     }
 }
 
-/// Distinct chord keys must produce distinct (mods, vk) pairs so that the
-/// hotkey host can disambiguate them.
+/// Distinct chords must produce distinct (mods, vk) pairs.
 #[test]
 fn default_chords_are_pairwise_distinct() {
     let map = HotkeyMap::DEFAULT;

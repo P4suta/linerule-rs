@@ -1,8 +1,5 @@
-//! Aggregated lint pipeline: cargo fmt, clippy, cargo-deny, typos, actionlint,
-//! `cargo-machete`, `xtask dep-graph`.
-//!
-//! Each step is run to completion (no early bail) so the operator sees every
-//! failure in one pass. The function returns an error if any step failed.
+//! Aggregated lint pipeline (fmt, clippy, deny, typos, actionlint, machete, dep-graph).
+//! All steps run to completion (no early bail); errors if any failed.
 
 use std::process::Command;
 
@@ -10,12 +7,11 @@ use anyhow::{Result, anyhow};
 
 #[allow(
     clippy::too_many_lines,
-    reason = "lint パイプライン定義は本質的に長い線形列。helper 抽出は可読性を損なう。"
+    reason = "pipeline definition is an inherently long linear sequence"
 )]
 pub(crate) fn run() -> Result<()> {
-    // From Linux the Windows-target clippy step needs cargo-xwin; on a native
-    // Windows host the host already targets msvc, so run clippy directly (xwin
-    // isn't installed there and isn't needed). Flags are identical either way.
+    // Native Windows host already targets msvc, so run clippy directly; from
+    // Linux the Windows-target step needs cargo-xwin. Flags identical either way.
     let mut win_clippy: Vec<&str> = if crate::mode::is_native() {
         vec!["cargo", "clippy"]
     } else {
@@ -69,9 +65,7 @@ pub(crate) fn run() -> Result<()> {
         ),
         ("taplo", vec!["taplo", "fmt", "--check"]),
         ("biome", vec!["biome", "format", "."]),
-        // Don't pass "." — that bypasses the include/exclude in .yamlfmt and
-        // makes yamlfmt walk node_modules/. Letting it pick up files from the
-        // include patterns gives the same coverage minus the noise.
+        // Don't pass "." — it bypasses .yamlfmt include/exclude and walks node_modules/.
         ("yamlfmt", vec!["yamlfmt", "--lint"]),
         (
             "clippy",
@@ -85,16 +79,11 @@ pub(crate) fn run() -> Result<()> {
                 "warnings",
             ],
         ),
-        // Windows target に対する `disallowed_*` 限定 clippy。
-        //
-        // `linerule-platform-windows` は `#![cfg(windows)]` で Linux 上の native
-        // clippy では gate out されるため、`disallowed_methods` 等の deny list が
-        // 機能しない。`cargo xwin clippy` で Windows target を走らせ、本ステップで
-        // `IDCompositionSurface::BeginDraw` 等の直叩きを reject する。
-        //
-        // 本ステップでは Windows 専用コードの他 lint (pedantic, style, unwrap_used
-        // 等) を `-A` で抑え、`disallowed_methods` / `disallowed_types` /
-        // `disallowed_macros` のみを `-D` で発火させる。deny list 系の誤用防止が主目的。
+        // `disallowed_*`-only clippy against the Windows target. Linux native
+        // clippy gates out `#![cfg(windows)]` code, so its deny lists never fire;
+        // run the Windows target to reject calls like `IDCompositionSurface::BeginDraw`.
+        // All other lints are `-A`'d; only `disallowed_methods`/`disallowed_types`/
+        // `disallowed_macros` are `-D`.
         ("clippy-windows-deny-list", win_clippy),
         (
             "cargo-deny",
@@ -110,9 +99,8 @@ pub(crate) fn run() -> Result<()> {
         ),
         ("typos", vec!["typos"]),
         ("actionlint", vec!["actionlint"]),
-        // Call cargo-machete directly, not via `cargo machete`. The cargo
-        // subcommand path passes "machete" as argv[1] to the binary which
-        // older cargo-machete versions misinterpret as a target path.
+        // Call cargo-machete directly: `cargo machete` passes "machete" as argv[1],
+        // which older versions misinterpret as a target path.
         ("cargo-machete", vec!["cargo-machete"]),
         ("dep-graph", vec!["cargo", "xtask", "dep-graph"]),
     ];

@@ -1,12 +1,6 @@
-# lefthook — git hooks runner.
-#
-# One-time install: `just hooks`. Every step delegates to a Justfile
-# `_hook-*` recipe so tools route through the dev container the same way
-# `just lint` does — no tool is assumed to exist on the host.
-#
-# Policy: every formatter runs with `stage_fixed: true` — the author writes
-# code, lefthook fixes formatting on the way to the index, the commit
-# captures the fixed form. CI re-runs the same tools in `--check` mode.
+# lefthook git hooks. Install: `just hooks`.
+# Steps delegate to Justfile `_hook-*` recipes so tools route through the dev container.
+# Formatters use `stage_fixed: true`; CI re-runs the same tools in `--check` mode.
 
 assert_lefthook_installed: true
 no_tty: false
@@ -16,7 +10,7 @@ pre-commit:
   parallel: false
   follow: true
   commands:
-    # ---- auto-fixers (stage_fixed = true) ----
+    # auto-fixers
     cargo-fmt:
       tags: format
       glob: "*.rs"
@@ -52,7 +46,7 @@ pre-commit:
       run: just _hook-typos-fix {staged_files}
       stage_fixed: true
 
-    # ---- checks (no auto-fix; author must address) ----
+    # checks (no auto-fix)
     actionlint:
       tags: ci
       glob: "{.github/workflows/*.yml,.github/workflows/*.yaml}"
@@ -63,16 +57,14 @@ pre-commit:
       glob: "{**/Cargo.toml,Cargo.lock}"
       run: just _hook-xtask-dep-graph
 
-    # Regenerate docs/ + README and fail if they drift from the source.
+    # Regenerate docs/ + README; fail on drift.
     docs-drift:
       tags: docs
       glob: "{*.rs,**/Cargo.toml,Cargo.lock}"
       run: just _hook-docs-drift
 
-    # Rust ファイルが staged されているコミットでは clippy + rustdoc-check
-    # + cross-check を走らせる。workspace の incremental compile が効くため
-    # 通常は数秒で完了する。CI と同じゲートをローカル commit 時にも適用し、
-    # push 前ではなく commit 前に気づける範囲を広げる ([[linerule-rs-trust-lefthook]])。
+    # Run CI gates (clippy/rustdoc-check/cross-check) at commit time, not just
+    # pre-push; incremental compile keeps it to a few seconds.
     clippy:
       tags: lint
       glob: "*.rs"
@@ -94,23 +86,14 @@ commit-msg:
       run: just _hook-commitlint {1}
 
 pre-push:
-  # CI のゲートと検出範囲を揃える: PR を出してから CI で初めて怒られるのを防ぐ。
-  # 対応関係:
-  #   - lint          ↔ `clippy` + `fmt` + `cargo-deny` + `typos` + `actionlint` + `cargo-machete` + `dep-graph`
-  #   - test          ↔ `build + test (linux)` の `cargo nextest run` と `cargo test --doc`
-  #   - cross-check   ↔ `cross-check (linux → win-x64)` (`--all-targets` で examples/tests も含む)
-  #   - rustdoc-check ↔ `.github/workflows/docs.yml` (`RUSTDOCFLAGS=-D warnings` の rustdoc build)
+  # Mirror CI gates locally. Mapping: lint↔clippy/fmt/cargo-deny/typos/actionlint/
+  # machete/dep-graph; test↔nextest + cargo test --doc; cross-check↔linux→win-x64;
+  # rustdoc-check↔docs.yml (RUSTDOCFLAGS=-D warnings).
   #
-  # 重要 (lefthook v2 の挙動):
-  # - lefthook v2 は pre-push で `git diff HEAD @{push}` で「push 対象 file」を
-  #   判定する。`files:` を override しても push file 判定は別経路で実行され、
-  #   `@{push}` が空 (新規 branch の初回 push で upstream 未設定 / no-op 再 push)
-  #   だと全 step が `(skip) no matching push files` で空振りする
-  # - 解決策: `run: ` 内で workspace 全体に対する検査を実行する command を直接
-  #   叩き、lefthook の file filter を bypass する。`only:` で push 自体が
-  #   発生していること (`@{push}` が解決可能であること) は条件として残し、
-  #   no-op re-push では skip させる
-  # - 関連 issue: lefthook v2 の @{push} resolution と new branch の組み合わせ
+  # Important: lefthook v2 selects pushed files via `git diff HEAD @{push}`, so when
+  # `@{push}` is empty (first push of a new branch / no-op re-push) every step matches
+  # nothing. Workaround: `run:` inspects the whole workspace directly to bypass the file
+  # filter; `only:` runs solely on a real push (where @{push} resolves), skipping no-op re-push.
   piped: true
   commands:
     lint:

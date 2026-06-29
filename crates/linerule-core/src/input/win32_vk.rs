@@ -1,12 +1,6 @@
-//! Pure data mapping from [`ChordSpec`] to the `(modifiers, vk)` pair that
-//! Win32 `RegisterHotKey` expects.
+//! Map [`ChordSpec`] to the `(modifiers, vk)` pair `RegisterHotKey` expects.
 //!
-//! Kept in `linerule-core` (no `windows` crate dependency) so it is
-//! unit-testable on non-Windows hosts.
-//!
-//! Constants match the Win32 docs:
-//! <https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerhotkey>
-//! <https://learn.microsoft.com/windows/win32/inputdev/virtual-key-codes>
+//! Kept in `linerule-core` (no `windows` dep) so it is testable off-Windows.
 
 use crate::input::chord::{ChordSpec, Direction, KeyCode, Modifiers};
 
@@ -19,11 +13,7 @@ pub const MOD_SHIFT: u32 = 0x0004;
 /// `RegisterHotKey` `fsModifiers` flag for the `Win` key.
 pub const MOD_WIN: u32 = 0x0008;
 
-/// Translate a [`ChordSpec`] into the `(fsModifiers, vk)` pair expected by
-/// `RegisterHotKey`.
-///
-/// The function is total: every variant of [`KeyCode`] and every combination
-/// of [`Modifiers`] flags has a deterministic mapping.
+/// Translate a [`ChordSpec`] into the `(fsModifiers, vk)` pair for `RegisterHotKey`.
 ///
 /// # Examples
 ///
@@ -57,8 +47,7 @@ pub const fn chord_to_win32(chord: ChordSpec) -> (u32, u32) {
     (mods, vk)
 }
 
-/// Translate a [`KeyCode`] into its Win32 virtual-key code (a `u32` in the
-/// range `0x00..=0xFE`).
+/// Translate a [`KeyCode`] into its Win32 virtual-key code (`0x00..=0xFE`).
 #[must_use]
 pub const fn key_to_vk(key: KeyCode) -> u32 {
     match key {
@@ -151,9 +140,6 @@ mod tests {
 
     #[test]
     fn all_sixteen_modifier_combinations_produce_correct_flag_set() {
-        // Enumerate every possible (CTRL? ALT? SHIFT? META?) combination and
-        // assert that the OR'd MOD_* flags match exactly. This is the bit
-        // invariant we rely on at the RegisterHotKey boundary.
         for bits in 0u8..16u8 {
             let mods = Modifiers::from_bits_truncate(bits);
             let expected = (u32::from(mods.contains(Modifiers::ALT)) * MOD_ALT)

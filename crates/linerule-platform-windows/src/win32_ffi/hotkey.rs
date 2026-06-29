@@ -1,8 +1,7 @@
 //! Safe wrappers over `RegisterHotKey` / `UnregisterHotKey`.
 //!
-//! `RegisterHotKey` delivers `WM_HOTKEY` even for a `WS_EX_LAYERED +
-//! WS_EX_TRANSPARENT + WS_EX_NOACTIVATE` HWND, so the overlay HWND is the target
-//! directly instead of a separate message-only HWND.
+//! `WM_HOTKEY` is delivered even to a `WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE`
+//! HWND, so the overlay HWND is the target directly (no message-only HWND needed).
 
 #![allow(
     unsafe_code,
@@ -16,18 +15,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 
 use crate::error::{PlatformError, Result};
 
-/// `MOD_NOREPEAT` flag value (redeclared as a constant since windows-rs exposes
-/// it only via `HOT_KEY_MODIFIERS`). OR-ing it into `RegisterHotKey`'s
-/// `fsModifiers` suppresses auto-repeat `WM_HOTKEY` firing.
+/// `MOD_NOREPEAT`; redeclared since windows-rs exposes it only via `HOT_KEY_MODIFIERS`.
 const MOD_NOREPEAT: u32 = 0x4000;
 
-/// Safe wrapper over `RegisterHotKey(hwnd, id, modifiers, vk)`.
+/// Safe wrapper over `RegisterHotKey`.
 ///
-/// `repeatable = false` auto-adds `MOD_NOREPEAT` to suppress repeat firing while
-/// held — for toggle actions (CycleMode / ToggleOnOff / Quit).
-///
-/// `repeatable = true` omits `MOD_NOREPEAT`, so `WM_HOTKEY` repeats at the key
-/// repeat rate — for continuous-adjust actions (BumpThickness / BumpOpacity).
+/// `repeatable = false` adds `MOD_NOREPEAT` (suppresses repeat while held);
+/// `repeatable = true` lets `WM_HOTKEY` repeat at the key repeat rate.
 ///
 /// # Errors
 /// When `RegisterHotKey` returns FALSE (e.g. duplicate registration).
@@ -51,7 +45,7 @@ pub fn register_hotkey(
     })
 }
 
-/// Safe wrapper over `UnregisterHotKey(hwnd, id)`. Failure is only logged.
+/// Safe wrapper over `UnregisterHotKey`.
 ///
 /// # Errors
 /// When `UnregisterHotKey` returns FALSE.

@@ -11,11 +11,10 @@ use crate::error::Result;
 use crate::winrt_composition_renderer::WinrtCompositionRenderer;
 use crate::winrt_hud_renderer::WinrtHudRenderer;
 
-/// Build the overlay and HUD renderers on WinRT composition. The HUD shares the
-/// overlay's pipeline (graphics device).
+/// Build overlay and HUD renderers; HUD shares the overlay's pipeline.
 ///
 /// # Errors
-/// When building the pipeline, overlay, or HUD renderer fails.
+/// If pipeline, overlay, or HUD construction fails.
 pub fn build_backends(
     hwnd: HWND,
     hud_config: &HudConfig,

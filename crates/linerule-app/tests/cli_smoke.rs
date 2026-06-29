@@ -1,9 +1,4 @@
-//! CLI smoke: actually invoke the `linerule` binary and observe exit code
-//! + stdout / stderr.
-//!
-//! Catches regressions like "the binary panics during clap parsing" or
-//! "diagnostics writes outside its data dir". `cargo nextest` builds the
-//! binary on demand via `CARGO_BIN_EXE_linerule`.
+//! CLI smoke: invoke the `linerule` binary, check exit code + stdout/stderr.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -16,14 +11,12 @@ fn version_subcommand_exits_zero_and_prints_linerule_prefix() {
         .assert()
         .success()
         .stdout(predicate::str::starts_with("linerule "))
-        // The stamped version always carries the workspace base triple.
         .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
 }
 
 #[test]
 fn version_flag_exits_zero_and_prints_linerule_prefix() {
-    // clap's native `--version`, wired to the same stamped string as the
-    // `version` subcommand.
+    // clap's native `--version`, same stamped string as the `version` subcommand.
     Command::cargo_bin("linerule")
         .expect("binary built")
         .arg("--version")
@@ -39,8 +32,7 @@ fn diagnostics_dry_run_exits_zero_with_redirected_data_dir() {
     let mut cmd = Command::cargo_bin("linerule").expect("binary built");
     cmd.arg("diagnostics")
         .arg("--dry-run")
-        // Redirect the platform-specific data-dir lookups so the binary
-        // does not touch the real `%APPDATA%` / `~/.local/share`.
+        // Redirect data-dir lookups off the real `%APPDATA%` / `~/.local/share`.
         .env("APPDATA", dir.path())
         .env("XDG_DATA_HOME", dir.path())
         .env("HOME", dir.path());
@@ -50,8 +42,7 @@ fn diagnostics_dry_run_exits_zero_with_redirected_data_dir() {
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn no_args_on_non_windows_fails_with_helpful_message() {
-    // On non-Windows the default `Run` subcommand bails out — make sure
-    // it actually exits non-zero and explains why on stderr.
+    // Default `Run` subcommand bails on non-Windows: non-zero exit + stderr reason.
     Command::cargo_bin("linerule")
         .expect("binary built")
         .assert()
@@ -81,12 +72,9 @@ fn help_flag_succeeds_and_lists_subcommands() {
 
 #[test]
 fn cli_flag_alone_does_not_panic() {
-    // `--cli` without a subcommand still defaults to `Run`, which on
-    // non-Windows bails. We just want to confirm clap accepts the flag
-    // and the process exits cleanly (success on Windows, controlled
-    // failure on Linux).
+    // `--cli` without a subcommand defaults to `Run`; just confirm clap accepts it.
     if cfg!(target_os = "windows") {
-        // Skip: Run on Windows would block on the message pump.
+        // Skip: Run on Windows blocks on the message pump.
         return;
     }
     Command::cargo_bin("linerule")
