@@ -1,19 +1,26 @@
-# Drives release PRs and tags from Conventional Commits.
-# On main push: opens/updates a release PR (version bump, CHANGELOG, Cargo.lock).
-# On release-PR merge: action skips tagging (skip-github-release: true), so the
-# "ensure tag" step pushes the tag, then dispatches release-assets (ADR-0014).
-# Bump: feat=minor, fix/perf=patch, !/BREAKING=major.
+# Drives release PRs and tags from Conventional Commits, authenticated as a
+# GitHub App (not GITHUB_TOKEN). GITHUB_TOKEN-authored events don't cascade, so a
+# token-created release PR never runs CI (unmergeable under the ci-required
+# ruleset) and a token-pushed tag never fires release-assets. An App installation
+# token is a real actor: its PR triggers CI and its tag triggers release-assets.
+# Requires repo secrets RELEASE_PLEASE_APP_ID + RELEASE_PLEASE_APP_PRIVATE_KEY
+# from an installed App with Contents:write + Pull requests:write (see docs/RELEASE.md).
+#
+# On main push: open/update a release PR (version bump, CHANGELOG, Cargo.lock).
+# On release-PR merge: action skips tagging (skip-github-release: true), so we
+# reconcile the autorelease label and push the tag; the App-pushed tag triggers
+# release-assets (ADR-0014). Bump: feat=minor, fix/perf=patch, !/BREAKING=major.
 
 name: release-please
 
 on:
   push:
     branches: [main]
+  workflow_dispatch: {} # manual re-evaluation (e.g. after clearing a stuck label)
 
+# GITHUB_TOKEN stays read-only; every write flows through the App token below.
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write # gh workflow run release-assets.yml
+  contents: read
 
 concurrency:
   group: release-please-${{ github.ref }}
@@ -25,40 +32,51 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
-      # skip-github-release: true skips both tag and Release; without a tag,
-      # release-please aborts the next run ("untagged, merged release PRs
-      # outstanding"). Push the tag ourselves and dispatch release-assets, since
-      # tags pushed with GITHUB_TOKEN don't trigger other workflows.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
-      - name: ensure release tag is pushed (skip-github-release workaround)
+      # skip-github-release: true means the action never tags nor advances a merged
+      # release PR's `autorelease: pending` label to `tagged`. Left alone,
+      # release-please aborts every later run ("untagged, merged release PRs
+      # outstanding"). Reconcile the label ourselves (unconditionally, so a stuck PR
+      # clears on the next run), then push the tag. The App-token push triggers
+      # release-assets on its own — no explicit dispatch needed.
+      - name: reconcile autorelease label + push release tag
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |-
           set -euo pipefail
+          # Any merged release PR still marked pending -> tagged (covers the
+          # just-merged PR and any historical straggler that blocked the queue).
+          gh pr list --state merged --label "autorelease: pending" --json number \
+            --jq '.[].number' | while read -r pr; do
+            gh pr edit "$pr" --remove-label "autorelease: pending" --add-label "autorelease: tagged"
+            echo "reconciled autorelease label on PR #${pr}"
+          done
           VERSION=$(jq -r '."."' .release-please-manifest.json)
           TAG="v${VERSION}"
-          # no-op if tag already exists on origin (normal push)
           if git ls-remote --tags origin "${TAG}" | grep -q "refs/tags/${TAG}$"; then
-            echo "tag ${TAG} already exists on origin, nothing to do"
+            echo "tag ${TAG} already exists on origin, nothing to push"
             exit 0
           fi
-          # HEAD is the bump commit; create the lightweight tag release-please would have made.
+          # HEAD is the bump commit; create the lightweight tag release-please would have.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "${TAG}" "${GITHUB_SHA}"
           git push origin "${TAG}"
-          echo "pushed tag ${TAG} -> ${GITHUB_SHA}"
-          # Tag pushes via GITHUB_TOKEN don't trigger other workflows, so dispatch explicitly.
-          gh workflow run release-assets.yml -f tag="${TAG}"
-          echo "dispatched release-assets workflow for ${TAG}"
+          echo "pushed tag ${TAG} -> ${GITHUB_SHA}; release-assets triggers on the tag"
