@@ -3,8 +3,9 @@
 # token-created release PR never runs CI (unmergeable under the ci-required
 # ruleset) and a token-pushed tag never fires release-assets. An App installation
 # token is a real actor: its PR triggers CI and its tag triggers release-assets.
-# Requires repo secrets RELEASE_PLEASE_APP_ID + RELEASE_PLEASE_APP_PRIVATE_KEY
-# from an installed App with Contents:write + Pull requests:write (see docs/RELEASE.md).
+# Requires release-please environment secrets RELEASE_PLEASE_APP_ID +
+# RELEASE_PLEASE_APP_PRIVATE_KEY from an installed App with Contents:write +
+# Pull requests:write (see docs/RELEASE.md).
 #
 # On main push: open/update a release PR (version bump, CHANGELOG, Cargo.lock).
 # On release-PR merge: action skips tagging (skip-github-release: true), so we
@@ -31,6 +32,11 @@ jobs:
     name: release please
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # App secrets are scoped to this environment. Unlike the signing `release`
+    # environment, it has no required reviewers (one would gate every push). The
+    # declaration is mandatory: without it, environment-scoped secrets are
+    # unreadable and create-github-app-token fails on empty inputs.
+    environment: release-please
     steps:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token

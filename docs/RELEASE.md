@@ -39,17 +39,25 @@ App のインストールトークンは独立した actor なので、その PR
 
 ### C. シークレットを登録
 
-5. repo に2つ登録（`.pem` は中身全体を貼り付け）:
+5. **`release-please` 環境**に2つ登録する（repo レベルではなく environment スコープ。
+   `.pem` は中身全体を貼り付け）:
 
    ```bash
-   gh secret set RELEASE_PLEASE_APP_ID --repo P4suta/linerule-rs            # 値: App ID（数値）
-   gh secret set RELEASE_PLEASE_APP_PRIVATE_KEY --repo P4suta/linerule-rs < path/to/app.private-key.pem
+   gh secret set RELEASE_PLEASE_APP_ID --env release-please --repo P4suta/linerule-rs            # 値: App ID（数値）
+   gh secret set RELEASE_PLEASE_APP_PRIVATE_KEY --env release-please --repo P4suta/linerule-rs < path/to/app.private-key.pem
    ```
 
    | Secret 名 | 値 |
    |---|---|
    | `RELEASE_PLEASE_APP_ID` | GitHub App の App ID |
    | `RELEASE_PLEASE_APP_PRIVATE_KEY` | 生成した秘密鍵（`.pem` 全体、BEGIN/END 行含む）|
+
+   - `release-please` 環境には**必須レビュアーを付けない**。署名用の `release` 環境
+     （承認ゲート付き）とは分離する。付けると release-please が毎 push で承認待ちになる。
+   - environment スコープの secret は `release-please.yml` の job に `environment:
+     release-please` 宣言があって初めて読める（両者はセット）。
+   - 過去に repo レベルへ同名 secret を登録済みなら**削除する**
+     （`gh secret delete RELEASE_PLEASE_APP_ID --repo P4suta/linerule-rs` 等）。
 
 ## リリースの流れ（セットアップ後）
 
