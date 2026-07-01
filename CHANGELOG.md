@@ -1,5 +1,81 @@
 # Changelog
 
+## [0.5.0](https://github.com/P4suta/linerule-rs/compare/v0.4.1...v0.5.0) (2026-07-01)
+
+
+### Features
+
+* add dev/nightly/stable build channels with version stamping ([#136](https://github.com/P4suta/linerule-rs/issues/136)) ([86fd01b](https://github.com/P4suta/linerule-rs/commit/86fd01b946def85b788ace65f5878f7a32be58e6))
+* add vibrancy (saturation + contrast) pass to the backdrop blur ([#112](https://github.com/P4suta/linerule-rs/issues/112)) ([40fafb5](https://github.com/P4suta/linerule-rs/commit/40fafb5b0e6ee97ae439b8cf1d943b74bbb47c15))
+* adjustable blur amount with perceptual steps, drop tint-brightness knob ([#108](https://github.com/P4suta/linerule-rs/issues/108)) ([99f4988](https://github.com/P4suta/linerule-rs/commit/99f498825bce59bd9c94347ab0c94d66517785a0))
+* **app:** embed an application icon in the executable ([#145](https://github.com/P4suta/linerule-rs/issues/145)) ([17fea06](https://github.com/P4suta/linerule-rs/commit/17fea0659fd2d75636c84001fe957e40c900b120))
+* **dev:** add verify --scenario chord injection with state assertions ([#128](https://github.com/P4suta/linerule-rs/issues/128)) ([0d6329f](https://github.com/P4suta/linerule-rs/commit/0d6329f89b16747fb8bd2a02451665c622d195b6))
+* **dev:** make native Windows a first-class dev path ([#127](https://github.com/P4suta/linerule-rs/issues/127)) ([aaad879](https://github.com/P4suta/linerule-rs/commit/aaad8795b55523fcf74a6b2ba3226bcd5bb393c9))
+* make Blur a pure backdrop blur, drop the darkening tint ([#111](https://github.com/P4suta/linerule-rs/issues/111)) ([160b747](https://github.com/P4suta/linerule-rs/commit/160b74700482bdde0784b836bc4e4c10f23a7d9d))
+* surround effect variations (white/blur) + WinRT composition backend ([#106](https://github.com/P4suta/linerule-rs/issues/106)) ([26d2cea](https://github.com/P4suta/linerule-rs/commit/26d2cea0e592a86d07f9b93edae8a6f41dc6dd54))
+* two-tier HUD, transition channels, and a single on/off entry point ([#123](https://github.com/P4suta/linerule-rs/issues/123)) ([d4e4c64](https://github.com/P4suta/linerule-rs/commit/d4e4c645c1169a9cd9b669bddbf510dff08b20d1))
+* WinRT-only composition backend with working backdrop blur ([#107](https://github.com/P4suta/linerule-rs/issues/107)) ([09fdac1](https://github.com/P4suta/linerule-rs/commit/09fdac198f633455109093b912bfe428f4c0a7e1))
+
+
+### Bug Fixes
+
+* **dev:** chown the node_modules volume so bun install works as dev ([#120](https://github.com/P4suta/linerule-rs/issues/120)) ([94796fd](https://github.com/P4suta/linerule-rs/commit/94796fdc8b5250902840c00e6fbe3209f0255ced))
+* **renderer:** keep HUD above overlay dim via dedicated sub-roots ([#92](https://github.com/P4suta/linerule-rs/issues/92)) ([46c3035](https://github.com/P4suta/linerule-rs/commit/46c3035b70ebe7b9e08d6ef6ba65ee19cdf9bb11))
+
+
+### Code Refactoring
+
+* collapse hud_frame row boilerplate into a RowCursor ([#115](https://github.com/P4suta/linerule-rs/issues/115)) ([5eba98e](https://github.com/P4suta/linerule-rs/commit/5eba98e83087b1ce38da3e2d0e0ec114b1dcf08d))
+* dedup map_hr and parse blur env once into BlurConfig ([#116](https://github.com/P4suta/linerule-rs/issues/116)) ([48cf381](https://github.com/P4suta/linerule-rs/commit/48cf3811f0130f1b0b0694d2d1037f40bec6f81c))
+* **dev:** move node_modules from named volume to bind mount ([#121](https://github.com/P4suta/linerule-rs/issues/121)) ([a614c4c](https://github.com/P4suta/linerule-rs/commit/a614c4cabd33af125914addb5ef6dbb0d205176c))
+* group OverlayWndState fields into Renderers and Hotkeys ([#117](https://github.com/P4suta/linerule-rs/issues/117)) ([933893b](https://github.com/P4suta/linerule-rs/commit/933893b5528c2113d2031d5565c5ba36d8c123d1))
+
+
+### Documentation
+
+* fix BlurAmount public→private intra-doc links breaking cargo doc ([#109](https://github.com/P4suta/linerule-rs/issues/109)) ([dc682f8](https://github.com/P4suta/linerule-rs/commit/dc682f8eb12b1ab8171494d32feb408bf0c167f8))
+* generate doc artifacts, fix doc tooling, wire drift detection ([#114](https://github.com/P4suta/linerule-rs/issues/114)) ([9959c69](https://github.com/P4suta/linerule-rs/commit/9959c69de6f395ce812c010304a7ee1d939e0a46))
+* slim comments/docs to terse English across the codebase ([#139](https://github.com/P4suta/linerule-rs/issues/139)) ([75f8a61](https://github.com/P4suta/linerule-rs/commit/75f8a61e436a48ffd346262ab5881a9ed3b86ae0))
+* sweep linerule-core/linerule-app comments to terse English ([#118](https://github.com/P4suta/linerule-rs/issues/118)) ([456b279](https://github.com/P4suta/linerule-rs/commit/456b279ab6da35818258b77a04907e7529b1fdbe))
+* sweep linerule-platform-windows comments to terse English ([#119](https://github.com/P4suta/linerule-rs/issues/119)) ([7669d90](https://github.com/P4suta/linerule-rs/commit/7669d90fee4515a078ee8ed14b1a39487e3a782d))
+
+
+### Build System
+
+* **deps:** Bump actions/cache from 5.0.5 to 6.1.0 ([#134](https://github.com/P4suta/linerule-rs/issues/134)) ([4c2ae72](https://github.com/P4suta/linerule-rs/commit/4c2ae7285757b0fc0be44325796de26f368f50bf))
+* **deps:** Bump actions/checkout from 6.0.2 to 6.0.3 ([#105](https://github.com/P4suta/linerule-rs/issues/105)) ([49b5858](https://github.com/P4suta/linerule-rs/commit/49b5858e087a5d1ae4dcbf4bee2727cd9566ac9d))
+* **deps:** Bump actions/checkout from 6.0.3 to 7.0.0 ([#130](https://github.com/P4suta/linerule-rs/issues/130)) ([cbb6c69](https://github.com/P4suta/linerule-rs/commit/cbb6c6989c13efe82584d7960178b202ffd4c851))
+* **deps:** Bump bitflags from 2.11.1 to 2.13.0 ([#104](https://github.com/P4suta/linerule-rs/issues/104)) ([aebc8c2](https://github.com/P4suta/linerule-rs/commit/aebc8c211ce06752c1033893e08f0156d62abe7d))
+* **deps:** Bump crate-ci/typos from 1.46.3 to 1.47.0 ([#94](https://github.com/P4suta/linerule-rs/issues/94)) ([33a2e9a](https://github.com/P4suta/linerule-rs/commit/33a2e9af9fb58333b2ee096c63d0fd080f8f455c))
+* **deps:** Bump crate-ci/typos from 1.47.0 to 1.47.2 ([#103](https://github.com/P4suta/linerule-rs/issues/103)) ([b440e9f](https://github.com/P4suta/linerule-rs/commit/b440e9f621d0b1039bc0cef7462cb7fd6b1b555c))
+* **deps:** Bump docker/login-action from 3.5.0 to 4.2.0 ([#86](https://github.com/P4suta/linerule-rs/issues/86)) ([2aa5f2b](https://github.com/P4suta/linerule-rs/commit/2aa5f2b580c8f6f4eaf7c0608f08c85eaecae050))
+* **deps:** Bump docker/setup-buildx-action from 3.11.1 to 4.1.0 ([#95](https://github.com/P4suta/linerule-rs/issues/95)) ([157f4ee](https://github.com/P4suta/linerule-rs/commit/157f4eea88901a5f80f5abf72b9f1d36e8b4dc3b))
+* **deps:** Bump insta from 1.47.2 to 1.48.0 ([#125](https://github.com/P4suta/linerule-rs/issues/125)) ([155388e](https://github.com/P4suta/linerule-rs/commit/155388eb846fe69426edd9810e1ef2aa6402380c))
+* **deps:** Bump rust from 1.95-bookworm to 1.96-bookworm ([#93](https://github.com/P4suta/linerule-rs/issues/93)) ([da11a83](https://github.com/P4suta/linerule-rs/commit/da11a83b3c03c1fe56c97057bdcfe325a994b8bb))
+* **deps:** Bump taiki-e/install-action from 2.79.2 to 2.79.6 ([#82](https://github.com/P4suta/linerule-rs/issues/82)) ([51372ae](https://github.com/P4suta/linerule-rs/commit/51372ae7471aef58c511fe16eabc8a3245751f3f))
+* **deps:** Bump taiki-e/install-action from 2.79.6 to 2.81.2 ([#98](https://github.com/P4suta/linerule-rs/issues/98)) ([f7a1a10](https://github.com/P4suta/linerule-rs/commit/f7a1a10196981ff244efb411b7a33f139697ce0a))
+* **deps:** Bump taiki-e/install-action from 2.81.2 to 2.81.7 ([#102](https://github.com/P4suta/linerule-rs/issues/102)) ([630cf6b](https://github.com/P4suta/linerule-rs/commit/630cf6b5ecf1a177332d21b0152486b720c3da01))
+* **deps:** Bump taiki-e/install-action from 2.81.7 to 2.82.0 ([#124](https://github.com/P4suta/linerule-rs/issues/124)) ([503dfb8](https://github.com/P4suta/linerule-rs/commit/503dfb851f1a13c2c488fe7e215667058f1fa78c))
+* **deps:** Bump taiki-e/install-action from 2.82.0 to 2.82.2 ([#129](https://github.com/P4suta/linerule-rs/issues/129)) ([b7c4f40](https://github.com/P4suta/linerule-rs/commit/b7c4f408bd2bbc27c1407ded87a9001bac584298))
+* **deps:** Bump taiki-e/install-action from 2.82.2 to 2.82.5 ([#132](https://github.com/P4suta/linerule-rs/issues/132)) ([b394369](https://github.com/P4suta/linerule-rs/commit/b394369ac40394e075cfd924d8a7fad6b512b7ab))
+* **deps:** Bump the commitlint group with 2 updates ([#97](https://github.com/P4suta/linerule-rs/issues/97)) ([aea28b9](https://github.com/P4suta/linerule-rs/commit/aea28b93c1c7227441e5ddacdec2144890fdacbf))
+* **deps:** Bump uuid from 1.23.1 to 1.23.2 ([#99](https://github.com/P4suta/linerule-rs/issues/99)) ([52cd5e2](https://github.com/P4suta/linerule-rs/commit/52cd5e25db2dacd571651d888a335395efa75074))
+* **deps:** Bump uuid from 1.23.2 to 1.23.3 ([#126](https://github.com/P4suta/linerule-rs/issues/126)) ([8dd9520](https://github.com/P4suta/linerule-rs/commit/8dd9520394c1ea694faf7f4d21b304c36c4440c3))
+* **deps:** Bump uuid from 1.23.3 to 1.23.4 ([#135](https://github.com/P4suta/linerule-rs/issues/135)) ([3d8cbeb](https://github.com/P4suta/linerule-rs/commit/3d8cbebedc8c2b540cd932617da13581b11a356b))
+
+
+### Continuous Integration
+
+* codify branch & tag protection as rulesets + ci-required gate ([#137](https://github.com/P4suta/linerule-rs/issues/137)) ([da8dc01](https://github.com/P4suta/linerule-rs/commit/da8dc0195d704eeeffde9888d2a2e8c95a8cbfcc))
+* enable merge queue and auto-merge all dependabot bumps ([#100](https://github.com/P4suta/linerule-rs/issues/100)) ([bdd4322](https://github.com/P4suta/linerule-rs/commit/bdd432289f1a777396cf13f22d925c78810aacdc))
+* gate cargo doc -D warnings on PRs ([#110](https://github.com/P4suta/linerule-rs/issues/110)) ([e768519](https://github.com/P4suta/linerule-rs/commit/e7685197e9da9a0de4682ce307d388323a03a8ca))
+* gate release-assets behind release environment ([#131](https://github.com/P4suta/linerule-rs/issues/131)) ([1d362f6](https://github.com/P4suta/linerule-rs/commit/1d362f6395b3276a48542d2959add877ad93e65e))
+* **release:** authenticate release-please as a GitHub App ([#141](https://github.com/P4suta/linerule-rs/issues/141)) ([94618e2](https://github.com/P4suta/linerule-rs/commit/94618e2c547192e22e81fde1c9c04b8a03c1e94e))
+* **release:** Authenticode signing + attestation + governance docs ([#140](https://github.com/P4suta/linerule-rs/issues/140)) ([072ba5b](https://github.com/P4suta/linerule-rs/commit/072ba5b130679cf8eb1d1bd833d2456363bb3c30))
+* **release:** backport find-my-files release-please fixes ([#144](https://github.com/P4suta/linerule-rs/issues/144)) ([3f754b7](https://github.com/P4suta/linerule-rs/commit/3f754b748c6530dad44bd9f5b3bf7f00ea78c503))
+* restore --squash to dependabot auto-merge (no merge queue available) ([#101](https://github.com/P4suta/linerule-rs/issues/101)) ([7094b1c](https://github.com/P4suta/linerule-rs/commit/7094b1c75d90db80e185aea6761d669671eee080))
+* **typos:** exclude generated CHANGELOG.md from spell check ([#143](https://github.com/P4suta/linerule-rs/issues/143)) ([31ece23](https://github.com/P4suta/linerule-rs/commit/31ece23278f47aecc942a79d6747f8e90f2006c5))
+
 ## [0.4.1](https://github.com/P4suta/linerule-rs/compare/v0.4.0...v0.4.1) (2026-05-24)
 
 
