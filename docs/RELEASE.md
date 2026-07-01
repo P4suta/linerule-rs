@@ -29,7 +29,7 @@ App のインストールトークンは独立した actor なので、その PR
      - **Pull requests**: Read and write（リリースPR の作成/更新・`autorelease` ラベル張替）
      - 他は No access（Metadata: Read は自動）
    - **Where can this app be installed**: Only on this account
-2. 作成後の画面で **App ID** を控える。
+2. 作成後の画面で **Client ID** を控える（App ID ではなく Client ID を使う）。
 3. **Private keys** → **Generate a private key** → ダウンロードした `.pem` を保管。
 
 ### B. App を repo にインストール
@@ -43,13 +43,13 @@ App のインストールトークンは独立した actor なので、その PR
    `.pem` は中身全体を貼り付け）:
 
    ```bash
-   gh secret set RELEASE_PLEASE_APP_ID --env release-please --repo P4suta/linerule-rs            # 値: App ID（数値）
+   gh secret set RELEASE_PLEASE_CLIENT_ID --env release-please --repo P4suta/linerule-rs         # 値: Client ID（Iv1.xxxx 形式）
    gh secret set RELEASE_PLEASE_APP_PRIVATE_KEY --env release-please --repo P4suta/linerule-rs < path/to/app.private-key.pem
    ```
 
    | Secret 名 | 値 |
    |---|---|
-   | `RELEASE_PLEASE_APP_ID` | GitHub App の App ID |
+   | `RELEASE_PLEASE_CLIENT_ID` | GitHub App の Client ID（`create-github-app-token` は app-id ではなく client-id で認証）|
    | `RELEASE_PLEASE_APP_PRIVATE_KEY` | 生成した秘密鍵（`.pem` 全体、BEGIN/END 行含む）|
 
    - `release-please` 環境には**必須レビュアーを付けない**。署名用の `release` 環境
@@ -57,12 +57,14 @@ App のインストールトークンは独立した actor なので、その PR
    - environment スコープの secret は `release-please.yml` の job に `environment:
      release-please` 宣言があって初めて読める（両者はセット）。
    - 過去に repo レベルへ同名 secret を登録済みなら**削除する**
-     （`gh secret delete RELEASE_PLEASE_APP_ID --repo P4suta/linerule-rs` 等）。
+     （`gh secret delete RELEASE_PLEASE_CLIENT_ID --repo P4suta/linerule-rs` 等）。旧
+     `RELEASE_PLEASE_APP_ID` を登録済みなら不要になるので削除してよい。
 
 ## リリースの流れ（セットアップ後）
 
 1. `main` に `feat:`/`fix:` 等がマージされる → release-please が **リリースPR**（version bump +
-   CHANGELOG）を開く/更新する。App 作成なので**この PR で CI が走る**。
+   CHANGELOG）を開く/更新する。App 作成なので**この PR で CI が走る**。同 run で
+   `Cargo.lock` を新バージョンに同期するコミット（Contents API 経由の署名付き）も PR に載る。
 2. リリースPR をマージ → 同 run で `autorelease` ラベルをリコンサイルし、`vX.Y.Z` タグを **App
    トークンで push** → タグが `release-assets.yml` を起動。
 3. release-assets が `release` 環境の**承認待ち**で停止 → 承認 → 署名付き EXE + SBOM +
@@ -74,5 +76,10 @@ App のインストールトークンは独立した actor なので、その PR
   draft→publish フローを release-assets 側に任せるため。副作用でリリースPRの `autorelease: pending`
   ラベルが `tagged` に進まないので、`release-please.yml` の「reconcile autorelease label」ステップが
   毎 run で張り替えて queue 詰まりを防ぐ。
+- `release-type: simple` は `Cargo.toml` の version しかバンプせず `Cargo.lock` を触らないため、
+  リリースPR ブランチ上で `cargo update --workspace` を実行して lock のメンバー版を同期する。
+  `require-signed-commits` ルールセットが bot の未署名コミットを弾くので、`git push` ではなく
+  **Contents API（`gh api PUT`）** でコミットする（API 経由は GitHub が署名する）。これが無いと
+  リリースPR の `--locked` CI と release-assets ビルドが「lock file out of date」で落ちる。
 - 手動で再評価したいときは `gh workflow run release-please.yml`（`workflow_dispatch`）。
 - App トークンは run ごとに発行・失効する短命トークン。PAT のような長期保管トークンは使わない。

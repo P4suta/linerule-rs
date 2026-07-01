@@ -8,9 +8,11 @@
 # (draft=false)" is the only supported automation path. See ADR-0014
 # (supersedes ADR-0010).
 #
-# Signing is non-blocking: without secrets (ES_USERNAME / CREDENTIAL_ID) the
-# binary ships unsigned with a `::warning::`. Setup and rationale: docs/SIGNING.md
-# and ADR-0017. Verify provenance:
+# A published release must be signed: without secrets (ES_USERNAME /
+# CREDENTIAL_ID) a `publish=true` run hard-fails at the irreversible boundary
+# rather than shipping unsigned. A `publish=false` smoke test still builds
+# unsigned (nothing is published). Setup and rationale: docs/SIGNING.md and
+# ADR-0017. Verify provenance:
 # `gh attestation verify <exe> --repo P4suta/linerule-rs`.
 #
 # Trigger:
@@ -164,9 +166,19 @@ jobs:
           }
           Write-Host "signed: linerule-${tag}-win-x64.exe - $($sig.SignerCertificate.Subject)"
 
-      - name: warn if unsigned
-        if: env.HAVE_SIGNING != 'true'
-        run: echo "::warning::Signing secrets absent - publishing UNSIGNED binary (SmartScreen will warn end users). See docs/SIGNING.md to enable."
+      # publish=false smoke test with no signing secrets: build-only, just warn.
+      - name: warn if unsigned (smoke test only)
+        if: env.HAVE_SIGNING != 'true' && env.PUBLISH != 'true'
+        run: echo "::warning::Signing secrets absent - built UNSIGNED (smoke test, nothing published). See docs/SIGNING.md to enable."
+
+      # Gate at the irreversible boundary: a real publish must ship signed. If the
+      # signing secrets were absent nothing above signed the binary - fail HERE,
+      # before any Release/attestation, rather than publishing unsigned. ADR-0017.
+      - name: require a signature before publishing
+        if: env.PUBLISH == 'true' && env.HAVE_SIGNING != 'true'
+        run: |-
+          echo "::error::Refusing to publish an UNSIGNED release. Set the signing secrets (ES_USERNAME / CREDENTIAL_ID). See docs/SIGNING.md."
+          exit 1
 
       # SHA256SUMS.txt (exe + sbom). For `sha256sum -c` compatibility: lowercase
       # hex, bare filenames, LF newlines (use WriteAllText; Out-File emits CRLF).
@@ -224,15 +236,17 @@ jobs:
       # `gh attestation verify linerule-vX.Y.Z-win-x64.exe --repo P4suta/linerule-rs`.
       - name: attest build provenance
         if: env.PUBLISH == 'true'
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             linerule-${{ github.event.inputs.tag || github.ref_name }}-win-x64.exe
             SHA256SUMS.txt
 
+      # actions/attest-sbom is deprecated in favor of the generic actions/attest
+      # (same inputs). https://github.com/actions/attest-sbom
       - name: attest SBOM
         if: env.PUBLISH == 'true'
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: linerule-${{ github.event.inputs.tag || github.ref_name }}-win-x64.exe
           sbom-path: linerule-${{ github.event.inputs.tag || github.ref_name }}-sbom.cdx.json
