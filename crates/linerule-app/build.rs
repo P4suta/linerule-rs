@@ -6,7 +6,12 @@ use std::process::Command;
 fn main() {
     #[cfg(target_os = "windows")]
     {
-        // app.rc embeds both the manifest (RT_MANIFEST) and the icon (ICON).
+        // Two separate compiles on purpose. The manifest must stay a plain
+        // `.manifest` compile — routing it through an explicit `1 24` line in a
+        // .rc makes its PerMonitorV2 DPI awareness take effect at load time and
+        // collide with the app's runtime SetProcessDpiAwarenessContext call
+        // (E_ACCESSDENIED). app.rc carries only the icon.
+        let _ = embed_resource::compile("app.manifest", embed_resource::NONE);
         let _ = embed_resource::compile("app.rc", embed_resource::NONE);
         println!("cargo:rerun-if-changed=app.rc");
         println!("cargo:rerun-if-changed=app.manifest");
