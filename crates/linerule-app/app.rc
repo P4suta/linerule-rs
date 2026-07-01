@@ -1,0 +1,12 @@
+#pragma code_page(65001)
+
+// Embeds two resources into linerule.exe via embed-resource (build.rs):
+//   - the application manifest (DPI v2 / longPathAware / supportedOS)
+//   - the application icon (shown in Explorer, Task Manager, etc.)
+// No `#include` so llvm-rc (cargo-xwin cross builds) compiles it too.
+
+// CREATEPROCESS_MANIFEST_RESOURCE_ID (1) / RT_MANIFEST (24): EXE manifest.
+1 24 "app.manifest"
+
+// The lowest-id icon group becomes the executable's default shell icon.
+1 ICON "assets/linerule.ico"
