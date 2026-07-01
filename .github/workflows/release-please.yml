@@ -3,7 +3,7 @@
 # token-created release PR never runs CI (unmergeable under the ci-required
 # ruleset) and a token-pushed tag never fires release-assets. An App installation
 # token is a real actor: its PR triggers CI and its tag triggers release-assets.
-# Requires release-please environment secrets RELEASE_PLEASE_APP_ID +
+# Requires release-please environment secrets RELEASE_PLEASE_CLIENT_ID +
 # RELEASE_PLEASE_APP_PRIVATE_KEY from an installed App with Contents:write +
 # Pull requests:write (see docs/RELEASE.md).
 #
@@ -41,14 +41,62 @@ jobs:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         with:
-          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          client-id: ${{ secrets.RELEASE_PLEASE_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
 
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: rp
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           token: ${{ steps.app-token.outputs.token }}
+
+      # release-please bumps Cargo.toml's [workspace.package] version (toml
+      # extra-files updater) but the `simple` release-type never touches
+      # Cargo.lock, so the lock's linerule-* member versions go stale and the
+      # Release PR's own `--locked` CI (and release-assets, CARGO_NET_LOCKED)
+      # would fail. Sync the lock on the Release PR branch. Parse the PR JSON in
+      # bash (jq), never `fromJSON()` in YAML: a step's `env:` is evaluated
+      # eagerly regardless of `if:`, so a `fromJSON('')` there crashes the no-op
+      # runs where `pr` is empty. This step is gated on a plain string compare
+      # and emits a plain string output.
+      - name: resolve the Release PR branch
+        id: rp_branch
+        if: ${{ steps.rp.outputs.pr != '' }}
+        env:
+          PR_JSON: ${{ steps.rp.outputs.pr }}
+        run: echo "branch=$(printf '%s' "$PR_JSON" | jq -r '.headBranchName')" >> "$GITHUB_OUTPUT"
+      - name: check out the Release PR branch
+        if: ${{ steps.rp_branch.outputs.branch != '' }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.rp_branch.outputs.branch }}
+          token: ${{ steps.app-token.outputs.token }}
+      - name: sync Cargo.lock to the bumped workspace version
+        if: ${{ steps.rp_branch.outputs.branch != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ steps.rp_branch.outputs.branch }}
+        run: |-
+          set -euo pipefail
+          # `cargo update --workspace` only rewrites the path-crate versions in
+          # the lock (no compile), so the runner's default cargo suffices.
+          cargo update --workspace
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already in sync."
+            exit 0
+          fi
+          # Commit via the Contents API, not `git push`: the repo's
+          # require-signed-commits ruleset rejects an unsigned bot commit, but a
+          # commit created through the API is signed by GitHub (the same way
+          # release-please's own commits are). One file, on the Release PR branch.
+          gh api --method PUT "repos/$REPO/contents/Cargo.lock" \
+            -f message="chore: sync Cargo.lock to the release version" \
+            -f branch="$BRANCH" \
+            -f sha="$(git rev-parse "HEAD:Cargo.lock")" \
+            -f content="$(base64 -w0 Cargo.lock)"
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

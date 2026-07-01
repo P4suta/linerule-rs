@@ -5,9 +5,11 @@ Rationale and rejected alternatives: [ADR-0017](adr/0017-release-signing-and-att
 
 ## Status
 
-Signing is **non-blocking**. With the four eSigner secrets set, `.github/workflows/release-assets.yml`
-signs each `vX.Y.Z` tag's binary. Without them, the tag ships **unsigned with a `::warning::`** and the
-workflow still succeeds. Signing can be toggled without CI changes.
+Publishing a release **requires a signature**. With the four eSigner secrets set,
+`.github/workflows/release-assets.yml` signs each `vX.Y.Z` tag's binary. Without them, a `publish=true`
+run **hard-fails before creating the Release** (it refuses to ship unsigned); only a `publish=false`
+smoke test builds unsigned (and publishes nothing), emitting a `::warning::`. Signing can be toggled
+without CI changes. See ADR-0017 (amended 2026-07-01).
 
 Only the **first-party PE `linerule.exe`** is signed (single-binary distribution, ADR-0011).
 
@@ -63,8 +65,9 @@ This repo has GitHub **immutable releases ON** (ADR-0014). A published tag canno
 via **`workflow_dispatch` with `tag=main` / `publish=false`**. That path runs build → sign → verify and
 stops — no Release, tag, or attestation.
 
-- **Without secrets**: confirm the signing step is skipped, emits `::warning::`, and the workflow does not
-  fail (non-blocking wiring).
+- **Without secrets (`publish=false`)**: confirm the signing step is skipped, emits `::warning::`, and the
+  smoke test does not fail (build-only). A `publish=true` run without secrets instead hard-fails at
+  "require a signature before publishing" — no unsigned Release is ever cut.
 - **With secrets**: confirm "sign staged binary" and "verify signature" pass and
   `signed: linerule-main-win-x64.exe - CN=<name>` prints (real-signature check). `publish=false` keeps
   immutable clean.
