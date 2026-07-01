@@ -1,0 +1,14 @@
+#pragma code_page(65001)
+
+// Application icon, embedded into linerule.exe via embed-resource (build.rs).
+// Shown in Explorer, Task Manager, etc. No `#include`, so llvm-rc (cargo-xwin
+// cross builds) compiles it too.
+//
+// The manifest is embedded separately (build.rs compiles app.manifest on its
+// own). Do NOT add the manifest here via `1 24 "app.manifest"`: that makes the
+// manifest's PerMonitorV2 DPI awareness take effect at load time, which then
+// collides with the app's runtime SetProcessDpiAwarenessContext call
+// (E_ACCESSDENIED / HRESULT 0x80070005).
+
+// The lowest-id icon group becomes the executable's default shell icon.
+1 ICON "assets/linerule.ico"

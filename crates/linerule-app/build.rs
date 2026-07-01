@@ -1,4 +1,4 @@
-//! Build script: embed the Windows manifest (DPI v2, longPathAware; no-op off
+//! Build script: embed the Windows resources (manifest + app icon; no-op off
 //! Windows) and emit `LINERULE_VERSION` for `src/version.rs`.
 
 use std::process::Command;
@@ -6,7 +6,16 @@ use std::process::Command;
 fn main() {
     #[cfg(target_os = "windows")]
     {
+        // Two separate compiles on purpose. The manifest must stay a plain
+        // `.manifest` compile — routing it through an explicit `1 24` line in a
+        // .rc makes its PerMonitorV2 DPI awareness take effect at load time and
+        // collide with the app's runtime SetProcessDpiAwarenessContext call
+        // (E_ACCESSDENIED). app.rc carries only the icon.
         let _ = embed_resource::compile("app.manifest", embed_resource::NONE);
+        let _ = embed_resource::compile("app.rc", embed_resource::NONE);
+        println!("cargo:rerun-if-changed=app.rc");
+        println!("cargo:rerun-if-changed=app.manifest");
+        println!("cargo:rerun-if-changed=assets/linerule.ico");
     }
 
     emit_version();
