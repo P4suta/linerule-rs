@@ -3,9 +3,6 @@
 # The Rust toolchain itself is owned by rust-toolchain.toml.
 
 [tools]
-# JS runtime for commitlint (commit-msg hook).
-bun = "latest"
-
 # Task runner, git hooks, and the format/lint tools the recipes shell out to.
 just = "latest"
 lefthook = "latest"
@@ -29,6 +26,11 @@ cargo-binstall = "latest"
 "cargo:cargo-rdme" = "latest"
 "cargo:cargo-modules" = "latest"
 "cargo:cargo-depgraph" = "latest"
+
+# Conventional-Commits linter for the lefthook commit-msg hook — the local guard
+# that keeps release-please's version + CHANGELOG derivation fed with well-formed
+# commits.
+"cargo:committed" = "1"
 
 [settings.cargo]
 # Use cargo-binstall (prebuilt binaries) for cargo: backend tools, not source builds.

@@ -84,7 +84,7 @@ Dependency direction is one-way: `linerule-app → linerule-platform-windows →
 
 ### Dev environment
 
-Two paths: **Docker** (host needs only Docker and [`just`](https://github.com/casey/just); all Rust tools — `cargo`, `cargo-xwin`, `cargo-deny`, `cargo-nextest`, `cargo-machete`, `cargo-llvm-cov`, `cargo-audit`, `cargo-sort`, `typos`, `taplo`, `biome`, `yamlfmt`, `lefthook`, `actionlint`, `commitlint` — live in the container) or **native Windows** (see below). `just` auto-detects which.
+Two paths: **Docker** (host needs only Docker and [`just`](https://github.com/casey/just); all Rust tools — `cargo`, `cargo-xwin`, `cargo-deny`, `cargo-nextest`, `cargo-machete`, `cargo-llvm-cov`, `cargo-audit`, `cargo-sort`, `typos`, `taplo`, `biome`, `yamlfmt`, `lefthook`, `actionlint` — live in the container) or **native Windows** (see below). `just` auto-detects which.
 
 ```bash
 just bootstrap      # one-shot: docker build + git hooks + xwin sysroot prefetch + doctor
@@ -95,8 +95,7 @@ just bootstrap      # one-shot: docker build + git hooks + xwin sysroot prefetch
 1. **Pull the dev image** — `docker compose pull` for `ghcr.io/p4suta/linerule-rs-dev:latest`, falling back to `docker compose build` (the fallback pulls `GITHUB_TOKEN` from `gh auth token` to dodge cargo-binstall's api.github.com rate limit). CI (`.github/workflows/dev-image.yml`) refreshes the image weekly and on Dockerfile changes, so a pull is usually ~30s.
 2. `docker compose up -d dev` — a persistent container that speeds up later `just <recipe>`.
 3. `lefthook install` — installs pre-commit / commit-msg / pre-push hooks into `.git/hooks/`.
-4. `bun install` — commitlint for the commit-msg hook ([Bun](https://bun.sh/), not npm).
-5. `just doctor` — checks all tools.
+4. `just doctor` — checks all tools.
 
 The Windows cross-compile MSVC CRT / Windows SDK (~500 MB) is baked into the dev image, so the first `just cross-check` passes immediately.
 

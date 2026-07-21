@@ -82,8 +82,8 @@ pre-commit:
 
 commit-msg:
   commands:
-    commitlint:
-      run: just _hook-commitlint {1}
+    committed:
+      run: committed --commit-file {1}
 
 pre-push:
   # Mirror CI gates locally. Mapping: lint↔clippy/fmt/cargo-deny/typos/actionlint/

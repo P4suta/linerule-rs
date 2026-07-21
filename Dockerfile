@@ -43,14 +43,6 @@ RUN apt-get update \
         unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Bun (single-binary JS runtime + package manager). Replaces Node + npm
-# for commitlint — fast install, no node_modules permission soup, single
-# binary release.
-ENV BUN_INSTALL=/usr/local/bun
-ENV PATH=$BUN_INSTALL/bin:$PATH
-RUN curl -fsSL https://bun.sh/install | bash \
-    && bun --version
-
 # Rust toolchain extras.
 RUN rustup target add x86_64-pc-windows-msvc \
     && rustup component add rustfmt clippy rust-src
