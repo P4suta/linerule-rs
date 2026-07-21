@@ -275,6 +275,10 @@ jobs:
           DB="$HOME/.cargo/advisory-db"
           git clone --depth 1 https://github.com/rustsec/advisory-db "$DB"
           rm -f "$DB/crates/libcrux-ml-dsa/RUSTSEC-2026-0076.md"
+      # `--no-fetch` also skips the crates.io index, which cargo-audit needs for
+      # yanked-crate checks; without it every crate errors ("No such crate in
+      # crates.io index"). Populate the index from Cargo.lock first.
+      - run: cargo fetch --locked
       - run: cargo audit --no-fetch --deny warnings
 
   coverage:
