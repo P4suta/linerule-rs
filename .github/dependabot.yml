@@ -38,19 +38,6 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "build(deps)"
-
-  - package-ecosystem: npm
-    directory: "/"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "build(deps)"
-    groups:
-      commitlint:
-        patterns:
-          - "@commitlint/*"
-
   - package-ecosystem: docker
     directory: "/"
     schedule:

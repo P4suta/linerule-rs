@@ -37,8 +37,8 @@ just verify-scenario    # inject Ctrl+Alt chord via SendInput, assert state tran
 
 ## Commit / PR rules
 
-- [Conventional Commits](https://www.conventionalcommits.org/) (`feat:` / `fix:` / `perf:` / `docs:` / `refactor:` / `test:` / `chore:` / `ci:` / `deps:`). commitlint (`commitlint.config.mjs`) lints every commit in a PR.
-- **Squash-merge only.** Commits other than `Merge X into Y` form require Conventional Commits (a colon-prefixed first line like `Merge origin/main: <desc>` is parsed as conventional and fails).
+- [Conventional Commits](https://www.conventionalcommits.org/) (`feat:` / `fix:` / `perf:` / `docs:` / `refactor:` / `test:` / `chore:` / `ci:` / `deps:`), enforced by [committed](https://github.com/crate-ci/committed) (`committed.toml`) in the lefthook commit-msg hook.
+- **Squash-merge only.**
 - Releases are cut by [release-please](https://github.com/googleapis/release-please), not a bot: it bumps the CHANGELOG from conventional commits and tags (`.github/workflows/release-please.yml`). On tag push, `release-assets.yml` attaches `linerule-vX.Y.Z-win-x64.exe` and the SBOM to the GitHub Release.
 
 ## Before pushing

@@ -42,8 +42,6 @@ biome := if mode == "docker" { docker_run + " biome" } else { "biome" }
 yamlfmt := if mode == "docker" { docker_run + " yamlfmt" } else { "yamlfmt" }
 # Non-login shell: a login shell (`-lc`) re-inits PATH and drops cargo.
 sh := if mode == "docker" { docker_run + " bash -c" } else { "bash -c" }
-bun := if mode == "docker" { docker_run + " bun" } else { "bun" }
-bunx := if mode == "docker" { docker_run + " bunx" } else { "bunx" }
 
 # The docker image bakes in nextest; a native host may not have it, so the
 # test recipes fall back to `cargo test --test-threads=1` (which also
@@ -65,41 +63,37 @@ bootstrap:
     @if [ "{{mode}}" = "docker" ]; then just bootstrap-docker; else just bootstrap-native; fi
 
 # Container bootstrap: pull the prebuilt dev image (or build locally if
-# absent), bring up the persistent dev container, install git hooks, restore
-# the commitlint bun packages, and run `just doctor`. The Windows
-# cross-compile sysroot (MSVC CRT + Windows SDK, ~500 MB) is baked into the
-# dev image, so the first `just cross-check` is instant.
+# absent), bring up the persistent dev container, install git hooks, and run
+# `just doctor`. The Windows cross-compile sysroot (MSVC CRT + Windows SDK,
+# ~500 MB) is baked into the dev image, so the first `just cross-check` is
+# instant.
 bootstrap-docker:
-    @echo "==> 1/4 fetch dev image (try ghcr.io, fall back to local build)"
+    @echo "==> 1/3 fetch dev image (try ghcr.io, fall back to local build)"
     @docker compose pull 2>/dev/null && echo "  (pulled prebuilt image from ghcr.io)" \
         || (echo "  (no published image, building locally with GITHUB_TOKEN if available)" && \
             GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}" docker compose build)
-    @echo "==> 2/4 docker compose up -d dev (persistent dev container)"
+    @echo "==> 2/3 docker compose up -d dev (persistent dev container)"
     docker compose up -d dev
-    @echo "==> 3/4 lefthook install (pre-commit / commit-msg / pre-push hooks)"
+    @echo "==> 3/3 lefthook install (pre-commit / commit-msg / pre-push hooks)"
     {{lefthook}} install
-    @echo "==> 4/4 bun install (commitlint, used by commit-msg hook)"
-    {{bun}} install
     @just doctor
     @echo
     @echo "🎉 bootstrap done. Try: just build / just test / just cross-check / just lint"
 
 # Native bootstrap (Docker-less Windows host). Adds the rustup components and
 # msvc target, installs the host toolchain via mise (see mise.toml), wires git
-# hooks, restores commitlint packages, and confirms the environment. The
-# post-`mise install` steps run under `mise exec` so freshly installed tools
-# are on PATH within this same run. Idempotent.
+# hooks, and confirms the environment. The post-`mise install` steps run under
+# `mise exec` so freshly installed tools are on PATH within this same run.
+# Idempotent.
 bootstrap-native:
-    @echo "==> 1/5 rustup components + msvc target"
+    @echo "==> 1/4 rustup components + msvc target"
     rustup component add rustfmt clippy rust-src llvm-tools-preview
     rustup target add x86_64-pc-windows-msvc
-    @echo "==> 2/5 mise install (cargo-nextest, biome, yamlfmt, ... — see mise.toml)"
+    @echo "==> 2/4 mise install (cargo-nextest, biome, yamlfmt, ... — see mise.toml)"
     mise install
-    @echo "==> 3/5 lefthook install (pre-commit / commit-msg / pre-push hooks)"
+    @echo "==> 3/4 lefthook install (pre-commit / commit-msg / pre-push hooks)"
     mise exec -- lefthook install
-    @echo "==> 4/5 bun install (commitlint, used by commit-msg hook)"
-    mise exec -- bun install
-    @echo "==> 5/5 doctor"
+    @echo "==> 4/4 doctor"
     @mise exec -- just doctor-native
     @echo
     @echo "🎉 native bootstrap done. Native superpowers: just run / just verify / just publish-windows-native"
@@ -140,7 +134,6 @@ doctor-docker:
         check just           "just --version"; \
         check mold           "mold --version"; \
         check clang          "clang --version"; \
-        check bun            "bun --version"; \
     '
     @echo "==> doctor: ok"
 
@@ -171,7 +164,6 @@ doctor-native:
         check actionlint     "actionlint -version"; \
         check lefthook       "lefthook version"; \
         check just           "just --version"; \
-        check bun            "bun --version"; \
         check jq             "jq --version"; \
         soft  cargo-llvm-cov "cargo llvm-cov --version"; \
         soft  dot            "dot -V"; \
@@ -466,7 +458,6 @@ crash-latest:
 
 hooks:
     {{lefthook}} install
-    {{bun}} install
 
 # ----- lefthook delegated recipes (do not run directly) -----
 
@@ -497,6 +488,3 @@ _hook-xtask-dep-graph:
 _hook-docs-drift:
     just docs
     {{sh}} "git diff --quiet docs/ README.md || (echo 'docs drift detected — run: just docs, then stage docs/ and README.md' >&2; exit 1)"
-
-_hook-commitlint msg_path:
-    {{bunx}} commitlint --edit {{msg_path}}
