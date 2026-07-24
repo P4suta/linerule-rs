@@ -16,3 +16,6 @@
 *.svg text eol=lf
 *.exe binary
 *.cdx.json text eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
