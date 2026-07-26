@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.6.0](https://github.com/P4suta/linerule-rs/compare/v0.5.0...v0.6.0) (2026-07-26)
+
+
+### Features
+
+* complete linerule 0.6 release ([#169](https://github.com/P4suta/linerule-rs/issues/169)) ([a5aab83](https://github.com/P4suta/linerule-rs/commit/a5aab83e84bf3564a746a4b713507008eb7af5d8))
+
+
+### Bug Fixes
+
+* remove self-hosted release dependency ([#175](https://github.com/P4suta/linerule-rs/issues/175)) ([ee26332](https://github.com/P4suta/linerule-rs/commit/ee263320b202a179201cbf0216f2fd0bcda99749))
+
+
+### Build System
+
+* **deps:** Bump actions/attest from 4.1.1 to 4.2.0 ([#155](https://github.com/P4suta/linerule-rs/issues/155)) ([94013a1](https://github.com/P4suta/linerule-rs/commit/94013a155775a944bc43794e1335afe9871be081))
+* **deps:** Bump actions/checkout from 7.0.0 to 7.0.1 ([#164](https://github.com/P4suta/linerule-rs/issues/164)) ([6d49bc8](https://github.com/P4suta/linerule-rs/commit/6d49bc8c545c5fd5aec4370809143383870df783))
+* **deps:** Bump anyhow from 1.0.103 to 1.0.104 ([#159](https://github.com/P4suta/linerule-rs/issues/159)) ([5f6e397](https://github.com/P4suta/linerule-rs/commit/5f6e397e379eb88cb9f2a4b4920027c40bcf73cd))
+* **deps:** Bump clap from 4.6.1 to 4.6.3 ([#167](https://github.com/P4suta/linerule-rs/issues/167)) ([d5a40ab](https://github.com/P4suta/linerule-rs/commit/d5a40ab3a6e1074d10804edf631d74910a96d8e3))
+* **deps:** Bump crate-ci/typos from 1.47.2 to 1.48.0 ([#146](https://github.com/P4suta/linerule-rs/issues/146)) ([dc2a826](https://github.com/P4suta/linerule-rs/commit/dc2a82643de4b702e7fa602e06c2108bddec4067))
+* **deps:** Bump docker/build-push-action from 7.2.0 to 7.3.0 ([#153](https://github.com/P4suta/linerule-rs/issues/153)) ([0d3a228](https://github.com/P4suta/linerule-rs/commit/0d3a22827b926e7437072258d6cc2878f1452bff))
+* **deps:** Bump docker/login-action from 4.2.0 to 4.4.0 ([#148](https://github.com/P4suta/linerule-rs/issues/148)) ([7310b78](https://github.com/P4suta/linerule-rs/commit/7310b782c75268a78f0a51109bda8a2f674ea219))
+* **deps:** Bump docker/login-action from 4.4.0 to 4.5.1 ([#171](https://github.com/P4suta/linerule-rs/issues/171)) ([cac79d5](https://github.com/P4suta/linerule-rs/commit/cac79d55a0d6d13f0d479982c05564fbfa93acf2))
+* **deps:** Bump docker/metadata-action from 6.1.0 to 6.2.0 ([#147](https://github.com/P4suta/linerule-rs/issues/147)) ([ce61ec9](https://github.com/P4suta/linerule-rs/commit/ce61ec9cd3de9b1a9e4f7f91101101e4e21a3a19))
+* **deps:** Bump docker/setup-buildx-action from 4.1.0 to 4.2.0 ([#151](https://github.com/P4suta/linerule-rs/issues/151)) ([d3fbfb0](https://github.com/P4suta/linerule-rs/commit/d3fbfb06fdefa8842f3c454a7e722ed36f14563b))
+* **deps:** Bump ossf/scorecard-action from 2.4.3 to 2.4.4 ([#173](https://github.com/P4suta/linerule-rs/issues/173)) ([bce93c2](https://github.com/P4suta/linerule-rs/commit/bce93c254d57874013a50a650df90c9f47047bd2))
+* **deps:** Bump serde_json from 1.0.150 to 1.0.151 in the serde group ([#165](https://github.com/P4suta/linerule-rs/issues/165)) ([006b1a9](https://github.com/P4suta/linerule-rs/commit/006b1a9b70410550d8272b1a8294840b3bac943e))
+* **deps:** Bump taiki-e/install-action from 2.82.5 to 2.82.8 ([#150](https://github.com/P4suta/linerule-rs/issues/150)) ([30df437](https://github.com/P4suta/linerule-rs/commit/30df437044c11fab3b71bbcc6f9cf5ccecd69c6a))
+
 ## [0.5.0](https://github.com/P4suta/linerule-rs/compare/v0.4.1...v0.5.0) (2026-07-01)
 
 
