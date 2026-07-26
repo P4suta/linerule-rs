@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/P4suta/linerule-rs/compare/v0.6.0...v0.6.1) (2026-07-26)
+
+
+### Bug Fixes
+
+* harden release workflow orchestration ([#176](https://github.com/P4suta/linerule-rs/issues/176)) ([3471573](https://github.com/P4suta/linerule-rs/commit/3471573063eb1ec85f72c015e95ef8d75fa88abc))
+
 ## [0.6.0](https://github.com/P4suta/linerule-rs/compare/v0.5.0...v0.6.0) (2026-07-26)
 
 
