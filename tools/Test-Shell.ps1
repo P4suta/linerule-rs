@@ -728,9 +728,12 @@ try {
         -Name "linerule-settings" `
         -ExcludedIds $beforeSettingsIds
     Wait-SettingsReady -Process $settings
-    $focused = Invoke-WinApp "ui get-focused --json -a $($settings.Id)"
-    if ($focused -notmatch "Shortcut_cycle_effect") {
-        throw "External conflict did not focus Shortcut_cycle_effect:`n$focused"
+    $highlight = Invoke-WinApp (
+        "ui get-property `"Shortcut_cycle_effect`" " +
+        "--property HelpText --json -a $($settings.Id)"
+    )
+    if ($highlight -notmatch "(?i)register|conflict|failed") {
+        throw "External conflict did not highlight Shortcut_cycle_effect:`n$highlight"
     }
     $status = Invoke-WinApp (
         "ui get-property `"SettingsStatus`" --property Name --json -a $($settings.Id)"
@@ -871,9 +874,12 @@ try {
         -Name "linerule-settings" `
         -ExcludedIds ($settingsIds + @($failedSettingsId))
     Wait-SettingsReady -Process $settings
-    $focused = Invoke-WinApp "ui get-focused --json -a $($settings.Id)"
-    if ($focused -notmatch "Shortcut_cycle_mode") {
-        throw "Failed update did not refocus Shortcut_cycle_mode:`n$focused"
+    $highlight = Invoke-WinApp (
+        "ui get-property `"Shortcut_cycle_mode`" " +
+        "--property HelpText --json -a $($settings.Id)"
+    )
+    if ($highlight -notmatch "(?i)register|conflict|failed") {
+        throw "Failed update did not highlight Shortcut_cycle_mode:`n$highlight"
     }
     Invoke-WinApp (
         "ui screenshot --output `"$output\update-conflict.png`" " +
