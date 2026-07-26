@@ -14,7 +14,7 @@ use serde::Serialize;
 
 use crate::{
     anim::Lerp,
-    color::{Rgba, perceptual},
+    color::{Rgba, Thickness, perceptual},
     config::OverlayConfig,
     geometry::{Logical, Point, ScreenRect},
     state::{Mode, SurroundEffect},
@@ -34,7 +34,7 @@ pub struct OverlaySample {
     /// shown. Applied perceptually ([`perceptual::smooth`]) to all alpha.
     pub master: u8,
     /// Slit thickness in logical px (glides during bumps).
-    pub thickness_px: u16,
+    pub thickness: Thickness,
     /// Mask opacity byte, pre-perceptual ([`crate::color::Opacity::get`] domain).
     pub mask_alpha: u8,
     /// Style crossfade `0..=255`: `0` = dim mask color, `255` = white wash.
@@ -48,7 +48,7 @@ impl OverlaySample {
     pub const fn settled(config: OverlayConfig) -> Self {
         Self {
             master: u8::MAX,
-            thickness_px: config.thickness.get(),
+            thickness: config.thickness,
             mask_alpha: config.opacity.get(),
             style_mix: config.effect.mix_target(),
         }
@@ -113,10 +113,13 @@ fn slit_frame(
     sample: OverlaySample,
 ) -> OverlayFrame {
     let brush = surround_brush(config, sample);
-    let thickness = i32::from(sample.thickness_px);
-    let (before, after) = split_around(axis_value(axis, cursor), thickness);
-
-    OverlayFrame::from_slit(axis, monitor, before, after, brush)
+    OverlayFrame::from_slit(
+        axis,
+        monitor,
+        axis_value(axis, cursor),
+        sample.thickness,
+        brush,
+    )
 }
 
 /// Brush for the surround bands: `Solid` for dim/white-wash, `Blur` for blur.
@@ -498,7 +501,7 @@ mod tests {
     fn sample_thickness_overrides_config() {
         let config = OverlayConfig::DEFAULT; // thickness = 28
         let sample = OverlaySample {
-            thickness_px: 100,
+            thickness: Thickness::try_new(100).expect("valid test thickness"),
             ..OverlaySample::settled(config)
         };
         let f = frame(
@@ -514,7 +517,7 @@ mod tests {
                 Geometry::Rect(r) => r,
             })
             .collect();
-        // Gap between the top/bottom bands (the slit) = sample.thickness_px
+        // Gap between the top/bottom bands (the slit) = sample.thickness.
         let gap = bands[1].top() - bands[0].bottom();
         assert_eq!(gap, 100, "slit width must come from the sample");
     }

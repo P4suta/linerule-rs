@@ -169,7 +169,7 @@ function Invoke-Ui {
     )
 
     $output = Invoke-MiseCommand (
-        "winapp ui $Arguments -a $script:TargetProcessId"
+        "winapp ui $Arguments -a linerule-settings"
     )
     if ($ReturnOutput) {
         return $output -join "`n"
@@ -245,7 +245,32 @@ function Start-Settings {
     if (-not $pidMatch.Success) {
         throw "winapp did not return the launched process id:`n$launchText"
     }
-    $script:TargetProcessId = [int]$pidMatch.Groups[1].Value
+    $launchProcessId = [int]$pidMatch.Groups[1].Value
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $process = Get-Process `
+            -Name "linerule-settings" `
+            -ErrorAction SilentlyContinue |
+            Sort-Object StartTime -Descending |
+            Select-Object -First 1
+        if ($null -ne $process) {
+            $script:TargetProcessId = $process.Id
+            break
+        }
+        $launcher = Get-Process `
+            -Id $launchProcessId `
+            -ErrorAction SilentlyContinue
+        if ($null -eq $launcher) {
+            throw "linerule settings exited before its window opened:`n$launchText"
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($script:TargetProcessId -le 0) {
+        throw "linerule settings did not create a process within 15 seconds:`n$launchText"
+    }
+    Write-Host (
+        "linerule settings launched: winapp PID $launchProcessId; " +
+        "UI process PID $script:TargetProcessId")
     Invoke-Ui "wait-for `"SaveSettings`" --timeout 15000"
 }
 

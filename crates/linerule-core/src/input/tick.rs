@@ -152,7 +152,7 @@ impl OverlayAnim {
     pub fn sample(self, now_ms: i64) -> OverlaySample {
         OverlaySample {
             master: self.master.sample(now_ms),
-            thickness_px: self.thickness.sample(now_ms),
+            thickness: crate::color::Thickness::clamped(self.thickness.sample(now_ms)),
             mask_alpha: self.mask_alpha.sample(now_ms),
             style_mix: self.style_mix.sample(now_ms),
         }
@@ -1198,11 +1198,11 @@ mod tests {
             let (next, fx) = step(w, &i, TELEMETRY, ANIM);
             let s = fx.iter().find_map(sample_of).expect("active mode draws");
             assert!(
-                s.thickness_px >= last,
+                s.thickness.get() >= last,
                 "thickness sample regressed: {last} -> {}",
-                s.thickness_px
+                s.thickness.get()
             );
-            last = s.thickness_px;
+            last = s.thickness.get();
             w = next;
             now += 50;
         }
@@ -1212,7 +1212,7 @@ mod tests {
         i.polled_cursor = cursor;
         let (_, fx) = step(w, &i, TELEMETRY, ANIM);
         let s = fx.iter().find_map(sample_of).expect("draw");
-        assert_eq!(s.thickness_px, 60);
+        assert_eq!(s.thickness.get(), 60);
     }
 
     /// After all transitions complete, the sample equals

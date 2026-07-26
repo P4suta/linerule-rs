@@ -17,6 +17,7 @@
 )]
 
 use clap::Parser;
+use std::process::ExitCode;
 
 mod boot;
 mod cli;
@@ -27,7 +28,13 @@ mod logging;
 mod storage;
 mod version;
 
-fn main() -> error::Result<()> {
+fn main() -> ExitCode {
     let cli = cli::Cli::parse();
-    boot::boot(cli)
+    match boot::boot(cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
+        },
+    }
 }

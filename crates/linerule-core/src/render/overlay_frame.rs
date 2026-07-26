@@ -4,14 +4,20 @@
 //! it to D2D draw calls.
 
 use crate::{
-    color::{BlurAmount, Rgba},
+    color::{BlurAmount, Rgba, Thickness},
     geometry::{Logical, Point, ScreenRect},
 };
 
-use super::{Axis, band};
+use super::{Axis, band, split_around};
 
-const BEFORE_SIDE: u8 = 1;
-const AFTER_SIDE: u8 = 2;
+const THICKNESS_MASK: u32 = 0x0fff;
+const STYLE_SHIFT: u32 = 12;
+const VALUE_SHIFT: u32 = 14;
+const OPACITY_SHIFT: u32 = 22;
+const STYLE_HORIZONTAL_SOLID: u32 = 0;
+const STYLE_VERTICAL_SOLID: u32 = 1;
+const STYLE_HORIZONTAL_BLUR: u32 = 2;
+const STYLE_VERTICAL_BLUR: u32 = 3;
 
 /// Fill style for a geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -64,58 +70,64 @@ impl Layer {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OverlayFrame {
     monitor: ScreenRect<Logical>,
-    before_edge: i32,
-    after_edge: i32,
-    brush: Brush,
-    axis: Axis,
-    sides: u8,
+    center: i32,
+    packed: u32,
 }
 
 impl OverlayFrame {
     /// Empty frame — emitted in `Mode::Off` or when the cursor is not yet known.
     pub const EMPTY: Self = Self {
         monitor: ScreenRect::new(Point::new(0, 0), 0, 0),
-        before_edge: 0,
-        after_edge: 0,
-        brush: Brush::Solid(Rgba::new(0, 0, 0, 0)),
-        axis: Axis::Horizontal,
-        sides: 0,
+        center: 0,
+        packed: 0,
     };
 
     pub(crate) fn from_slit(
         axis: Axis,
         monitor: ScreenRect<Logical>,
-        before_edge: i32,
-        after_edge: i32,
+        center: i32,
+        thickness: Thickness,
         brush: Brush,
     ) -> Self {
-        let mut frame = Self {
-            monitor,
-            before_edge,
-            after_edge,
-            brush,
-            axis,
-            sides: 0,
+        let (style, value, opacity) = match brush {
+            Brush::Solid(color) => {
+                debug_assert_eq!(color.r, color.g);
+                debug_assert_eq!(color.g, color.b);
+                let style = match axis {
+                    Axis::Horizontal => STYLE_HORIZONTAL_SOLID,
+                    Axis::Vertical => STYLE_VERTICAL_SOLID,
+                };
+                (style, color.r, color.a)
+            },
+            Brush::Blur { amount, opacity } => {
+                let style = match axis {
+                    Axis::Horizontal => STYLE_HORIZONTAL_BLUR,
+                    Axis::Vertical => STYLE_VERTICAL_BLUR,
+                };
+                (style, amount.get(), opacity)
+            },
         };
-        if frame.layer_at(0).is_some() {
-            frame.sides |= BEFORE_SIDE;
+        let packed = u32::from(thickness.get())
+            | (style << STYLE_SHIFT)
+            | (u32::from(value) << VALUE_SHIFT)
+            | (u32::from(opacity) << OPACITY_SHIFT);
+        Self {
+            monitor,
+            center,
+            packed,
         }
-        if frame.layer_at(1).is_some() {
-            frame.sides |= AFTER_SIDE;
-        }
-        frame
     }
 
     /// `true` when this frame paints nothing.
     #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.sides == 0
+    pub fn is_empty(self) -> bool {
+        self.packed == 0 || (self.layer_at(0).is_none() && self.layer_at(1).is_none())
     }
 
     /// Number of layers in this frame.
     #[must_use]
-    pub const fn layer_count(self) -> usize {
-        self.sides.count_ones() as usize
+    pub fn layer_count(self) -> usize {
+        self.layers().count()
     }
 
     /// Iterate over the at-most-two layers in paint order.
@@ -124,36 +136,59 @@ impl OverlayFrame {
     }
 
     fn layer_at(self, side: u8) -> Option<Layer> {
-        let rect = match (self.axis, side) {
+        if self.packed == 0 {
+            return None;
+        }
+        let thickness = i32::try_from(self.packed & THICKNESS_MASK).ok()?;
+        let (before_edge, after_edge) = split_around(self.center, thickness);
+        let style = (self.packed >> STYLE_SHIFT) & 0b11;
+        let axis = match style {
+            STYLE_HORIZONTAL_SOLID | STYLE_HORIZONTAL_BLUR => Axis::Horizontal,
+            STYLE_VERTICAL_SOLID | STYLE_VERTICAL_BLUR => Axis::Vertical,
+            _ => return None,
+        };
+        let rect = match (axis, side) {
             (Axis::Horizontal, 0) => band(
                 self.monitor.left(),
                 self.monitor.top(),
                 self.monitor.right(),
-                self.before_edge,
+                before_edge,
             ),
             (Axis::Horizontal, 1) => band(
                 self.monitor.left(),
-                self.after_edge,
+                after_edge,
                 self.monitor.right(),
                 self.monitor.bottom(),
             ),
             (Axis::Vertical, 0) => band(
                 self.monitor.left(),
                 self.monitor.top(),
-                self.before_edge,
+                before_edge,
                 self.monitor.bottom(),
             ),
             (Axis::Vertical, 1) => band(
-                self.after_edge,
+                after_edge,
                 self.monitor.top(),
                 self.monitor.right(),
                 self.monitor.bottom(),
             ),
             (Axis::Horizontal | Axis::Vertical, _) => None,
         }?;
+        let value = ((self.packed >> VALUE_SHIFT) & 0xff) as u8;
+        let opacity = ((self.packed >> OPACITY_SHIFT) & 0xff) as u8;
+        let brush = match style {
+            STYLE_HORIZONTAL_SOLID | STYLE_VERTICAL_SOLID => {
+                Brush::Solid(Rgba::new(value, value, value, opacity))
+            },
+            STYLE_HORIZONTAL_BLUR | STYLE_VERTICAL_BLUR => Brush::Blur {
+                amount: BlurAmount::try_new(value).ok()?,
+                opacity,
+            },
+            _ => return None,
+        };
         Some(Layer {
             geometry: Geometry::Rect(rect),
-            brush: self.brush,
+            brush,
         })
     }
 }
@@ -209,8 +244,8 @@ mod tests {
         let frame = OverlayFrame::from_slit(
             Axis::Horizontal,
             monitor,
-            20,
-            30,
+            25,
+            Thickness::try_new(10).expect("valid test thickness"),
             Brush::Solid(Rgba::DEFAULT_MASK),
         );
         let mut iterator = frame.layers();
@@ -233,6 +268,6 @@ mod tests {
             Geometry::Rect(ScreenRect::new(Point::new(0, 30), 100, 20))
         );
         assert_eq!(frame.layers().count(), frame.layer_count());
-        assert_eq!(core::mem::size_of::<OverlayFrame>(), 32);
+        assert_eq!(core::mem::size_of::<OverlayFrame>(), 24);
     }
 }

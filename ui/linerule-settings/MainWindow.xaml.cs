@@ -16,7 +16,14 @@ public sealed partial class MainWindow : Window
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
 
-        AppWindow.SetIcon("Assets/linerule.ico");
+        var iconPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Assets",
+            "linerule.ico");
+        if (File.Exists(iconPath))
+        {
+            AppWindow.SetIcon(iconPath);
+        }
         RootFrame.Loaded += RootFrame_Loaded;
         RootFrame.Navigate(typeof(MainPage));
     }
