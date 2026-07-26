@@ -13,6 +13,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
 
+        Title = Strings.Get("WindowTitle");
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
 
