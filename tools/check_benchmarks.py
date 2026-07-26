@@ -16,6 +16,13 @@ def main() -> None:
     parser.add_argument("criterion_directory", type=Path)
     parser.add_argument("--maximum-percent", type=float, default=10.0)
     parser.add_argument("--minimum-comparisons", type=int, default=1)
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="BENCHMARK",
+        help="exact benchmark path to report without applying the regression threshold",
+    )
     arguments = parser.parse_args()
 
     if arguments.maximum_percent <= 0.0:
@@ -32,8 +39,26 @@ def main() -> None:
         )
 
     maximum_ratio = arguments.maximum_percent / 100.0
+    excluded = set(arguments.exclude)
+    benchmark_names = {
+        report_path: str(
+            report_path.parent.parent.relative_to(arguments.criterion_directory)
+        ).replace("\\", "/")
+        for report_path in reports
+    }
+    unknown_exclusions = excluded.difference(benchmark_names.values())
+    if unknown_exclusions:
+        raise SystemExit(
+            "excluded benchmark(s) not found: " + ", ".join(sorted(unknown_exclusions))
+        )
+
     regressions: list[str] = []
     for report_path in reports:
+        benchmark = benchmark_names[report_path]
+        if benchmark in excluded:
+            print(f"{benchmark}: excluded from the regression threshold")
+            continue
+
         with report_path.open(encoding="utf-8") as stream:
             report = json.load(stream)
         try:
@@ -47,9 +72,6 @@ def main() -> None:
         if not all(math.isfinite(value) for value in (lower, point, upper)):
             raise SystemExit(f"non-finite Criterion estimate in {report_path}")
 
-        benchmark = report_path.parent.parent.relative_to(
-            arguments.criterion_directory
-        )
         print(
             f"{benchmark}: mean change "
             f"{point * 100.0:+.2f}% "

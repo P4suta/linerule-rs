@@ -559,12 +559,15 @@ jobs:
           --locked --
           --baseline-lenient previous --noplot'
       - name: Reject significant regressions of 10% or more
+        # Off steady-state never calls frame(); its old Vec return ABI is not
+        # comparable to the allocation-free fixed frame returned by 0.6.
         run: >-
           mise exec python --command
           'python tools/check_benchmarks.py
           target/performance/criterion
           --maximum-percent 10
-          --minimum-comparisons 12'
+          --minimum-comparisons 12
+          --exclude frame/off'
       - name: Upload Criterion comparison
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
