@@ -60,7 +60,7 @@ Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 
-public static class LineruleHighContrastApi
+public static class LineruleUiTestApi
 {
     public const uint GetHighContrast = 0x0042;
     public const uint SetHighContrast = 0x0043;
@@ -82,14 +82,65 @@ public static class LineruleHighContrastApi
         uint parameter,
         ref HighContrast value,
         uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(
+        IntPtr window,
+        IntPtr processId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachThreadInput(
+        uint firstThread,
+        uint secondThread,
+        [MarshalAs(UnmanagedType.Bool)] bool attach);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BringWindowToTop(IntPtr window);
+
+    public static bool ActivateWindow(IntPtr window)
+    {
+        var foreground = GetForegroundWindow();
+        var foregroundThread = GetWindowThreadProcessId(
+            foreground,
+            IntPtr.Zero);
+        var currentThread = GetCurrentThreadId();
+        var attached = foregroundThread != 0
+            && foregroundThread != currentThread
+            && AttachThreadInput(currentThread, foregroundThread, true);
+        try
+        {
+            _ = BringWindowToTop(window);
+            _ = SetForegroundWindow(window);
+            return GetForegroundWindow() == window;
+        }
+        finally
+        {
+            if (attached)
+            {
+                _ = AttachThreadInput(currentThread, foregroundThread, false);
+            }
+        }
+    }
 }
 "@
 
 function Get-HighContrastSnapshot {
-    $value = [LineruleHighContrastApi+HighContrast]::new()
+    $value = [LineruleUiTestApi+HighContrast]::new()
     $value.Size = [uint32][System.Runtime.InteropServices.Marshal]::SizeOf($value)
-    if (-not [LineruleHighContrastApi]::SystemParametersInfo(
-        [LineruleHighContrastApi]::GetHighContrast,
+    if (-not [LineruleUiTestApi]::SystemParametersInfo(
+        [LineruleUiTestApi]::GetHighContrast,
         $value.Size,
         [ref]$value,
         0
@@ -114,7 +165,7 @@ function Get-HighContrastSnapshot {
 function Set-HighContrastSnapshot {
     param([Parameter(Mandatory)]$Snapshot)
 
-    $value = [LineruleHighContrastApi+HighContrast]::new()
+    $value = [LineruleUiTestApi+HighContrast]::new()
     $value.Size = [uint32][System.Runtime.InteropServices.Marshal]::SizeOf($value)
     $value.Flags = [uint32]$Snapshot.Flags
     $schemePointer = [IntPtr]::Zero
@@ -125,11 +176,11 @@ function Set-HighContrastSnapshot {
                     $Snapshot.Scheme)
             $value.DefaultScheme = $schemePointer
         }
-        if (-not [LineruleHighContrastApi]::SystemParametersInfo(
-            [LineruleHighContrastApi]::SetHighContrast,
+        if (-not [LineruleUiTestApi]::SystemParametersInfo(
+            [LineruleUiTestApi]::SetHighContrast,
             $value.Size,
             [ref]$value,
-            [LineruleHighContrastApi]::SendChange
+            [LineruleUiTestApi]::SendChange
         )) {
             throw [System.ComponentModel.Win32Exception]::new(
                 [System.Runtime.InteropServices.Marshal]::GetLastWin32Error())
@@ -260,6 +311,16 @@ function Assert-NameContains {
 function Send-Keys {
     param([Parameter(Mandatory)][string]$Keys)
 
+    if (-not [LineruleUiTestApi]::ActivateWindow(
+        [IntPtr]$script:TargetWindowHandle
+    )) {
+        Invoke-Ui "click `"SettingsTitleBar`""
+        if (-not [LineruleUiTestApi]::ActivateWindow(
+            [IntPtr]$script:TargetWindowHandle
+        )) {
+            throw "Could not activate settings HWND $script:TargetWindowHandle."
+        }
+    }
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.SendKeys]::SendWait($Keys)
     Start-Sleep -Milliseconds 150
@@ -438,14 +499,14 @@ if ($EnableHighContrast) {
     $enabled = [pscustomobject]@{
         Flags = [uint32](
             $highContrastRestore.Flags -bor
-            [LineruleHighContrastApi]::HighContrastOn)
+            [LineruleUiTestApi]::HighContrastOn)
         Scheme = $highContrastRestore.Scheme
     }
     Set-HighContrastSnapshot -Snapshot $enabled
     $deadline = [DateTime]::UtcNow.AddSeconds(5)
     while (
         ((Get-HighContrastSnapshot).Flags -band
-            [LineruleHighContrastApi]::HighContrastOn) -eq 0
+            [LineruleUiTestApi]::HighContrastOn) -eq 0
     ) {
         if ([DateTime]::UtcNow -ge $deadline) {
             throw "High Contrast did not become active within five seconds."

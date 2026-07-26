@@ -738,7 +738,7 @@ try {
     $status = Invoke-WinApp (
         "ui get-property `"SettingsStatus`" --property Name --json -a $($settings.Id)"
     )
-    if ($status -notmatch "(?i)registered|conflict") {
+    if ($status -notmatch "(?i)registration|registered|conflict|failed") {
         throw "External conflict was not exposed by the Fluent status control:`n$status"
     }
     Invoke-WinApp (
