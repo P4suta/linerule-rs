@@ -268,6 +268,9 @@ function Send-Keys {
         "^[A-Za-z]$" { $Keys; break }
         default { throw "Unsupported UIA key sequence '$Keys'." }
     }
+    Invoke-Ui (
+        "screenshot --output `"$resolvedOutput\focus.png`" --focus"
+    )
     Invoke-Ui "send-keys `"$winAppKeys`" --via send-input"
     Start-Sleep -Milliseconds 150
 }

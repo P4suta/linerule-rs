@@ -182,8 +182,8 @@ function Find-TrayIcon {
         try {
             $bounds = $match.Current.BoundingRectangle
             if (
-                $match.Current.ControlType -eq
-                    [System.Windows.Automation.ControlType]::Button -and
+                $match.Current.ControlType -ne
+                    [System.Windows.Automation.ControlType]::Window -and
                 -not $match.Current.IsOffscreen -and
                 $bounds.Width -gt 0 -and
                 $bounds.Height -gt 0 -and
