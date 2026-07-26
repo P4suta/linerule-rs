@@ -194,8 +194,19 @@ function Assert-NameContains {
     $property = Invoke-Ui (
         "get-property `"$AutomationId`" --property Name --json"
     ) -ReturnOutput
-    if ($property -notmatch [regex]::Escape($Value)) {
-        throw "$AutomationId did not contain '$Value' in its accessible name:`n$property"
+    try {
+        $name = ($property | ConvertFrom-Json -ErrorAction Stop).properties.Name
+    }
+    catch {
+        throw "WinApp returned invalid property JSON for $AutomationId`:`n$property"
+    }
+    if (
+        $name -isnot [string] -or
+        -not $name.Contains($Value, [System.StringComparison]::Ordinal)
+    ) {
+        throw (
+            "$AutomationId did not contain '$Value' in its accessible name " +
+            "'$name'.")
     }
 }
 
