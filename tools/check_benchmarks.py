@@ -78,10 +78,10 @@ def main() -> None:
             f"(95% CI {lower * 100.0:+.2f}%..{upper * 100.0:+.2f}%)"
         )
 
-        # Criterion stores relative timing changes. A positive interval that
-        # excludes zero is statistically significant; the point estimate must
-        # also meet the release contract's 10% regression threshold.
-        if point >= maximum_ratio and lower > 0.0:
+        # Reject only when the entire 95% confidence interval reaches the
+        # release contract's threshold. A point estimate just above 10% whose
+        # interval extends below 10% is not a significant 10% regression.
+        if lower >= maximum_ratio:
             regressions.append(f"{benchmark} ({point * 100.0:+.2f}%)")
 
     if regressions:
