@@ -14,6 +14,7 @@ use crate::{crash_dump, logging};
 
 /// Initialize paths, logging, crash reporting, and preferences, then dispatch.
 pub(crate) fn boot(cli: Cli) -> Result<()> {
+    #[cfg(target_os = "windows")]
     attach_console_if_needed(cli.needs_console())?;
     let paths = DataPaths::discover()?;
     let logging = logging::init(cli.needs_console(), &paths)?;
@@ -336,11 +337,6 @@ fn attach_console_if_needed(needed: bool) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
-fn attach_console_if_needed(_needed: bool) -> Result<()> {
-    Ok(())
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -485,6 +481,7 @@ mod tests {
                 .is_none()
         );
 
+        #[cfg(target_os = "windows")]
         attach_console_if_needed(false).expect("console not requested");
     }
 
