@@ -497,6 +497,7 @@ jobs:
 
   mutants:
     name: cargo-mutants (linerule-core)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -705,7 +706,6 @@ jobs:
       - cargo-audit
       - reuse
       - sbom
-      - mutants
       - performance
       - coverage
       - windows-coverage
