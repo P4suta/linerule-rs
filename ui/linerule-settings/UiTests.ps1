@@ -276,7 +276,36 @@ function Start-Settings {
             -Id $script:TargetProcessId `
             -ErrorAction SilentlyContinue
         if ($null -eq $process) {
-            throw "linerule settings exited before creating a window:`n$launchText"
+            $startupFailurePath = "$ResponsePath.startup-error.txt"
+            if (Test-Path -LiteralPath $startupFailurePath -PathType Leaf) {
+                $startupFailure = Get-Content -Raw -LiteralPath $startupFailurePath
+                Copy-Item `
+                    -LiteralPath $startupFailurePath `
+                    -Destination (Join-Path $resolvedOutput "startup-error.txt") `
+                    -Force
+                throw (
+                    "linerule settings exited before creating a window:`n" +
+                    "$startupFailure")
+            }
+            $events = Get-WinEvent `
+                -FilterHashtable @{
+                    LogName = "Application"
+                    StartTime = [DateTime]::Now.AddMinutes(-2)
+                } `
+                -ErrorAction SilentlyContinue |
+                Where-Object Message -Match "linerule-settings" |
+                Select-Object -First 10 |
+                Format-List -Property TimeCreated, Id, ProviderName, Message |
+                Out-String
+            if (-not [string]::IsNullOrWhiteSpace($events)) {
+                $events |
+                    Set-Content `
+                        -LiteralPath (Join-Path $resolvedOutput "startup-events.txt") `
+                        -Encoding utf8
+            }
+            throw (
+                "linerule settings PID $script:TargetProcessId exited before " +
+                "creating a window:`n$launchText`n$events")
         }
         $process.Refresh()
         $script:TargetWindowHandle = $process.MainWindowHandle.ToInt64()
