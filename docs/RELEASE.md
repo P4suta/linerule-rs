@@ -1,8 +1,7 @@
 # Release
 
-This is the only release runbook. Stable releases target Windows 11 x64 and
-ARM64 and are blocked unless every automated gate and hardware evidence item
-passes.
+This is the release runbook. Stable releases target Windows 11 x64 and ARM64.
+All required validation runs on GitHub-hosted runners.
 
 ## Required assets
 
@@ -32,19 +31,20 @@ required so release PR and tag events trigger downstream workflows.
 
 ## Cut a release
 
-1. Merge the release-please PR after `ci-required` succeeds.
-2. On the resulting tag commit, dispatch `hardware-validation.yml` from an
-   interactive self-hosted Windows 11 x64 and ARM64 runner pair labeled
-   `linerule-hardware`. Both refuse fewer than two monitors or identical
-   effective DPI values.
-3. Run or rerun `release-assets.yml` for the tag, then review its native ARM64,
-   UIA, install/update, GPU/WARP, mixed-DPI, and High Contrast evidence.
-4. Approve the `release` environment.
-5. The workflow requires both `ci-required` and `hardware-required`, runs the
-   mise-pinned release check, signs each PE, builds and
+1. Merge the release-please PR after `ci-required` succeeds. That gate includes
+   native GitHub-hosted x64 and ARM64 builds, tests, release smoke tests, and
+   Fluent settings UI Automation.
+2. The resulting tag starts `release-assets.yml`. Review its packaging,
+   install/update, Blur, WARP, and High Contrast evidence.
+3. Approve the `release` environment.
+4. The workflow requires `ci-required`, runs the mise-pinned release check,
+   signs each PE, builds and
    signs the MSIX bundle, verifies both signatures, generates SBOMs and
    checksums, uploads everything to a draft, adds provenance, and only then
    publishes the immutable release.
+
+Notification-area interaction, physical mixed-DPI topology, and specific GPU
+hardware are not claimed as hosted-CI guarantees and do not block publishing.
 
 Publishing without valid PE and bundle signatures is forbidden. To test cloud
 signing, dispatch the workflow with `tag=main` and `publish=false`; do not create

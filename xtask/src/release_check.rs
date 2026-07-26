@@ -608,7 +608,6 @@ fn check_ruleset(root: &Path) -> Result<()> {
         .context("reading release-assets workflow")?;
     for required in [
         "ci-required",
-        "hardware-required",
         "protect-default-branch",
         "protect-release-tags",
         "require-signed-commits",
