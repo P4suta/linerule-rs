@@ -169,9 +169,22 @@ function Invoke-Ui {
 function Assert-Focused {
     param([Parameter(Mandatory)][string]$AutomationId)
 
-    $focused = Invoke-Ui "get-focused --json" -ReturnOutput
-    if ($focused -notmatch [regex]::Escape($AutomationId)) {
-        throw "Expected focus on $AutomationId, received:`n$focused"
+    $focused = Invoke-Ui (
+        "get-property `"$AutomationId`" --property HasKeyboardFocus --json"
+    ) -ReturnOutput
+    try {
+        $hasKeyboardFocus = (
+            $focused |
+                ConvertFrom-Json -ErrorAction Stop
+        ).properties.HasKeyboardFocus
+    }
+    catch {
+        throw "WinApp returned invalid focus JSON for $AutomationId`:`n$focused"
+    }
+    if ($hasKeyboardFocus -ne $true) {
+        throw (
+            "Expected focus on $AutomationId, but HasKeyboardFocus was " +
+            "'$hasKeyboardFocus'.")
     }
 }
 
