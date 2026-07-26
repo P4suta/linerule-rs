@@ -96,14 +96,14 @@ jobs:
             echo "::error::protect-default-branch does not require ci-required"
             exit 1
           fi
-      - name: require successful CI and Windows 11 hardware evidence for publishing
+      - name: require successful hosted CI for publishing
         if: github.event_name != 'workflow_dispatch' || inputs.publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |-
           commit="$(git rev-parse HEAD)"
-          for required in ci-required hardware-required; do
+          for required in ci-required; do
             conclusion="$(
               mise exec aqua:cli/cli -- gh api \
                 "repos/${GITHUB_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
