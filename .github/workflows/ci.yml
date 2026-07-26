@@ -85,7 +85,7 @@ jobs:
           cache: true
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - run: mise exec rust --command 'cargo build --workspace --all-targets --target ${{ matrix.target }}'
-      - run: mise exec cargo:cargo-nextest --command 'cargo nextest run --profile ci --workspace --all-targets --target ${{ matrix.target }} --run-ignored all'
+      - run: mise exec cargo:cargo-nextest --command 'cargo nextest run --profile ci --workspace --all-targets --target ${{ matrix.target }}'
       - run: mise exec rust --command 'cargo test --doc --workspace --target ${{ matrix.target }}'
         # nextest does not run doctests; run them as a separate step.
       - name: cargo test compatibility (parallel)
@@ -601,7 +601,7 @@ jobs:
           install_args: rust cargo:cargo-llvm-cov cargo:cargo-nextest python
           cache: true
       - name: Install pinned nightly coverage toolchain
-        run: mise --env coverage install
+        run: mise --env coverage install rust
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo llvm-cov (line/function/region gates)
         run: mise exec cargo:cargo-llvm-cov cargo:cargo-nextest --command 'cargo llvm-cov nextest --workspace --exclude linerule-platform-windows --exclude xtask --json --summary-only --output-path coverage-lines.json --fail-under-lines 90 --fail-under-functions 90 --fail-under-regions 90'

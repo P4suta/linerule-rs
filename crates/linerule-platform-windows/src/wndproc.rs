@@ -228,7 +228,7 @@ fn apply_tick(state: &OverlayWndState) -> (Result<()>, bool) {
     } else {
         Ok(())
     };
-    let result = retry_result.and_then(|()| apply_effects(state, effects.as_slice()));
+    let result = retry_result.and_then(|()| apply_effects(state, effects.iter()));
     let elapsed = tick_start.elapsed();
     let over_budget = is_over_budget(elapsed, crate::render_timing::refresh_rate_hz());
     state
@@ -318,9 +318,12 @@ fn is_over_budget(elapsed: std::time::Duration, refresh_hz: u32) -> bool {
 }
 
 /// Apply each `TickEffect` to the platform in order.
-fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> {
+fn apply_effects(
+    state: &OverlayWndState,
+    effects: impl IntoIterator<Item = TickEffect>,
+) -> Result<()> {
     for effect in effects {
-        match *effect {
+        match effect {
             TickEffect::Quit => {
                 tracing::info!(parent: state.span(), "Quit requested via tick");
                 win32_ffi::post_quit(0);
@@ -673,7 +676,7 @@ mod tests {
                 reason: RejectReason::AdjustWhileOff,
             },
         ];
-        apply_effects(&state, &effects).expect("effect dispatch without renderers");
+        apply_effects(&state, effects).expect("effect dispatch without renderers");
         let notifications = build_notifications(&state);
         assert_eq!(notifications.len(), 1);
         assert!(notifications[0].message.contains("Ctrl+Alt+H"));

@@ -168,7 +168,7 @@ fn hud_refresh_fires_on_state_change_even_within_interval() {
         ANIM,
     );
     let refreshed = effects.iter().find_map(|e| match e {
-        TickEffect::RefreshHud { state: s, .. } => Some(*s),
+        TickEffect::RefreshHud { state: s, .. } => Some(s),
         _ => None,
     });
     let s: State = refreshed.expect("RefreshHud should fire on state change");

@@ -84,6 +84,7 @@ impl OverlaySample {
 /// assert_eq!(out.layer_count(), 2);
 /// ```
 #[must_use]
+#[inline]
 pub fn frame(
     mode: Mode,
     config: OverlayConfig,

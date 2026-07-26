@@ -16,6 +16,21 @@ use crate::{crash_dump, logging};
 pub(crate) fn boot(cli: Cli) -> Result<()> {
     #[cfg(target_os = "windows")]
     attach_console_if_needed(cli.needs_console())?;
+
+    // `version` is intentionally independent of storage and logging. This
+    // keeps it usable in recovery environments where LocalState is absent.
+    if matches!(&cli.command, Some(Command::Version)) {
+        println!("linerule {}", crate::version::VERSION);
+        return Ok(());
+    }
+
+    // Desktop launches are unsupported here regardless of whether a
+    // Windows-style data root happens to be present in the environment.
+    #[cfg(not(target_os = "windows"))]
+    if matches!(&cli.command, None | Some(Command::Settings)) {
+        return Err(AppError::UnsupportedPlatform);
+    }
+
     let paths = DataPaths::discover()?;
     let logging = logging::init(cli.needs_console(), &paths)?;
     let run_id = Uuid::new_v4();

@@ -49,6 +49,7 @@ Enable Settings > System > For developers > Developer Mode, then rerun this scri
 
 $projectDirectory = $PSScriptRoot
 $project = Join-Path $projectDirectory "Linerule.Settings.csproj"
+$packageManifest = Join-Path $projectDirectory "Package.appxmanifest"
 $runtime = if ($Platform -eq "ARM64") { "win-arm64" } else { "win-x64" }
 
 & mise exec dotnet --command (
@@ -87,11 +88,13 @@ if (-not (Test-Path -LiteralPath $output -PathType Container)) {
 
 if ($Detach) {
     & mise exec "npm:@microsoft/winappcli" --command (
-        "winapp run `"$output`" --detach --json"
+        "winapp run `"$output`" --manifest `"$packageManifest`" " +
+        "--exe linerule-settings.exe --detach --json"
     )
 } else {
     & mise exec "npm:@microsoft/winappcli" --command (
-        "winapp run `"$output`" --debug-output"
+        "winapp run `"$output`" --manifest `"$packageManifest`" " +
+        "--exe linerule-settings.exe --debug-output"
     )
 }
 if ($LASTEXITCODE -ne 0) {

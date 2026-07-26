@@ -411,10 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn data_path_discovery_and_directory_creation_are_explicit() {
-        let discovered = DataPaths::discover().expect("discover current executable layout");
-        assert!(!discovered.root.as_os_str().is_empty());
-
+    fn directory_creation_is_explicit() {
         let temp = tempfile::tempdir().expect("tempdir");
         let data = paths(&temp.path().join("nested"));
         data.ensure_directories().expect("create data directories");

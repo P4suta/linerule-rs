@@ -321,76 +321,111 @@ pub enum TickEffect {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum OverlayEffect {
+    Clear,
+    Draw {
+        mode: Mode,
+        cursor: Point<Logical>,
+        sample: OverlaySample,
+    },
+}
+
 /// Fixed-capacity ordered output of one tick.
+///
+/// Payload shared by several effects is stored once. Iteration materializes
+/// the public [`TickEffect`] values in their stable application order. This
+/// avoids both heap allocation and eagerly initializing six copies of the
+/// largest enum variant on every tick.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TickEffects {
-    effects: [TickEffect; MAX_EFFECTS_PER_TICK],
-    len: usize,
+    state: State,
+    state_change: Option<OverlayAction>,
+    rejection: Option<RejectReason>,
+    quit: bool,
+    overlay: Option<OverlayEffect>,
+    hud_opacity: Option<(Point<Logical>, u8)>,
+    hud_refresh: Option<HudTier>,
 }
 
 impl TickEffects {
     /// Empty effect list.
     pub const EMPTY: Self = Self {
-        effects: [TickEffect::ClearOverlay; MAX_EFFECTS_PER_TICK],
-        len: 0,
+        state: State::DEFAULT,
+        state_change: None,
+        rejection: None,
+        quit: false,
+        overlay: None,
+        hud_opacity: None,
+        hud_refresh: None,
     };
-
-    fn push(&mut self, effect: TickEffect) {
-        let Some(slot) = self.effects.get_mut(self.len) else {
-            tracing::error!(
-                capacity = MAX_EFFECTS_PER_TICK,
-                "tick effect capacity invariant violated"
-            );
-            return;
-        };
-        *slot = effect;
-        self.len += 1;
-    }
-
-    /// Effects in application order.
-    #[must_use]
-    pub fn as_slice(&self) -> &[TickEffect] {
-        &self.effects[..self.len]
-    }
 
     /// Number of emitted effects.
     #[must_use]
-    pub const fn len(&self) -> usize {
-        self.len
+    pub fn len(&self) -> usize {
+        usize::from(self.state_change.is_some())
+            + usize::from(self.rejection.is_some())
+            + usize::from(self.quit)
+            + usize::from(self.overlay.is_some())
+            + usize::from(self.hud_opacity.is_some())
+            + usize::from(self.hud_refresh.is_some())
     }
 
     /// Whether no effects were emitted.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Iterate in application order.
-    pub fn iter(&self) -> core::slice::Iter<'_, TickEffect> {
-        self.as_slice().iter()
+    pub fn iter(&self) -> impl Iterator<Item = TickEffect> + '_ {
+        (0_u8..)
+            .take(MAX_EFFECTS_PER_TICK)
+            .filter_map(|slot| self.effect_at(slot))
+    }
+
+    fn effect_at(&self, slot: u8) -> Option<TickEffect> {
+        match slot {
+            0 => self.state_change.map(|action| TickEffect::LogStateChanged {
+                action,
+                mode: self.state.mode,
+            }),
+            1 => self
+                .rejection
+                .map(|reason| TickEffect::NotifyRejected { reason }),
+            2 => self.quit.then_some(TickEffect::Quit),
+            3 => self.overlay.map(|effect| match effect {
+                OverlayEffect::Clear => TickEffect::ClearOverlay,
+                OverlayEffect::Draw {
+                    mode,
+                    cursor,
+                    sample,
+                } => TickEffect::DrawOverlay {
+                    mode,
+                    cursor,
+                    config: self.state.config,
+                    sample,
+                },
+            }),
+            4 => self
+                .hud_opacity
+                .map(|(cursor, envelope)| TickEffect::SetHudOpacity {
+                    state: self.state,
+                    cursor,
+                    envelope,
+                }),
+            5 => self.hud_refresh.map(|tier| TickEffect::RefreshHud {
+                state: self.state,
+                tier,
+            }),
+            _ => None,
+        }
     }
 }
 
 impl Default for TickEffects {
     fn default() -> Self {
         Self::EMPTY
-    }
-}
-
-impl<'a> IntoIterator for &'a TickEffects {
-    type Item = &'a TickEffect;
-    type IntoIter = core::slice::Iter<'a, TickEffect>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-impl core::ops::Deref for TickEffects {
-    type Target = [TickEffect];
-
-    fn deref(&self) -> &Self::Target {
-        self.as_slice()
     }
 }
 
@@ -406,8 +441,6 @@ pub fn step(
     telemetry_refresh: Duration,
     anim_config: AnimConfig,
 ) -> (TickWorld, TickEffects) {
-    let mut effects = TickEffects::EMPTY;
-
     let prev_state = world.state;
     let mut state = world.state;
 
@@ -421,7 +454,6 @@ pub fn step(
     }
 
     let mut quit_requested = false;
-    let mut rejected_this_tick = false;
     let mut last_rejection = None;
     let mut last_state_change = None;
     for action in &input.drained_hotkeys {
@@ -436,19 +468,12 @@ pub fn step(
         }
         let (next, delta) = apply(state, *action);
         if let Some(reason) = delta.rejected {
-            rejected_this_tick = true;
             last_rejection = Some(reason);
         }
         if delta.is_any() {
-            last_state_change = Some((*action, next.mode));
+            last_state_change = Some(*action);
         }
         state = next;
-    }
-    if let Some((action, mode)) = last_state_change {
-        effects.push(TickEffect::LogStateChanged { action, mode });
-    }
-    if let Some(reason) = last_rejection {
-        effects.push(TickEffect::NotifyRejected { reason });
     }
 
     // Auto-hide the first-run guide once startup_full_hud_ms passes, unless the user
@@ -458,10 +483,6 @@ pub fn step(
         && now.saturating_sub(hud_view.boot_at_ms) >= i64::from(anim_config.startup_full_hud_ms)
     {
         hud_view.tier = HudTier::Hidden;
-    }
-
-    if quit_requested {
-        effects.push(TickEffect::Quit);
     }
 
     let anim = retarget_channels(world.anim, prev_state, state, now, anim_config);
@@ -487,34 +508,29 @@ pub fn step(
     let cursor_moved = input.polled_cursor != world.last_cursor;
     let next_cursor = input.polled_cursor;
 
-    effects.push(draw_or_clear(state, anim, next_cursor, now));
+    let overlay = draw_or_clear(state, anim, next_cursor, now);
 
     // While the envelope is live, push opacity every tick even with a
     // stationary cursor (only SetOpacity2 updates, so redraw cost is zero).
-    if let Some(cursor) = next_cursor
+    let hud_opacity = if let Some(cursor) = next_cursor
         && (cursor_moved || hud_envelope.is_live(now) || tier_changed)
     {
-        effects.push(TickEffect::SetHudOpacity {
-            state,
-            cursor,
-            envelope: hud_envelope.sample(now),
-        });
-    }
+        Some((cursor, hud_envelope.sample(now)))
+    } else {
+        None
+    };
     let interval_ms = i64::try_from(telemetry_refresh.as_millis()).unwrap_or(i64::MAX);
     let interval_elapsed = input.now_ms.saturating_sub(world.last_hud_refresh_at_ms) >= interval_ms;
-    // rejected_this_tick forces a refresh so the toast shows now, not after the
-    // telemetry interval. NotifyRejected was pushed above, so it precedes this
-    // RefreshHud (order matters).
-    let next_last_hud_refresh =
-        if state_changed || tier_changed || interval_elapsed || rejected_this_tick {
-            effects.push(TickEffect::RefreshHud {
-                state,
-                tier: hud_view.tier,
-            });
-            input.now_ms
-        } else {
-            world.last_hud_refresh_at_ms
-        };
+    // A rejection forces a refresh so the toast shows now, not after the
+    // telemetry interval. Iteration keeps NotifyRejected before RefreshHud.
+    let hud_refresh =
+        (state_changed || tier_changed || interval_elapsed || last_rejection.is_some())
+            .then_some(hud_view.tier);
+    let next_last_hud_refresh = if hud_refresh.is_some() {
+        input.now_ms
+    } else {
+        world.last_hud_refresh_at_ms
+    };
 
     let next_world = TickWorld {
         state,
@@ -524,6 +540,15 @@ pub fn step(
         anim,
         hud_view,
         hud_envelope,
+    };
+    let effects = TickEffects {
+        state,
+        state_change: last_state_change,
+        rejection: last_rejection,
+        quit: quit_requested,
+        overlay: Some(overlay),
+        hud_opacity,
+        hud_refresh,
     };
 
     // Invariants: frame_seq +1, last_hud_refresh_at_ms monotonic (except the
@@ -553,22 +578,20 @@ fn draw_or_clear(
     anim: OverlayAnim,
     next_cursor: Option<Point<Logical>>,
     now: i64,
-) -> TickEffect {
+) -> OverlayEffect {
     let master_now = anim.master.sample(now);
     match (state.mode, next_cursor) {
-        (Mode::Horizontal | Mode::Vertical, Some(cursor)) => TickEffect::DrawOverlay {
+        (Mode::Horizontal | Mode::Vertical, Some(cursor)) => OverlayEffect::Draw {
             mode: state.mode,
             cursor,
-            config: state.config,
             sample: anim.sample(now),
         },
-        (Mode::Off, Some(cursor)) if master_now > 0 => TickEffect::DrawOverlay {
+        (Mode::Off, Some(cursor)) if master_now > 0 => OverlayEffect::Draw {
             mode: Mode::from(state.last_active),
             cursor,
-            config: state.config,
             sample: anim.sample(now),
         },
-        _ => TickEffect::ClearOverlay,
+        _ => OverlayEffect::Clear,
     }
 }
 
@@ -709,22 +732,12 @@ mod tests {
         assert_eq!(TickEffects::default(), empty);
         assert!(empty.is_empty());
         assert_eq!(empty.len(), 0);
-        assert_eq!((&empty).into_iter().count(), 0);
+        assert_eq!(empty.iter().count(), 0);
 
         let (_, effects) = step(world(), &input(0), TELEMETRY, ANIM);
         assert!(!effects.is_empty());
         assert_eq!(effects.len(), 2);
-        assert_eq!((&effects).into_iter().count(), effects.len());
-        assert_eq!(
-            effects.iter().copied().collect::<Vec<_>>(),
-            effects.as_slice()
-        );
-
-        let mut saturated = TickEffects {
-            effects: [TickEffect::ClearOverlay; MAX_EFFECTS_PER_TICK],
-            len: MAX_EFFECTS_PER_TICK,
-        };
-        saturated.push(TickEffect::Quit);
+        assert_eq!(effects.iter().count(), effects.len());
     }
 
     #[test]
@@ -762,29 +775,30 @@ mod tests {
                 .count(),
             1
         );
+        let materialized = effects.iter().collect::<Vec<_>>();
         assert!(matches!(
-            effects[0],
+            materialized[0],
             TickEffect::LogStateChanged {
                 action: OverlayAction::ToggleOnOff,
                 mode: Mode::Off
             }
         ));
         assert!(matches!(
-            effects[1],
+            materialized[1],
             TickEffect::NotifyRejected {
                 reason: RejectReason::AdjustWhileOff
             }
         ));
         assert!(matches!(
-            effects[MAX_EFFECTS_PER_TICK - 3],
+            materialized[MAX_EFFECTS_PER_TICK - 3],
             TickEffect::ClearOverlay
         ));
         assert!(matches!(
-            effects[MAX_EFFECTS_PER_TICK - 2],
+            materialized[MAX_EFFECTS_PER_TICK - 2],
             TickEffect::SetHudOpacity { .. }
         ));
         assert!(matches!(
-            effects[MAX_EFFECTS_PER_TICK - 1],
+            materialized[MAX_EFFECTS_PER_TICK - 1],
             TickEffect::RefreshHud { .. }
         ));
     }
@@ -807,7 +821,7 @@ mod tests {
         let logs = effects
             .iter()
             .filter_map(|effect| match effect {
-                TickEffect::LogStateChanged { action, mode } => Some((*action, *mode)),
+                TickEffect::LogStateChanged { action, mode } => Some((action, mode)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -979,8 +993,11 @@ mod tests {
     #[test]
     fn empty_tick_clears_and_refreshes_hud() {
         let (next, fx) = step(world(), &input(0), TELEMETRY, ANIM);
-        assert_eq!(fx[0], TickEffect::ClearOverlay);
-        assert!(matches!(fx.last(), Some(TickEffect::RefreshHud { .. })));
+        assert_eq!(fx.iter().next(), Some(TickEffect::ClearOverlay));
+        assert!(matches!(
+            fx.iter().last(),
+            Some(TickEffect::RefreshHud { .. })
+        ));
         assert_eq!(next.frame_seq, 1);
     }
 
@@ -993,7 +1010,10 @@ mod tests {
             .expect("test action");
         input.polled_cursor = Some(Point::new(100, 100));
         let (next, fx) = step(world(), &input, TELEMETRY, ANIM);
-        assert!(matches!(fx[0], TickEffect::LogStateChanged { .. }));
+        assert!(matches!(
+            fx.iter().next(),
+            Some(TickEffect::LogStateChanged { .. })
+        ));
         assert!(
             fx.iter()
                 .any(|e| matches!(e, TickEffect::DrawOverlay { .. }))
@@ -1009,7 +1029,7 @@ mod tests {
             .try_push(OverlayAction::Quit)
             .expect("test action");
         let (_, fx) = step(world(), &input, TELEMETRY, ANIM);
-        assert!(fx.contains(&TickEffect::Quit));
+        assert!(fx.iter().any(|effect| effect == TickEffect::Quit));
     }
 
     /// Adjust key while Off: `NotifyRejected` + forced `RefreshHud` inside the
@@ -1112,7 +1132,7 @@ mod tests {
         let (w2, fx2) = step(w1, &off, TELEMETRY, ANIM);
         assert_eq!(w2.state.mode, Mode::Off);
         let draw = fx2.iter().find_map(|e| match e {
-            TickEffect::DrawOverlay { mode, sample, .. } => Some((*mode, *sample)),
+            TickEffect::DrawOverlay { mode, sample, .. } => Some((mode, sample)),
             _ => None,
         });
         let (mode, sample) = draw.expect("fade-out must keep drawing");
@@ -1140,21 +1160,13 @@ mod tests {
             .try_push(OverlayAction::ToggleOnOff)
             .expect("test action");
         let (w1, fx1) = step(world(), &on, TELEMETRY, ANIM);
-        let s1 = fx1
-            .iter()
-            .copied()
-            .find_map(sample_of)
-            .expect("draw on activation");
+        let s1 = fx1.iter().find_map(sample_of).expect("draw on activation");
         assert_eq!(s1.master, 0, "fade-in starts from 0 at the trigger tick");
 
         let mut mid = input(i64::from(ANIM.overlay_fade_ms) / 2);
         mid.polled_cursor = cursor;
         let (w2, fx2) = step(w1, &mid, TELEMETRY, ANIM);
-        let s2 = fx2
-            .iter()
-            .copied()
-            .find_map(sample_of)
-            .expect("draw mid-fade");
+        let s2 = fx2.iter().find_map(sample_of).expect("draw mid-fade");
         assert!(
             s2.master > 0 && s2.master < 255,
             "mid-fade master must be between, got {}",
@@ -1164,11 +1176,7 @@ mod tests {
         let mut done = input(i64::from(ANIM.overlay_fade_ms) + 1);
         done.polled_cursor = cursor;
         let (_, fx3) = step(w2, &done, TELEMETRY, ANIM);
-        let s3 = fx3
-            .iter()
-            .copied()
-            .find_map(sample_of)
-            .expect("draw after fade");
+        let s3 = fx3.iter().find_map(sample_of).expect("draw after fade");
         assert_eq!(s3.master, 255, "fade-in must land exactly at 255");
     }
 
@@ -1188,11 +1196,7 @@ mod tests {
                 .try_push(OverlayAction::BumpThickness(8))
                 .expect("test action");
             let (next, fx) = step(w, &i, TELEMETRY, ANIM);
-            let s = fx
-                .iter()
-                .copied()
-                .find_map(sample_of)
-                .expect("active mode draws");
+            let s = fx.iter().find_map(sample_of).expect("active mode draws");
             assert!(
                 s.thickness_px >= last,
                 "thickness sample regressed: {last} -> {}",
@@ -1207,7 +1211,7 @@ mod tests {
         let mut i = input(now + i64::from(ANIM.value_glide_ms) + 1);
         i.polled_cursor = cursor;
         let (_, fx) = step(w, &i, TELEMETRY, ANIM);
-        let s = fx.iter().copied().find_map(sample_of).expect("draw");
+        let s = fx.iter().find_map(sample_of).expect("draw");
         assert_eq!(s.thickness_px, 60);
     }
 
@@ -1225,7 +1229,7 @@ mod tests {
         let mut later = input(10_000);
         later.polled_cursor = cursor;
         let (_, fx) = step(w1, &later, TELEMETRY, ANIM);
-        let s = fx.iter().copied().find_map(sample_of).expect("draw");
+        let s = fx.iter().find_map(sample_of).expect("draw");
         assert_eq!(s, crate::render::OverlaySample::settled(w1.state.config));
     }
 
@@ -1251,7 +1255,7 @@ mod tests {
     fn hud_boots_full_then_auto_hides() {
         let (w1, fx1) = step(world(), &input(0), TELEMETRY, ANIM);
         assert_eq!(
-            fx1.iter().copied().find_map(refresh_tier_of),
+            fx1.iter().find_map(refresh_tier_of),
             Some(HudTier::Full),
             "boot tick must refresh in Full tier"
         );
@@ -1266,7 +1270,7 @@ mod tests {
         let (w3, fx3) = step(w2, &input(demote_at), TELEMETRY, ANIM);
         assert_eq!(w3.hud_view.tier, HudTier::Hidden);
         assert_eq!(
-            fx3.iter().copied().find_map(refresh_tier_of),
+            fx3.iter().find_map(refresh_tier_of),
             Some(HudTier::Hidden),
             "timeout tick must refresh in Hidden tier, got {fx3:?}"
         );
@@ -1287,7 +1291,7 @@ mod tests {
         assert_eq!(w2.hud_view.tier, HudTier::Hidden);
         assert!(w2.hud_view.user_touched);
         assert_eq!(
-            fx2.iter().copied().find_map(refresh_tier_of),
+            fx2.iter().find_map(refresh_tier_of),
             Some(HudTier::Hidden),
             "tier change must force a refresh, got {fx2:?}"
         );
@@ -1340,8 +1344,8 @@ mod tests {
         );
     }
 
-    fn envelope_of(fx: &[TickEffect]) -> Option<u8> {
-        fx.iter().copied().find_map(|e| match e {
+    fn envelope_of(fx: &TickEffects) -> Option<u8> {
+        fx.iter().find_map(|e| match e {
             TickEffect::SetHudOpacity { envelope, .. } => Some(envelope),
             _ => None,
         })

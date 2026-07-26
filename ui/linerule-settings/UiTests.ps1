@@ -233,7 +233,9 @@ function Start-Settings {
 
     $arguments = "--request `"$RequestPath`" --response `"$ResponsePath`""
     $launch = Invoke-MiseCommand (
-        "winapp run `"$script:BuildOutput`" --detach --json --args `"$arguments`""
+        "winapp run `"$script:BuildOutput`" " +
+        "--manifest `"$script:PackageManifest`" " +
+        "--exe linerule-settings.exe --detach --json --args `"$arguments`""
     )
     $launchText = $launch -join "`n"
     $pidMatch = [regex]::Match(
@@ -280,6 +282,8 @@ if (-not $SkipBuild) {
         throw "BuildAndRun.ps1 failed with exit code $LASTEXITCODE"
     }
 }
+
+$script:PackageManifest = Join-Path $PSScriptRoot "Package.appxmanifest"
 
 $highContrastRestore = $null
 if ($EnableHighContrast) {
