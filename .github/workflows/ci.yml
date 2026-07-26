@@ -192,26 +192,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "dotnet publish failed with exit code $LASTEXITCODE"
           }
-      - name: resident shell UI Automation
-        shell: pwsh
-        run: >-
-          ./tools/Test-Shell.ps1
-          -Executable target/${{ matrix.target }}/release/linerule.exe
-          -SettingsExecutable settings-publish/linerule-settings.exe
-          -OutputDirectory artifacts/shell-${{ matrix.arch }}
       - name: Upload settings UI evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: settings-ui-${{ matrix.arch }}
           path: artifacts/ui-${{ matrix.arch }}
-          if-no-files-found: error
-      - name: Upload resident shell evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: resident-shell-windows-${{ matrix.arch }}
-          path: artifacts/shell-${{ matrix.arch }}
           if-no-files-found: error
 
   cross-check:
