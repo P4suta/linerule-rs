@@ -38,6 +38,11 @@ use crate::{
 /// assert!(!delta.is_any());
 /// ```
 #[must_use]
+#[allow(
+    clippy::inline_always,
+    reason = "the reducer is a steady-state hot path and cross-crate calls regressed the pinned Criterion baseline"
+)]
+#[inline(always)]
 pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
     use OverlayAction as A;
     match action {
