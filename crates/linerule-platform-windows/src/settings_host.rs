@@ -19,6 +19,7 @@ use crate::win32_ffi::shell::ShellCommand;
 
 const SETTINGS_DIRECTORY: &str = "settings";
 const SETTINGS_EXECUTABLE: &str = "linerule-settings.exe";
+const STARTUP_FAILURE_SUFFIX: &str = ".startup-error.txt";
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// At most one settings session owned by the resident controller.
@@ -237,11 +238,17 @@ fn run_session(
         }
     };
     if !status.success() {
+        let mut startup_failure_path = response_path.as_os_str().to_os_string();
+        startup_failure_path.push(STARTUP_FAILURE_SUFFIX);
+        let startup_failure = fs::read_to_string(startup_failure_path)
+            .ok()
+            .filter(|message| !message.trim().is_empty());
         return Err(format!(
-            "shortcut settings exited with {}",
+            "shortcut settings exited with {}{}",
             status
                 .code()
-                .map_or_else(|| "no status code".to_owned(), |code| code.to_string())
+                .map_or_else(|| "no status code".to_owned(), |code| code.to_string()),
+            startup_failure.map_or_else(String::new, |message| format!(": {message}"))
         ));
     }
     read_response(response_path)
@@ -604,6 +611,18 @@ mod tests {
         assert!(
             failure_message.contains('7'),
             "unexpected process failure: {failure_message}"
+        );
+
+        let startup_failure = command_fixture(
+            directory.path(),
+            "startup-failure.cmd",
+            "> \"%~4.startup-error.txt\" echo XamlParseException: invalid resource\r\nexit /b 8",
+        );
+        let failure_message = run_session(&startup_failure, &request, &response, &cancel)
+            .expect_err("startup failure");
+        assert!(
+            failure_message.contains("XamlParseException: invalid resource"),
+            "unexpected startup failure: {failure_message}"
         );
 
         let slow = command_fixture(

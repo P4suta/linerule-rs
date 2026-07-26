@@ -58,8 +58,7 @@
 
   <PropertyGroup>
     <PublishReadyToRun>False</PublishReadyToRun>
-    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
-    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
+    <PublishTrimmed>False</PublishTrimmed>
     <DebugType Condition="'$(Configuration)' != 'Debug'">embedded</DebugType>
   </PropertyGroup>
 </Project>

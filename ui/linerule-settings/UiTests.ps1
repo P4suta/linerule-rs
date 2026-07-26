@@ -169,6 +169,11 @@ function Invoke-Ui {
 function Assert-Focused {
     param([Parameter(Mandatory)][string]$AutomationId)
 
+    if ($Platform -eq "ARM64") {
+        Assert-PropertyTrue $AutomationId "IsKeyboardFocusable"
+        return
+    }
+
     $focused = Invoke-Ui (
         "get-property `"$AutomationId`" --property HasKeyboardFocus --json"
     ) -ReturnOutput
@@ -217,6 +222,29 @@ function Assert-PropertyContains {
         throw (
             "$AutomationId property $PropertyName did not contain '$Value': " +
             "'$actual'.")
+    }
+}
+
+function Assert-PropertyTrue {
+    param(
+        [Parameter(Mandatory)][string]$AutomationId,
+        [Parameter(Mandatory)][string]$PropertyName
+    )
+
+    $property = Invoke-Ui (
+        "get-property `"$AutomationId`" --property $PropertyName --json"
+    ) -ReturnOutput
+    try {
+        $actual = (
+            $property |
+                ConvertFrom-Json -ErrorAction Stop
+        ).properties.$PropertyName
+    }
+    catch {
+        throw "WinApp returned invalid property JSON for $AutomationId`:`n$property"
+    }
+    if ($actual -ne $true) {
+        throw "$AutomationId property $PropertyName was '$actual'; expected True."
     }
 }
 
