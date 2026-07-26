@@ -238,6 +238,9 @@ url = "https://nodejs.org/dist/v24.18.0/node-v24.18.0-win-x64.zip"
 version = "0.3.1"
 backend = "npm:@microsoft/winappcli"
 
+[tools."npm:@microsoft/winappcli".options]
+npm_args = "--ignore-scripts=true"
+
 [[tools."pipx:reuse"]]
 version = "6.2.0"
 backend = "pipx:reuse"
