@@ -47,6 +47,10 @@ using System.Runtime.InteropServices;
 public static class LineruleShellTestNative
 {
     private const uint KeyUp = 0x0002;
+    private const uint MouseLeftDown = 0x0002;
+    private const uint MouseLeftUp = 0x0004;
+    private const uint MouseRightDown = 0x0008;
+    private const uint MouseRightUp = 0x0010;
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -81,6 +85,22 @@ public static class LineruleShellTestNative
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(
+        uint flags,
+        uint x,
+        uint y,
+        uint data,
+        UIntPtr extraInfo);
+
+    public static void MouseClick(bool right)
+    {
+        var down = right ? MouseRightDown : MouseLeftDown;
+        var up = right ? MouseRightUp : MouseLeftUp;
+        mouse_event(down, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(up, 0, 0, 0, UIntPtr.Zero);
+    }
 
     public static void FocusNotificationArea()
     {
@@ -169,6 +189,32 @@ function Wait-NamedElement {
     throw "UI Automation element '$Name' did not appear within $TimeoutMilliseconds ms"
 }
 
+function Invoke-AutomationElementClick {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Windows.Automation.AutomationElement]$Element,
+        [switch]$Right
+    )
+
+    $bounds = $Element.Current.BoundingRectangle
+    if (
+        $Element.Current.IsOffscreen -or
+        $bounds.Width -le 0 -or
+        $bounds.Height -le 0
+    ) {
+        throw "UI Automation element '$($Element.Current.Name)' is not clickable"
+    }
+    $x = [int][Math]::Round($bounds.Left + ($bounds.Width / 2))
+    $y = [int][Math]::Round($bounds.Top + ($bounds.Height / 2))
+    if (-not [LineruleShellTestNative]::SetCursorPos($x, $y)) {
+        throw [System.ComponentModel.Win32Exception]::new(
+            [System.Runtime.InteropServices.Marshal]::GetLastWin32Error(),
+            "SetCursorPos failed for '$($Element.Current.Name)'")
+    }
+    [LineruleShellTestNative]::MouseClick($Right.IsPresent)
+    Start-Sleep -Milliseconds 250
+}
+
 function Focus-TrayIcon {
     $icon = Find-NamedElement -Name "linerule"
     if ($null -ne $icon) {
@@ -192,7 +238,7 @@ function Focus-TrayIcon {
         }
 
         if ($name -match "(?i)hidden icons|notification overflow") {
-            [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+            Invoke-AutomationElementClick -Element $focused
             Start-Sleep -Milliseconds 350
             $icon = Find-NamedElement -Name "linerule"
             if ($null -ne $icon) {
@@ -240,8 +286,8 @@ function Open-TrayMenu {
         [Parameter(Mandatory = $true)][string]$ScreenshotPath
     )
 
-    $null = Focus-TrayIcon
-    [System.Windows.Forms.SendKeys]::SendWait("+{F10}")
+    $icon = Focus-TrayIcon
+    Invoke-AutomationElementClick -Element $icon -Right
     $exitItem = Wait-NamedElement `
         -Name "Exit" `
         -ProcessId $ResidentProcessId `
@@ -300,8 +346,7 @@ function Invoke-MenuItem {
         ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
     }
     catch [System.InvalidOperationException] {
-        $Item.SetFocus()
-        [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+        Invoke-AutomationElementClick -Element $Item
     }
 }
 
@@ -810,14 +855,14 @@ try {
     $duplicate = $null
 
     $modeCount = @(Get-StateModes -LogDirectory $logDirectory).Count
-    $null = Focus-TrayIcon
-    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+    $icon = Focus-TrayIcon
+    Invoke-AutomationElementClick -Element $icon
     $modeCount = Wait-StateMode `
         -LogDirectory $logDirectory `
         -Expected "Horizontal" `
         -PreviousCount $modeCount
-    $null = Focus-TrayIcon
-    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+    $icon = Focus-TrayIcon
+    Invoke-AutomationElementClick -Element $icon
     $modeCount = Wait-StateMode `
         -LogDirectory $logDirectory `
         -Expected "Off" `
@@ -828,8 +873,8 @@ try {
         -Path $preferencesPath `
         -ExpectedLastActive "horizontal"
 
-    $null = Focus-TrayIcon
-    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+    $icon = Focus-TrayIcon
+    Invoke-AutomationElementClick -Element $icon
     $modeCount = Wait-StateMode `
         -LogDirectory $logDirectory `
         -Expected "Horizontal" `
@@ -935,8 +980,8 @@ try {
         -LogDirectory $logDirectory `
         -Expected "Horizontal" `
         -PreviousCount $modeCount
-    $null = Focus-TrayIcon
-    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
+    $icon = Focus-TrayIcon
+    Invoke-AutomationElementClick -Element $icon
     $modeCount = Wait-StateMode `
         -LogDirectory $logDirectory `
         -Expected "Off" `
