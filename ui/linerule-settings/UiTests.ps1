@@ -389,7 +389,7 @@ function Start-Settings {
     $connection = Invoke-Ui "status --json" -ReturnOutput
     Write-Host "UIA connection:`n$connection"
     Invoke-Ui (
-        "screenshot --output `"$resolvedOutput\startup.png`""
+        "screenshot --output `"$resolvedOutput\startup.png`" --focus"
     )
     $startupTree = Invoke-Ui "inspect --depth 12 --json" -ReturnOutput
     $startupTree |
@@ -398,7 +398,6 @@ function Start-Settings {
             -Encoding utf8
     Invoke-Ui "wait-for `"SaveSettings`" --timeout 15000"
     Invoke-Ui "wait-for `"SettingsTitleBar`" --timeout 5000"
-    Invoke-Ui "click `"SettingsTitleBar`""
 }
 
 function Stop-Settings {

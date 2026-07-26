@@ -171,6 +171,35 @@ function Find-NamedElement {
     return $null
 }
 
+function Find-TrayIcon {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        "linerule")
+    $matches = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        $condition)
+    foreach ($match in $matches) {
+        try {
+            $bounds = $match.Current.BoundingRectangle
+            if (
+                $match.Current.ControlType -eq
+                    [System.Windows.Automation.ControlType]::Button -and
+                -not $match.Current.IsOffscreen -and
+                $bounds.Width -gt 0 -and
+                $bounds.Height -gt 0 -and
+                $bounds.Width -le 128 -and
+                $bounds.Height -le 128
+            ) {
+                return $match
+            }
+        }
+        catch [System.Windows.Automation.ElementNotAvailableException] {
+            continue
+        }
+    }
+    return $null
+}
+
 function Wait-NamedElement {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -216,7 +245,7 @@ function Invoke-AutomationElementClick {
 }
 
 function Focus-TrayIcon {
-    $icon = Find-NamedElement -Name "linerule"
+    $icon = Find-TrayIcon
     if ($null -ne $icon) {
         try {
             $icon.SetFocus()
@@ -240,7 +269,7 @@ function Focus-TrayIcon {
         if ($name -match "(?i)hidden icons|notification overflow") {
             Invoke-AutomationElementClick -Element $focused
             Start-Sleep -Milliseconds 350
-            $icon = Find-NamedElement -Name "linerule"
+            $icon = Find-TrayIcon
             if ($null -ne $icon) {
                 try {
                     $icon.SetFocus()
