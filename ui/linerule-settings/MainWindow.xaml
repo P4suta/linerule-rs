@@ -17,7 +17,10 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <TitleBar x:Name="AppTitleBar" x:Uid="AppTitleBar">
+        <TitleBar
+            x:Name="AppTitleBar"
+            x:Uid="AppTitleBar"
+            AutomationProperties.AutomationId="SettingsTitleBar">
             <TitleBar.IconSource>
                 <ImageIconSource
                     ImageSource="Assets/Square44x44Logo.targetsize-48_altform-lightunplated.png" />

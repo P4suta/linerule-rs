@@ -308,7 +308,9 @@ function Invoke-MenuItem {
 function Wait-NewProcess {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][int[]]$ExcludedIds,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [int[]]$ExcludedIds,
         [int]$TimeoutMilliseconds = 15000
     )
 

@@ -362,6 +362,8 @@ function Start-Settings {
             -LiteralPath (Join-Path $resolvedOutput "startup-uia.txt") `
             -Encoding utf8
     Invoke-Ui "wait-for `"SaveSettings`" --timeout 15000"
+    Invoke-Ui "wait-for `"SettingsTitleBar`" --timeout 5000"
+    Invoke-Ui "click `"SettingsTitleBar`""
 }
 
 function Stop-Settings {
