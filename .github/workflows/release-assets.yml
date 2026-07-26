@@ -26,7 +26,7 @@ jobs:
   release-gate:
     name: verify required CI
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       checks: read
       contents: read
@@ -104,11 +104,28 @@ jobs:
         run: |-
           commit="$(git rev-parse HEAD)"
           for required in ci-required; do
-            conclusion="$(
-              mise exec aqua:cli/cli -- gh api \
-                "repos/${GITHUB_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
-                --jq ".check_runs | map(select(.name == \"${required}\")) | sort_by(.completed_at) | last | .conclusion // \"\""
-            )"
+            conclusion=""
+            for attempt in $(seq 1 30); do
+              conclusion="$(
+                mise exec aqua:cli/cli -- gh api \
+                  "repos/${GITHUB_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
+                  --jq ".check_runs | map(select(.name == \"${required}\")) | sort_by(.completed_at) | last | .conclusion // \"\""
+              )"
+              if [ "$conclusion" = "success" ]; then
+                break
+              fi
+              case "$conclusion" in
+                failure|cancelled|timed_out|action_required|stale)
+                  echo "::error::${required} for ${commit} concluded ${conclusion}"
+                  exit 1
+                  ;;
+              esac
+              if [ "$attempt" -eq 30 ]; then
+                break
+              fi
+              echo "${required} for ${commit} is pending (attempt ${attempt}/30)"
+              sleep 15
+            done
             if [ "$conclusion" != "success" ]; then
               echo "::error::${required} for ${commit} is '${conclusion:-missing}', not success"
               exit 1
@@ -177,10 +194,13 @@ jobs:
         shell: pwsh
         run: |
           $exe = "release-artifact/linerule.exe"
-          & $exe version
-          if ($LASTEXITCODE -ne 0) { throw "version smoke failed" }
-          & $exe diagnostics
-          if ($LASTEXITCODE -ne 0) { throw "diagnostics smoke failed" }
+          foreach ($command in @("version", "diagnostics")) {
+            $process = Start-Process -FilePath $exe `
+              -ArgumentList $command -Wait -PassThru -NoNewWindow
+            if ($process.ExitCode -ne 0) {
+              throw "$command smoke failed with exit code $($process.ExitCode)"
+            }
+          }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-binary-${{ matrix.arch }}
