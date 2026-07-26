@@ -271,6 +271,16 @@ function Start-Settings {
     Write-Host (
         "linerule settings launched: winapp PID $launchProcessId; " +
         "UI process PID $script:TargetProcessId")
+    $connection = Invoke-Ui "status --json" -ReturnOutput
+    Write-Host "UIA connection:`n$connection"
+    Invoke-Ui (
+        "screenshot --output `"$resolvedOutput\startup.png`""
+    )
+    $startupTree = Invoke-Ui "inspect --depth 12 --json" -ReturnOutput
+    $startupTree |
+        Set-Content `
+            -LiteralPath (Join-Path $resolvedOutput "startup-uia.txt") `
+            -Encoding utf8
     Invoke-Ui "wait-for `"SaveSettings`" --timeout 15000"
 }
 

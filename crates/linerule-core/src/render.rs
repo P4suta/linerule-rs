@@ -84,7 +84,11 @@ impl OverlaySample {
 /// assert_eq!(out.layer_count(), 2);
 /// ```
 #[must_use]
-#[inline]
+#[allow(
+    clippy::inline_always,
+    reason = "keeps the Mode::Off fast path below the pinned Criterion baseline"
+)]
+#[inline(always)]
 pub fn frame(
     mode: Mode,
     config: OverlayConfig,
@@ -105,6 +109,7 @@ pub(crate) enum Axis {
     Vertical,
 }
 
+#[inline(never)]
 fn slit_frame(
     axis: Axis,
     cursor: Point<Logical>,

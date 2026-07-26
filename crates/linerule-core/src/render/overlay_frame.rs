@@ -68,6 +68,7 @@ impl Layer {
 
 /// Immutable composition frame.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(align(8))]
 pub struct OverlayFrame {
     monitor: ScreenRect<Logical>,
     center: i32,
@@ -269,5 +270,6 @@ mod tests {
         );
         assert_eq!(frame.layers().count(), frame.layer_count());
         assert_eq!(core::mem::size_of::<OverlayFrame>(), 24);
+        assert_eq!(core::mem::align_of::<OverlayFrame>(), 8);
     }
 }

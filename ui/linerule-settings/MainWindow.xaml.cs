@@ -24,14 +24,13 @@ public sealed partial class MainWindow : Window
         {
             AppWindow.SetIcon(iconPath);
         }
-        RootFrame.Loaded += RootFrame_Loaded;
-        RootFrame.Navigate(typeof(MainPage));
+        RootPage.Loaded += RootPage_Loaded;
     }
 
-    private void RootFrame_Loaded(object sender, RoutedEventArgs e)
+    private void RootPage_Loaded(object sender, RoutedEventArgs e)
     {
-        RootFrame.Loaded -= RootFrame_Loaded;
-        var scale = RootFrame.XamlRoot?.RasterizationScale ?? 1.0;
+        RootPage.Loaded -= RootPage_Loaded;
+        var scale = RootPage.XamlRoot?.RasterizationScale ?? 1.0;
         var workArea = DisplayArea
             .GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary)
             .WorkArea;

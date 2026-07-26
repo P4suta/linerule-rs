@@ -24,6 +24,6 @@
             </TitleBar.IconSource>
         </TitleBar>
 
-        <Frame x:Name="RootFrame" Grid.Row="1" />
+        <local:MainPage x:Name="RootPage" Grid.Row="1" />
     </Grid>
 </Window>
