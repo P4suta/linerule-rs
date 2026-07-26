@@ -512,6 +512,56 @@ try {
         )
     }
 
+    if ($Platform -eq "ARM64") {
+        Invoke-Ui "invoke `"CancelSettings`""
+        Wait-SettingsExit
+        if (Test-Path -LiteralPath $responsePath) {
+            throw "Cancel unexpectedly produced a response."
+        }
+
+        $invalid = [ordered]@{}
+        foreach ($command in $commands) {
+            $invalid[$command] = $defaults[$command]
+        }
+        $invalid["cycle_mode"] = "not-a-chord"
+        [ordered]@{ hotkeys = $invalid } |
+            ConvertTo-Json -Depth 3 |
+            Set-Content -LiteralPath $requestPath -Encoding utf8
+        Start-Settings -RequestPath $requestPath -ResponsePath $responsePath
+        Invoke-Ui "invoke `"SaveSettings`""
+        Assert-Focused "Shortcut_cycle_mode"
+        Assert-NameContains "SettingsStatus" "Resolve shortcut conflicts"
+        if (Test-Path -LiteralPath $responsePath) {
+            throw "An unparsable shortcut unexpectedly produced a response."
+        }
+        Invoke-Ui "invoke `"CancelSettings`""
+        Wait-SettingsExit
+
+        [ordered]@{ hotkeys = $defaults } |
+            ConvertTo-Json -Depth 3 |
+            Set-Content -LiteralPath $requestPath -Encoding utf8
+        Start-Settings -RequestPath $requestPath -ResponsePath $responsePath
+        Invoke-Ui "invoke `"SaveSettings`""
+        Wait-SettingsExit
+        if (-not (Test-Path -LiteralPath $responsePath -PathType Leaf)) {
+            throw "Save did not produce a settings response."
+        }
+        $response = Get-Content -Raw -LiteralPath $responsePath |
+            ConvertFrom-Json
+        foreach ($command in $commands) {
+            $actual = $response.hotkeys.$command
+            if ($actual -ne $defaults[$command]) {
+                throw (
+                    "Saved shortcut $command was '$actual'; expected " +
+                    "'$($defaults[$command])'.")
+            }
+        }
+
+        Write-Host "WinUI settings UIA: passed (ARM64 structural path)"
+        Write-Host "Evidence: $resolvedOutput"
+        return
+    }
+
     Invoke-Ui "focus `"Shortcut_cycle_mode`""
     foreach ($command in $commands | Select-Object -Skip 1) {
         Send-Keys "{TAB}"
