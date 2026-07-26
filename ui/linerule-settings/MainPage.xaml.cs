@@ -18,11 +18,12 @@ public sealed partial class MainPage : Page
         InitializeComponent();
     }
 
-    private void Page_Loaded(object sender, RoutedEventArgs e)
+    private void ShortcutButton_Loaded(object sender, RoutedEventArgs e)
     {
-        if (ViewModel.HighlightedAutomationId is { } automationId)
+        if (sender is Button { Tag: ShortcutItemViewModel item } button
+            && item.AutomationId == ViewModel.HighlightedAutomationId)
         {
-            FocusShortcut(automationId);
+            button.Focus(FocusState.Programmatic);
         }
     }
 
