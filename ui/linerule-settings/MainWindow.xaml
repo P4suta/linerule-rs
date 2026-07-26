@@ -20,7 +20,8 @@
 
         <TitleBar x:Name="AppTitleBar" x:Uid="AppTitleBar">
             <TitleBar.IconSource>
-                <ImageIconSource ImageSource="Assets/linerule.ico" />
+                <ImageIconSource
+                    ImageSource="Assets/Square44x44Logo.targetsize-48_altform-lightunplated.png" />
             </TitleBar.IconSource>
         </TitleBar>
 

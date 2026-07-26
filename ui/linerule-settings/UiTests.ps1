@@ -169,7 +169,7 @@ function Invoke-Ui {
     )
 
     $output = Invoke-MiseCommand (
-        "winapp ui $Arguments -a linerule-settings"
+        "winapp ui $Arguments -w $script:TargetWindowHandle"
     )
     if ($ReturnOutput) {
         return $output -join "`n"
@@ -231,6 +231,8 @@ function Start-Settings {
         [Parameter(Mandatory)][string]$ResponsePath
     )
 
+    $script:TargetProcessId = 0
+    $script:TargetWindowHandle = 0
     $arguments = "--request `"$RequestPath`" --response `"$ResponsePath`""
     $launch = Invoke-MiseCommand (
         "winapp run `"$script:BuildOutput`" " +
@@ -268,9 +270,28 @@ function Start-Settings {
     if ($script:TargetProcessId -le 0) {
         throw "linerule settings did not create a process within 15 seconds:`n$launchText"
     }
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $process = Get-Process `
+            -Id $script:TargetProcessId `
+            -ErrorAction SilentlyContinue
+        if ($null -eq $process) {
+            throw "linerule settings exited before creating a window:`n$launchText"
+        }
+        $process.Refresh()
+        $script:TargetWindowHandle = $process.MainWindowHandle.ToInt64()
+        if ($script:TargetWindowHandle -gt 0) {
+            break
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($script:TargetWindowHandle -le 0) {
+        throw "linerule settings did not create a window within 15 seconds:`n$launchText"
+    }
     Write-Host (
         "linerule settings launched: winapp PID $launchProcessId; " +
-        "UI process PID $script:TargetProcessId")
+        "UI process PID $script:TargetProcessId; " +
+        "HWND $script:TargetWindowHandle")
     $connection = Invoke-Ui "status --json" -ReturnOutput
     Write-Host "UIA connection:`n$connection"
     Invoke-Ui (
@@ -296,6 +317,7 @@ function Stop-Settings {
         }
     }
     $script:TargetProcessId = 0
+    $script:TargetWindowHandle = 0
 }
 
 function Wait-SettingsExit {
@@ -306,6 +328,7 @@ function Wait-SettingsExit {
         throw "Settings process did not exit within five seconds."
     }
     $script:TargetProcessId = 0
+    $script:TargetWindowHandle = 0
 }
 
 if (-not $SkipBuild) {
@@ -344,6 +367,7 @@ if ($EnableHighContrast) {
 
 $script:BuildOutput = Get-BuildOutput
 $script:TargetProcessId = 0
+$script:TargetWindowHandle = 0
 $resolvedOutput = [System.IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $resolvedOutput -Force | Out-Null
 
