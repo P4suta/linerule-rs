@@ -1,0 +1,32 @@
+version = 1
+
+[[annotations]]
+path = ["**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "linerule-rs contributors <https://github.com/P4suta/linerule-rs>"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+[[annotations]]
+path = [
+    ".release-please-manifest.json",
+    "api/*.txt",
+    "Cargo.lock",
+    "CHANGELOG.md",
+    "crates/**/tests/snapshots/**",
+    "mise.lock",
+    "ui/**/packages.lock.json",
+]
+precedence = "override"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = [
+    "crates/linerule-app/assets/linerule.ico",
+    "crates/linerule-app/assets/linerule.png",
+    "ui/linerule-settings/Assets/*.ico",
+    "ui/linerule-settings/Assets/*.png",
+]
+precedence = "override"
+SPDX-FileCopyrightText = "Copyright (c) Microsoft Corporation"
+SPDX-License-Identifier = "MIT"

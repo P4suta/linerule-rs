@@ -1,6 +1,4 @@
-# lefthook git hooks. Install: `just hooks`.
-# Steps delegate to Justfile `_hook-*` recipes so tools route through the dev container.
-# Formatters use `stage_fixed: true`; CI re-runs the same tools in `--check` mode.
+# Install with `just hooks`. All commands inherit the mise environment.
 
 assert_lefthook_installed: true
 no_tty: false
@@ -10,109 +8,99 @@ pre-commit:
   parallel: false
   follow: true
   commands:
-    # auto-fixers
     cargo-fmt:
       tags: format
       glob: "*.rs"
-      run: just _hook-fmt {staged_files}
+      run: mise exec just --command "just _hook-fmt {staged_files}"
       stage_fixed: true
 
     cargo-sort:
       tags: format
       glob: "{**/Cargo.toml,Cargo.lock}"
-      run: just _hook-cargo-sort
+      run: mise exec just --command "just _hook-cargo-sort"
       stage_fixed: true
 
     taplo-fmt:
       tags: format
       glob: "*.toml"
-      run: just _hook-taplo-fmt {staged_files}
+      run: mise exec just --command "just _hook-taplo-fmt {staged_files}"
       stage_fixed: true
 
     biome-format:
       tags: format
       glob: "{*.json,*.jsonc}"
-      run: just _hook-biome-format {staged_files}
+      run: mise exec just --command "just _hook-biome-format {staged_files}"
       stage_fixed: true
 
     yamlfmt:
       tags: format
       glob: "{*.yml,*.yaml}"
-      run: just _hook-yamlfmt {staged_files}
+      run: mise exec just --command "just _hook-yamlfmt {staged_files}"
       stage_fixed: true
 
     typos-fix:
       tags: spell
-      run: just _hook-typos-fix {staged_files}
+      run: mise exec just --command "just _hook-typos-fix {staged_files}"
       stage_fixed: true
 
-    # checks (no auto-fix)
     actionlint:
       tags: ci
       glob: "{.github/workflows/*.yml,.github/workflows/*.yaml}"
-      run: just _hook-actionlint {staged_files}
+      run: mise exec just --command "just _hook-actionlint {staged_files}"
 
     xtask-dep-graph:
       tags: lint
       glob: "{**/Cargo.toml,Cargo.lock}"
-      run: just _hook-xtask-dep-graph
+      run: mise exec just --command "just _hook-xtask-dep-graph"
 
-    # Regenerate docs/ + README; fail on drift.
-    docs-drift:
-      tags: docs
-      glob: "{*.rs,**/Cargo.toml,Cargo.lock}"
-      run: just _hook-docs-drift
+    reuse:
+      tags: license
+      run: mise exec just --command "just reuse"
 
-    # Run CI gates (clippy/rustdoc-check/cross-check) at commit time, not just
-    # pre-push; incremental compile keeps it to a few seconds.
+    policy:
+      tags: lint
+      run: mise exec just --command "just policy"
+
     clippy:
       tags: lint
       glob: "*.rs"
-      run: just clippy
+      run: mise exec just --command "just clippy"
 
     rustdoc-check:
       tags: docs
       glob: "*.rs"
-      run: just rustdoc-check
+      run: mise exec just --command "just rustdoc-check"
 
     cross-check:
       tags: build
       glob: "*.rs"
-      run: just cross-check
+      run: mise exec just --command "just cross-check"
 
 commit-msg:
   commands:
     committed:
-      run: committed --commit-file {1}
+      run: mise exec cargo:committed --command "committed --commit-file {1}"
 
 pre-push:
-  # Mirror CI gates locally. Mapping: lint↔clippy/fmt/cargo-deny/typos/actionlint/
-  # machete/dep-graph; test↔nextest + cargo test --doc; cross-check↔linux→win-x64;
-  # rustdoc-check↔docs.yml (RUSTDOCFLAGS=-D warnings).
-  #
-  # Important: lefthook v2 selects pushed files via `git diff HEAD @{push}`, so when
-  # `@{push}` is empty (first push of a new branch / no-op re-push) every step matches
-  # nothing. Workaround: `run:` inspects the whole workspace directly to bypass the file
-  # filter; `only:` runs solely on a real push (where @{push} resolves), skipping no-op re-push.
   piped: true
   commands:
     lint:
       tags: lint
-      run: just lint
+      run: mise exec just --command "just lint"
       only:
         - run: git rev-list --count HEAD ^@{upstream} 2>/dev/null || git rev-list --count HEAD
     test:
       tags: test
-      run: just test
+      run: mise exec just --command "just test"
       only:
         - run: git rev-list --count HEAD ^@{upstream} 2>/dev/null || git rev-list --count HEAD
     cross-check:
       tags: build
-      run: just cross-check
+      run: mise exec just --command "just cross-check"
       only:
         - run: git rev-list --count HEAD ^@{upstream} 2>/dev/null || git rev-list --count HEAD
     rustdoc-check:
       tags: docs
-      run: just rustdoc-check
+      run: mise exec just --command "just rustdoc-check"
       only:
         - run: git rev-list --count HEAD ^@{upstream} 2>/dev/null || git rev-list --count HEAD

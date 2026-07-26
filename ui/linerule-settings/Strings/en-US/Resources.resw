@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+
+  <data name="MainWindow.Title" xml:space="preserve"><value>linerule shortcut settings</value></data>
+  <data name="AppTitleBar.Title" xml:space="preserve"><value>linerule</value></data>
+  <data name="AppTitleBar.Subtitle" xml:space="preserve"><value>Shortcut settings</value></data>
+  <data name="KeyboardShortcutsHeading.Text" xml:space="preserve"><value>Keyboard shortcuts</value></data>
+  <data name="ShortcutInstructions.Text" xml:space="preserve"><value>Select a shortcut, then press the new key combination.</value></data>
+  <data name="ResetButton.Content" xml:space="preserve"><value>Restore defaults</value></data>
+  <data name="CancelButton.Content" xml:space="preserve"><value>Cancel</value></data>
+  <data name="SaveButton.Content" xml:space="preserve"><value>Save</value></data>
+
+  <data name="LabelCycleMode" xml:space="preserve"><value>Change ruler direction</value></data>
+  <data name="LabelCycleEffect" xml:space="preserve"><value>Change visual effect</value></data>
+  <data name="LabelToggleOnOff" xml:space="preserve"><value>Show or hide ruler</value></data>
+  <data name="LabelThicker" xml:space="preserve"><value>Increase thickness</value></data>
+  <data name="LabelThinner" xml:space="preserve"><value>Decrease thickness</value></data>
+  <data name="LabelMoreOpaque" xml:space="preserve"><value>Increase opacity or blur</value></data>
+  <data name="LabelLessOpaque" xml:space="preserve"><value>Decrease opacity or blur</value></data>
+  <data name="LabelToggleGuide" xml:space="preserve"><value>Show shortcut guide</value></data>
+  <data name="LabelQuit" xml:space="preserve"><value>Exit linerule</value></data>
+
+  <data name="DescriptionDefault" xml:space="preserve"><value>Global shortcut available while linerule is running.</value></data>
+  <data name="DescriptionToggleOnOff" xml:space="preserve"><value>The primary shortcut for the ruler.</value></data>
+  <data name="DescriptionToggleGuide" xml:space="preserve"><value>Shows the complete in-app guide.</value></data>
+  <data name="DescriptionQuit" xml:space="preserve"><value>Closes the resident app.</value></data>
+
+  <data name="ModifierRequired" xml:space="preserve"><value>Include Ctrl, Alt, Shift, or Windows.</value></data>
+  <data name="UnsupportedKey" xml:space="preserve"><value>Use a letter, arrow, bracket, minus, or equals key.</value></data>
+  <data name="InvalidChord" xml:space="preserve"><value>Enter one supported key with optional modifiers.</value></data>
+  <data name="ChooseKey" xml:space="preserve"><value>Choose a letter, arrow, bracket, minus, or equals key.</value></data>
+  <data name="RecordingPrompt" xml:space="preserve"><value>Press shortcut…</value></data>
+  <data name="ShortcutAccessibleName" xml:space="preserve"><value>{0}: {1}</value></data>
+  <data name="DuplicateFormat" xml:space="preserve"><value>Also assigned to {0}.</value></data>
+
+  <data name="RegistrationFailedTitle" xml:space="preserve"><value>Shortcut registration failed</value></data>
+  <data name="ShortcutNotAcceptedTitle" xml:space="preserve"><value>Shortcut not accepted</value></data>
+  <data name="DefaultsRestoredTitle" xml:space="preserve"><value>Defaults restored</value></data>
+  <data name="DefaultsRestoredMessage" xml:space="preserve"><value>Select Save to apply them.</value></data>
+  <data name="ResolveConflictsTitle" xml:space="preserve"><value>Resolve shortcut conflicts</value></data>
+  <data name="ResolveConflictsMessage" xml:space="preserve"><value>Every action needs one unique shortcut with a modifier.</value></data>
+  <data name="SettingsSaveFailedTitle" xml:space="preserve"><value>Settings could not be saved</value></data>
+  <data name="RequestLoadFailedFormat" xml:space="preserve"><value>Settings request could not be loaded: {0}</value></data>
+
+  <data name="RestoreDialogTitle" xml:space="preserve"><value>Restore default shortcuts?</value></data>
+  <data name="RestoreDialogContent" xml:space="preserve"><value>All nine shortcut assignments will be replaced.</value></data>
+  <data name="RestoreDialogPrimary" xml:space="preserve"><value>Restore</value></data>
+  <data name="Cancel" xml:space="preserve"><value>Cancel</value></data>
+</root>

@@ -2,7 +2,7 @@
 //! No I/O, no platform calls. [`frame`] is the only entry point.
 
 pub mod hud_frame;
-pub mod overlay_frame;
+mod overlay_frame;
 
 pub use hud_frame::{
     HudFontKey, HudFrame, HudNotification, HudRow, HudRule, HudTelemetry, HudTier,
@@ -98,7 +98,7 @@ pub fn frame(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Axis {
     Horizontal,
     Vertical,
@@ -115,14 +115,7 @@ fn slit_frame(
     let thickness = i32::from(sample.thickness_px);
     let (before, after) = split_around(axis_value(axis, cursor), thickness);
 
-    let mut layers = Vec::with_capacity(2);
-    if let Some(layer) = dim_half(axis, monitor, DimSide::Before, before, brush) {
-        layers.push(layer);
-    }
-    if let Some(layer) = dim_half(axis, monitor, DimSide::After, after, brush) {
-        layers.push(layer);
-    }
-    OverlayFrame::from_layers(layers)
+    OverlayFrame::from_slit(axis, monitor, before, after, brush)
 }
 
 /// Brush for the surround bands: `Solid` for dim/white-wash, `Blur` for blur.
@@ -190,41 +183,6 @@ pub(crate) const fn split_around(center: i32, thickness: i32) -> (i32, i32) {
     (center - half, center + extra)
 }
 
-#[derive(Debug, Clone, Copy)]
-enum DimSide {
-    /// Above the slit (horizontal mode) or left of it (vertical mode).
-    Before,
-    /// Below the slit (horizontal mode) or right of it (vertical mode).
-    After,
-}
-
-fn dim_half(
-    axis: Axis,
-    monitor: ScreenRect<Logical>,
-    side: DimSide,
-    slit_edge: i32,
-    brush: Brush,
-) -> Option<Layer> {
-    let rect = match (axis, side) {
-        (Axis::Horizontal, DimSide::Before) => {
-            band(monitor.left(), monitor.top(), monitor.right(), slit_edge)
-        },
-        (Axis::Horizontal, DimSide::After) => {
-            band(monitor.left(), slit_edge, monitor.right(), monitor.bottom())
-        },
-        (Axis::Vertical, DimSide::Before) => {
-            band(monitor.left(), monitor.top(), slit_edge, monitor.bottom())
-        },
-        (Axis::Vertical, DimSide::After) => {
-            band(slit_edge, monitor.top(), monitor.right(), monitor.bottom())
-        },
-    }?;
-    Some(Layer {
-        geometry: Geometry::Rect(rect),
-        brush,
-    })
-}
-
 /// Clipped rectangle from `(left, top, right, bottom)`; `None` when width or
 /// height clips to zero.
 pub(crate) fn band(left: i32, top: i32, right: i32, bottom: i32) -> Option<ScreenRect<Logical>> {
@@ -237,6 +195,7 @@ pub(crate) fn band(left: i32, top: i32, right: i32, bottom: i32) -> Option<Scree
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
@@ -253,6 +212,10 @@ mod tests {
             monitor(),
             OverlaySample::settled(config),
         )
+    }
+
+    fn first_layer(frame: OverlayFrame) -> Layer {
+        frame.layers().next().expect("non-empty frame")
     }
 
     #[test]
@@ -280,7 +243,6 @@ mod tests {
         );
         let bands = f
             .layers()
-            .iter()
             .map(|l| match l.geometry {
                 Geometry::Rect(r) => r,
             })
@@ -306,7 +268,7 @@ mod tests {
         };
         let f = settled_frame(mode, config, Point::new(960, 540));
         // First layer is a surround half (cursor centered).
-        match f.layers()[0].brush {
+        match first_layer(f).brush {
             Brush::Solid(c) => c,
             Brush::Blur { .. } => panic!("surround must be a solid brush in flat effects"),
         }
@@ -363,7 +325,12 @@ mod tests {
                 opacity,
                 ..OverlayConfig::DEFAULT
             };
-            settled_frame(Mode::Horizontal, config, Point::new(960, 540)).layers()[0].brush
+            first_layer(settled_frame(
+                Mode::Horizontal,
+                config,
+                Point::new(960, 540),
+            ))
+            .brush
         };
         assert_eq!(
             blur_brush_at(crate::color::Opacity::MAX),
@@ -380,8 +347,12 @@ mod tests {
             blur: amount,
             ..OverlayConfig::DEFAULT
         };
-        let Brush::Blur { amount: got, .. } =
-            settled_frame(Mode::Horizontal, config, Point::new(960, 540)).layers()[0].brush
+        let Brush::Blur { amount: got, .. } = first_layer(settled_frame(
+            Mode::Horizontal,
+            config,
+            Point::new(960, 540),
+        ))
+        .brush
         else {
             panic!("blur surround must be Brush::Blur");
         };
@@ -408,12 +379,12 @@ mod tests {
             monitor(),
             sample,
         );
-        let Brush::Blur { opacity, .. } = f.layers()[0].brush else {
+        let Brush::Blur { opacity, .. } = first_layer(f).brush else {
             panic!("blur surround must be Brush::Blur");
         };
         assert_eq!(opacity, 0x40, "sample.master must reach Brush::Blur");
         let settled = settled_frame(Mode::Horizontal, config, Point::new(960, 540));
-        let Brush::Blur { opacity, .. } = settled.layers()[0].brush else {
+        let Brush::Blur { opacity, .. } = first_layer(settled).brush else {
             panic!("blur surround must be Brush::Blur");
         };
         assert_eq!(opacity, u8::MAX, "settled blur is fully shown");
@@ -432,7 +403,6 @@ mod tests {
         let f = settled_frame(Mode::Vertical, OverlayConfig::DEFAULT, Point::new(960, 540));
         let bands = f
             .layers()
-            .iter()
             .map(|l| match l.geometry {
                 Geometry::Rect(r) => r,
             })
@@ -539,7 +509,6 @@ mod tests {
         );
         let bands: Vec<_> = f
             .layers()
-            .iter()
             .map(|l| match l.geometry {
                 Geometry::Rect(r) => r,
             })
@@ -565,7 +534,7 @@ mod tests {
             monitor(),
             sample,
         );
-        let c = match f.layers()[0].brush {
+        let c = match first_layer(f).brush {
             Brush::Solid(c) => c,
             Brush::Blur { .. } => panic!("surround must be solid"),
         };
@@ -599,4 +568,11 @@ mod tests {
             }
         }
     }
+}
+#[test]
+fn master_envelope_reduces_partial_mask_alpha() {
+    let partial = composite_alpha(128, 128);
+    let full = composite_alpha(128, u8::MAX);
+    assert!(partial > 0);
+    assert!(partial < full, "partial={partial}, full={full}");
 }

@@ -11,6 +11,7 @@ pub mod blur_effect;
 
 #[cfg(any(doc, target_os = "windows"))]
 pub mod composition;
+pub mod console;
 
 #[cfg(any(doc, target_os = "windows"))]
 pub mod dwrite;
@@ -22,9 +23,8 @@ pub mod graphics;
 pub mod hotkey;
 
 #[cfg(any(doc, target_os = "windows"))]
-pub mod input;
-
-#[cfg(any(doc, target_os = "windows"))]
 pub mod pacer;
+#[cfg(any(doc, target_os = "windows"))]
+pub mod shell;
 
 pub use core::*;

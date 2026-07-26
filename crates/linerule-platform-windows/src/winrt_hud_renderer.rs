@@ -1,5 +1,5 @@
 //! Draws a `HudFrame` to a WinRT `CompositionDrawingSurface` via DWrite.
-//! Text reuses `dwrite::draw_hud_rows`; fade is the SpriteVisual's opacity.
+//! Text reuses `dwrite::draw_hud_frame`; fade is the SpriteVisual's opacity.
 
 #![forbid(unsafe_code)]
 #![cfg(windows)]
@@ -8,7 +8,6 @@ use std::collections::HashMap;
 
 use linerule_core::{HudConfig, HudFontKey, HudFrame};
 use windows::UI::Composition::{CompositionDrawingSurface, CompositionSurfaceBrush, SpriteVisual};
-use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::DirectWrite::{IDWriteFactory, IDWriteTextFormat};
 use windows_numerics::{Vector2, Vector3};
 
@@ -29,6 +28,8 @@ pub struct WinrtHudRenderer {
     title_family: String,
     mono_family: String,
     formats: HashMap<(HudFontKey, u32), IDWriteTextFormat>,
+    row_formats: Vec<IDWriteTextFormat>,
+    utf16: Vec<u16>,
 }
 
 impl WinrtHudRenderer {
@@ -63,7 +64,9 @@ impl WinrtHudRenderer {
             graphics_device: pipeline.graphics_device.clone(),
             title_family: hud.fonts.title_family.to_string(),
             mono_family: hud.fonts.mono_family.to_string(),
-            formats: HashMap::new(),
+            formats: HashMap::with_capacity(4),
+            row_formats: Vec::with_capacity(24),
+            utf16: Vec::with_capacity(256),
         })
     }
 
@@ -74,6 +77,21 @@ impl WinrtHudRenderer {
     pub fn apply(&mut self, frame: &HudFrame) -> Result<()> {
         let width = ceil_to_u32(frame.panel_width);
         let height = ceil_to_u32(frame.panel_height);
+
+        // `HudTier::Hidden` intentionally produces a 0×0 frame. WinRT accepts
+        // creating that drawing surface but rejects BeginDraw with
+        // COR_E_INVALIDOPERATION, which would otherwise retry every telemetry
+        // tick. Collapse the visual without opening a D2D draw session.
+        if drawing_surface_is_empty(width, height) {
+            self.visual
+                .SetSize(Vector2 { X: 0.0, Y: 0.0 })
+                .map_err(map_hr("SpriteVisual::SetSize (hidden HUD)"))?;
+            self.visual
+                .SetOpacity(0.0)
+                .map_err(map_hr("SpriteVisual::SetOpacity (hidden HUD)"))?;
+            self.last_size = Some((0, 0));
+            return Ok(());
+        }
 
         if self.last_size != Some((width, height)) {
             #[allow(
@@ -95,73 +113,20 @@ impl WinrtHudRenderer {
             self.last_size = Some((width, height));
         }
 
-        let mut row_formats: Vec<IDWriteTextFormat> = Vec::with_capacity(frame.rows.len());
+        self.row_formats.clear();
         for row in &frame.rows {
-            row_formats.push(self.get_or_create_format(row.font, row.font_size)?);
+            let format = self.get_or_create_format(row.font, row.font_size)?;
+            self.row_formats.push(format);
         }
-        let drawn: Vec<dwrite::HudDrawRow<'_>> = frame
-            .rows
-            .iter()
-            .zip(row_formats.iter())
-            .map(|(row, fmt)| {
-                let local_x = row.origin_x - frame.panel_left;
-                let local_y = row.origin_y - frame.panel_top;
-                dwrite::HudDrawRow {
-                    rect: D2D_RECT_F {
-                        left: local_x,
-                        top: local_y,
-                        right: frame.panel_width,
-                        bottom: local_y + row.font_size * 1.5,
-                    },
-                    text: &row.text,
-                    format: fmt,
-                    color: row.color,
-                }
-            })
-            .collect();
 
-        // Rules translate to surface-local coords like the rows.
-        let rules: Vec<dwrite::HudDrawRule> = frame
-            .rules
-            .iter()
-            .map(|rule| {
-                let local_x = rule.left - frame.panel_left;
-                let local_y = rule.top - frame.panel_top;
-                dwrite::HudDrawRule {
-                    rect: D2D_RECT_F {
-                        left: local_x,
-                        top: local_y,
-                        right: local_x + rule.width,
-                        bottom: local_y + rule.height,
-                    },
-                    color: rule.color,
-                }
-            })
-            .collect();
-        // Rounded panel filling the surface; outside corners stays transparent.
-        let panel = D2D_RECT_F {
-            left: 0.0,
-            top: 0.0,
-            right: frame.panel_width,
-            bottom: frame.panel_height,
-        };
-
-        #[allow(
-            clippy::expect_used,
-            reason = "surface is created unconditionally above in this method before this use"
-        )]
-        let surface = self.surface.as_ref().expect("just created");
+        let surface = self
+            .surface
+            .as_ref()
+            .ok_or(crate::error::PlatformError::Invariant {
+                operation: "WinrtHudRenderer::apply surface initialization",
+            })?;
         let (dc, offset) = begin_surface_draw(surface)?;
-        let draw = dwrite::draw_hud_rows(
-            &dc,
-            offset,
-            frame.background,
-            panel,
-            frame.corner_radius,
-            frame.opacity,
-            &rules,
-            &drawn,
-        );
+        let draw = dwrite::draw_hud_frame(&dc, offset, frame, &self.row_formats, &mut self.utf16);
         end_surface_draw(surface)?;
         draw?;
 
@@ -220,4 +185,22 @@ fn ceil_to_u32(v: f32) -> u32 {
     )]
     let out = v.ceil() as u32;
     out
+}
+
+const fn drawing_surface_is_empty(width: u32, height: u32) -> bool {
+    width == 0 || height == 0
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::drawing_surface_is_empty;
+
+    #[test]
+    fn hidden_hud_dimensions_skip_the_drawing_surface() {
+        assert!(drawing_surface_is_empty(0, 0));
+        assert!(drawing_surface_is_empty(0, 100));
+        assert!(drawing_surface_is_empty(100, 0));
+        assert!(!drawing_surface_is_empty(100, 50));
+    }
 }

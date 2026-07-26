@@ -107,16 +107,22 @@ extern "system" fn on_foreground_event(
     _time: u32,
 ) {
     // catch_unwind: a panic must not unwind across the FFI callback boundary.
-    let _ = catch_unwind(AssertUnwindSafe(|| {
+    let callback = catch_unwind(AssertUnwindSafe(|| {
         let raw = TARGET_HWND.load(Ordering::SeqCst);
         if raw == 0 {
             return;
         }
         let target = HWND(raw as *mut c_void);
         // SAFETY: PostMessageW is thread-safe; target is the live overlay HWND.
-        let _ =
-            unsafe { PostMessageW(Some(target), WM_APP_REASSERT_TOPMOST, WPARAM(0), LPARAM(0)) };
+        if let Err(error) =
+            unsafe { PostMessageW(Some(target), WM_APP_REASSERT_TOPMOST, WPARAM(0), LPARAM(0)) }
+        {
+            tracing::warn!(%error, "foreground hook failed to post topmost request");
+        }
     }));
+    if callback.is_err() {
+        tracing::error!("foreground hook callback panicked");
+    }
 }
 
 // No unit tests: the real hook/SetWindowPos calls need native Windows and

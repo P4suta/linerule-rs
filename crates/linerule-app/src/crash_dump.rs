@@ -1,5 +1,4 @@
-//! On panic, synchronously write a crash report to
-//! `<exe dir>/crash-<run_id>-<ts>.json`.
+//! On panic, synchronously write a crash report below the selected data root.
 
 #![forbid(unsafe_code)]
 
@@ -7,15 +6,28 @@ use std::panic::PanicHookInfo;
 use std::path::PathBuf;
 
 use serde::Serialize;
+use thiserror::Error;
 use uuid::Uuid;
 
-use crate::logging;
+use crate::event_ring::EventRing;
+use crate::storage::StorageError;
+use crate::storage::{DataPaths, prune_files};
+
+#[derive(Debug, Error)]
+enum CrashDumpError {
+    #[error("crash dump I/O failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("crash dump JSON encoding failed: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+}
 
 /// Install the panic hook at startup.
-pub(crate) fn install_panic_hook(run_id: Uuid) {
+pub(crate) fn install_panic_hook(run_id: Uuid, paths: DataPaths, ring: EventRing) {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if let Err(e) = write_crash_dump(info, run_id) {
+        if let Err(e) = write_crash_dump(info, run_id, &paths, &ring) {
             eprintln!("crash_dump write failed: {e}");
         }
         prev(info);
@@ -40,11 +52,12 @@ struct CrashLocation<'a> {
     col: u32,
 }
 
-fn write_crash_dump(info: &PanicHookInfo<'_>, run_id: Uuid) -> anyhow::Result<()> {
-    let unix_ms: i128 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i128::try_from(d.as_millis()).unwrap_or(i128::MAX));
-
+fn write_crash_dump(
+    info: &PanicHookInfo<'_>,
+    run_id: Uuid,
+    paths: &DataPaths,
+    ring: &EventRing,
+) -> Result<(), CrashDumpError> {
     let message = info
         .payload()
         .downcast_ref::<&str>()
@@ -59,32 +72,43 @@ fn write_crash_dump(info: &PanicHookInfo<'_>, run_id: Uuid) -> anyhow::Result<()
         col: loc.column(),
     });
 
-    let backtrace = std::backtrace::Backtrace::force_capture().to_string();
+    write_crash_record(run_id, paths, ring, message, location)
+}
 
+fn write_crash_record(
+    run_id: Uuid,
+    paths: &DataPaths,
+    ring: &EventRing,
+    message: String,
+    location: Option<CrashLocation<'_>>,
+) -> Result<(), CrashDumpError> {
+    let unix_ms: i128 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i128::try_from(d.as_millis()).unwrap_or(i128::MAX));
+    let backtrace = std::backtrace::Backtrace::force_capture().to_string();
     let record = CrashRecord {
         run_id,
         unix_ms,
         message,
         location,
         backtrace,
-        recent_events: crate::event_ring::snapshot_tail(64),
+        recent_events: ring.snapshot_tail(64),
     };
 
-    let path = crash_path(run_id, unix_ms)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let path = crash_path(paths, run_id, unix_ms);
+    std::fs::create_dir_all(&paths.crashes)?;
     let mut file = std::fs::File::create(&path)?;
     serde_json::to_writer_pretty(&mut file, &record)?;
+    prune_files(&paths.crashes, "crash-", None, 5)?;
     Ok(())
 }
 
-fn crash_path(run_id: Uuid, unix_ms: i128) -> anyhow::Result<PathBuf> {
-    let dir = logging::data_dir()?;
-    Ok(dir.join(format!("crash-{run_id}-{unix_ms}.json")))
+fn crash_path(paths: &DataPaths, run_id: Uuid, unix_ms: i128) -> PathBuf {
+    paths.crashes.join(format!("crash-{run_id}-{unix_ms}.json"))
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     //! Tests filename construction and JSON shape. `install_panic_hook` is
     //! untested: it replaces the global hook, poisoning later tests.
@@ -179,29 +203,74 @@ mod tests {
         // Data-dir comes from the OS; assert only the final-component pattern.
         let run = Uuid::nil();
         let ts: i128 = 1_700_000_000_000;
-        if let Ok(p) = crash_path(run, ts) {
-            let name = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .expect("file_name UTF-8");
-            assert!(
-                name.starts_with("crash-"),
-                "filename should start with `crash-`, got `{name}`"
-            );
-            assert!(
-                std::path::Path::new(name)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json")),
-                "filename should end with `.json`, got `{name}`"
-            );
-            assert!(
-                name.contains(&run.to_string()),
-                "filename should include run_id `{run}`, got `{name}`"
-            );
-            assert!(
-                name.contains(&ts.to_string()),
-                "filename should include unix_ms `{ts}`, got `{name}`"
-            );
-        }
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = crate::storage::DataPaths {
+            distribution: crate::storage::Distribution::Portable,
+            root: temp.path().to_path_buf(),
+            preferences: temp.path().join("settings.json"),
+            logs: temp.path().join("logs"),
+            crashes: temp.path().join("crashes"),
+        };
+        let p = crash_path(&paths, run, ts);
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("file_name UTF-8");
+        assert!(
+            name.starts_with("crash-"),
+            "filename should start with `crash-`, got `{name}`"
+        );
+        assert!(
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json")),
+            "filename should end with `.json`, got `{name}`"
+        );
+        assert!(
+            name.contains(&run.to_string()),
+            "filename should include run_id `{run}`, got `{name}`"
+        );
+        assert!(
+            name.contains(&ts.to_string()),
+            "filename should include unix_ms `{ts}`, got `{name}`"
+        );
+    }
+
+    #[test]
+    fn crash_record_writer_persists_a_readable_report() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = crate::storage::DataPaths {
+            distribution: crate::storage::Distribution::Portable,
+            root: temp.path().to_path_buf(),
+            preferences: temp.path().join("settings.json"),
+            logs: temp.path().join("logs"),
+            crashes: temp.path().join("crashes"),
+        };
+        write_crash_record(
+            Uuid::nil(),
+            &paths,
+            &EventRing::new(),
+            "injected panic".to_string(),
+            Some(CrashLocation {
+                file: "tests/injected.rs",
+                line: 17,
+                col: 4,
+            }),
+        )
+        .expect("write crash record");
+
+        let reports = std::fs::read_dir(&paths.crashes)
+            .expect("crash directory")
+            .collect::<std::io::Result<Vec<_>>>()
+            .expect("crash entries");
+        assert_eq!(reports.len(), 1);
+        let raw = std::fs::read_to_string(reports[0].path()).expect("read report");
+        let parsed: ReadCrashRecord = serde_json::from_str(&raw).expect("parse report");
+        assert_eq!(parsed.run_id, Uuid::nil());
+        assert_eq!(parsed.message, "injected panic");
+        let location = parsed.location.expect("location");
+        assert_eq!(location.file, "tests/injected.rs");
+        assert_eq!(location.line, 17);
+        assert_eq!(location.col, 4);
     }
 }

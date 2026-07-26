@@ -34,6 +34,7 @@ DXGI = "DXGI"
 extend-exclude = [
     "target/**",
     "artifacts/**",
+    "mutants.out*/**",
     "**/*.lock",
     "**/*.snap",
     "**/*.snap.new",

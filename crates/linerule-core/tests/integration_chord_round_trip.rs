@@ -1,139 +1,99 @@
-//! Integration: `HotkeyMap::DEFAULT` round-trips through the chord parser and
-//! `KeyCode → VK` mapping. Every registered chord must parse and yield a
-//! non-zero VK, else `RegisterHotKey` rejects it at runtime.
+//! Default shortcut parsing and Win32 mapping contract.
 
-use linerule_core::HotkeyMap;
-use linerule_core::input::chord::{self, Direction, KeyCode};
-use linerule_core::input::win32_vk::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, chord_to_win32};
+#![allow(
+    clippy::expect_used,
+    reason = "integration test asserts the completeness of built-in shortcut defaults"
+)]
 
-/// Every default chord must parse and produce a non-zero VK.
-#[test]
-fn every_default_chord_parses_and_produces_nonzero_vk() {
-    let map = HotkeyMap::DEFAULT;
-    let cases: [(&str, &str); 9] = [
-        ("cycle_mode", map.cycle_mode),
-        ("cycle_effect", map.cycle_effect),
-        ("toggle_on_off", map.toggle_on_off),
-        ("thicker", map.thicker),
-        ("thinner", map.thinner),
-        ("more_opaque", map.more_opaque),
-        ("less_opaque", map.less_opaque),
-        ("toggle_hud", map.toggle_hud),
-        ("quit", map.quit),
-    ];
-    for (name, spec) in cases {
-        let parsed = chord::parse(spec)
-            .unwrap_or_else(|e| panic!("default chord `{name}` = `{spec}` failed to parse: {e}"));
-        let (mods, vk) = chord_to_win32(parsed);
-        assert_ne!(
-            vk, 0,
-            "{name} `{spec}`: vk must be non-zero (RegisterHotKey rejects vk=0)"
-        );
-        // All default chords use Ctrl+Alt; catches a dropped modifier.
-        assert!(
-            mods & MOD_CONTROL != 0,
-            "{name}: expected Ctrl in modifier set, got {mods:#x}"
-        );
-        assert!(
-            mods & MOD_ALT != 0,
-            "{name}: expected Alt in modifier set, got {mods:#x}"
-        );
-        // Modifiers must be a subset of the four legal flags.
-        let legal_mask = MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN;
-        assert_eq!(
-            mods & !legal_mask,
-            0,
-            "{name}: mods set unknown bits ({mods:#x})"
-        );
-    }
-}
+use linerule_core::{
+    ChordError, Command, Direction, HotkeyBindings, KeyCode, MOD_ALT, MOD_CONTROL, MOD_SHIFT,
+    MOD_WIN, chord_to_win32, parse_chord,
+};
 
-/// `parse → display → parse` must yield the same `ChordSpec`.
-#[test]
-fn every_default_chord_display_round_trips() {
-    let map = HotkeyMap::DEFAULT;
-    for spec in [
-        map.cycle_mode,
-        map.cycle_effect,
-        map.toggle_on_off,
-        map.thicker,
-        map.thinner,
-        map.more_opaque,
-        map.less_opaque,
-        map.toggle_hud,
-        map.quit,
-    ] {
-        let parsed = chord::parse(spec).unwrap_or_else(|e| panic!("parse `{spec}`: {e}"));
-        let printed = parsed.display();
-        let reparsed = chord::parse(&printed)
-            .unwrap_or_else(|e| panic!("reparse `{printed}` (from `{spec}`): {e}"));
-        assert_eq!(
-            parsed, reparsed,
-            "round-trip failed: `{spec}` → `{printed}` → ChordSpec differs"
-        );
-    }
-}
-
-/// Bump/opacity chords must use arrow keys: OEM keys (`[`/`]`/`=`/`-`) are
-/// layout/IME-sensitive on Windows and deliver different VKs (e.g. JIS keyboard
-/// × English IME), so `RegisterHotKey` misses.
-#[test]
-fn bump_and_opacity_default_chords_are_layout_independent_arrow_keys() {
-    let map = HotkeyMap::DEFAULT;
-    let expected: [(&str, &str, KeyCode); 4] = [
-        ("thicker", map.thicker, KeyCode::Arrow(Direction::Up)),
-        ("thinner", map.thinner, KeyCode::Arrow(Direction::Down)),
-        (
-            "more_opaque",
-            map.more_opaque,
-            KeyCode::Arrow(Direction::Right),
-        ),
-        (
-            "less_opaque",
-            map.less_opaque,
-            KeyCode::Arrow(Direction::Left),
-        ),
-    ];
-    for (name, spec, expected_key) in expected {
-        let parsed = chord::parse(spec).unwrap_or_else(|e| panic!("{name} parse `{spec}`: {e}"));
-        assert_eq!(
-            parsed.key, expected_key,
-            "{name} `{spec}`: expected arrow key {expected_key:?}, got {:?}",
-            parsed.key
-        );
-    }
-}
-
-/// Distinct chords must produce distinct (mods, vk) pairs.
-#[test]
-fn default_chords_are_pairwise_distinct() {
-    let map = HotkeyMap::DEFAULT;
-    let labeled = [
-        ("cycle_mode", map.cycle_mode),
-        ("cycle_effect", map.cycle_effect),
-        ("toggle_on_off", map.toggle_on_off),
-        ("thicker", map.thicker),
-        ("thinner", map.thinner),
-        ("more_opaque", map.more_opaque),
-        ("less_opaque", map.less_opaque),
-        ("toggle_hud", map.toggle_hud),
-        ("quit", map.quit),
-    ];
-    let mut keys: Vec<(&str, (u32, u32))> = labeled
-        .iter()
-        .map(|(name, s)| {
+fn defaults() -> Vec<(Command, String)> {
+    let bindings = HotkeyBindings::default();
+    Command::ALL
+        .into_iter()
+        .map(|command| {
             (
-                *name,
-                chord_to_win32(chord::parse(s).expect("default parses")),
+                command,
+                bindings.get(command).expect("complete defaults").to_owned(),
             )
         })
-        .collect();
-    keys.sort_by_key(|(_, k)| *k);
-    for w in keys.windows(2) {
+        .collect()
+}
+
+#[test]
+fn every_default_chord_parses_and_produces_nonzero_vk() {
+    for (command, spec) in defaults() {
+        let parsed = parse_chord(&spec).expect("default chord parses");
+        let (modifiers, vk) = chord_to_win32(parsed);
+        assert_ne!(vk, 0, "{command:?} `{spec}` has vk=0");
+        assert_ne!(modifiers & MOD_CONTROL, 0, "{command:?} must use Ctrl");
+        assert_ne!(modifiers & MOD_ALT, 0, "{command:?} must use Alt");
+        let legal = MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN;
+        assert_eq!(modifiers & !legal, 0, "{command:?} has unknown bits");
+    }
+}
+
+#[test]
+fn every_default_chord_display_round_trips() {
+    for (_, spec) in defaults() {
+        let parsed = parse_chord(&spec).expect("default parses");
+        let printed = parsed.display();
+        assert_eq!(parse_chord(&printed).expect("display reparses"), parsed);
+    }
+}
+
+#[test]
+fn bump_defaults_are_layout_independent_arrow_keys() {
+    let bindings = HotkeyBindings::default();
+    for (command, expected) in [
+        (Command::Thicker, KeyCode::Arrow(Direction::Up)),
+        (Command::Thinner, KeyCode::Arrow(Direction::Down)),
+        (Command::MoreOpaque, KeyCode::Arrow(Direction::Right)),
+        (Command::LessOpaque, KeyCode::Arrow(Direction::Left)),
+    ] {
+        let parsed = parse_chord(bindings.get(command).expect("default exists")).expect("parses");
+        assert_eq!(parsed.key, expected, "{command:?}");
+    }
+}
+
+#[test]
+fn default_chords_are_pairwise_distinct() {
+    let mut mapped = defaults()
+        .into_iter()
+        .map(|(command, spec)| {
+            (
+                command,
+                chord_to_win32(parse_chord(&spec).expect("default parses")),
+            )
+        })
+        .collect::<Vec<_>>();
+    mapped.sort_by_key(|(_, key)| *key);
+    for adjacent in mapped.windows(2) {
         assert_ne!(
-            w[0].1, w[1].1,
-            "duplicate (mods, vk) for `{}` and `{}`",
-            w[0].0, w[1].0
+            adjacent[0].1, adjacent[1].1,
+            "duplicate defaults: {:?} and {:?}",
+            adjacent[0].0, adjacent[1].0
         );
     }
+}
+
+#[test]
+fn malformed_chord_boundaries_return_typed_errors() {
+    assert!(matches!(parse_chord("  "), Err(ChordError::Empty)));
+    assert!(matches!(
+        parse_chord("Ctrl++R"),
+        Err(ChordError::EmptyToken { position: 1 })
+    ));
+    assert!(matches!(
+        parse_chord("Ctrl+1"),
+        Err(ChordError::UnknownPart { .. })
+    ));
+    assert!(matches!(
+        parse_chord("Ctrl+R+H"),
+        Err(ChordError::MultipleKeys { .. })
+    ));
+    assert!(matches!(parse_chord("Ctrl+Alt"), Err(ChordError::NoKey)));
 }

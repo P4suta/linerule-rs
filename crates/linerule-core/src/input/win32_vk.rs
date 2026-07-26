@@ -2,7 +2,7 @@
 //!
 //! Kept in `linerule-core` (no `windows` dep) so it is testable off-Windows.
 
-use crate::input::chord::{ChordSpec, Direction, KeyCode, Modifiers};
+use crate::input::chord::{ChordSpec, Direction, KeyCode, Letter, Modifiers};
 
 /// `RegisterHotKey` `fsModifiers` flag for the `Alt` key.
 pub const MOD_ALT: u32 = 0x0001;
@@ -18,8 +18,9 @@ pub const MOD_WIN: u32 = 0x0008;
 /// # Examples
 ///
 /// ```
-/// use linerule_core::input::chord::{ChordSpec, KeyCode, Letter, Modifiers};
-/// use linerule_core::input::win32_vk::{chord_to_win32, MOD_ALT, MOD_CONTROL};
+/// use linerule_core::{
+///     ChordSpec, KeyCode, Letter, Modifiers, MOD_ALT, MOD_CONTROL, chord_to_win32,
+/// };
 /// let chord = ChordSpec::new(
 ///     Modifiers::CTRL | Modifiers::ALT,
 ///     KeyCode::Letter(Letter::from_ascii(b'R').unwrap()),
@@ -63,7 +64,42 @@ pub const fn key_to_vk(key: KeyCode) -> u32 {
     }
 }
 
+/// Translate `RegisterHotKey` modifier flags and a supported virtual key back
+/// into the canonical owned chord representation.
+#[must_use]
+pub fn chord_from_win32(modifiers: u32, vk: u32) -> Option<ChordSpec> {
+    // The Win32 modifier constants are distinct one-bit masks. Addition makes
+    // that invariant explicit and avoids an OR/XOR-equivalent mutation.
+    let known_modifiers = MOD_ALT + MOD_CONTROL + MOD_SHIFT + MOD_WIN;
+    if modifiers & !known_modifiers != 0 {
+        return None;
+    }
+    let parsed_modifiers = [
+        (MOD_CONTROL, Modifiers::CTRL),
+        (MOD_ALT, Modifiers::ALT),
+        (MOD_SHIFT, Modifiers::SHIFT),
+        (MOD_WIN, Modifiers::META),
+    ]
+    .into_iter()
+    .filter_map(|(mask, parsed)| (modifiers & mask != 0).then_some(parsed))
+    .fold(Modifiers::empty(), Modifiers::union);
+    let key = match vk {
+        0x41..=0x5A => KeyCode::Letter(Letter::from_ascii(u8::try_from(vk).ok()?)?),
+        0xDB => KeyCode::BracketLeft,
+        0xDD => KeyCode::BracketRight,
+        0xBD => KeyCode::Minus,
+        0xBB => KeyCode::Equal,
+        0x26 => KeyCode::Arrow(Direction::Up),
+        0x28 => KeyCode::Arrow(Direction::Down),
+        0x25 => KeyCode::Arrow(Direction::Left),
+        0x27 => KeyCode::Arrow(Direction::Right),
+        _ => return None,
+    };
+    Some(ChordSpec::new(parsed_modifiers, key))
+}
+
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::input::chord::Letter;
@@ -159,6 +195,34 @@ mod tests {
         ));
         assert_eq!(mods, MOD_CONTROL | MOD_ALT);
         assert_eq!(vk, 0x52); // 'R'
+    }
+
+    #[test]
+    fn reverse_mapping_round_trips_every_supported_key_and_modifier() {
+        for bits in 0u8..16 {
+            let modifiers = Modifiers::from_bits_truncate(bits);
+            for key in [
+                KeyCode::Letter(letter(b'A')),
+                KeyCode::BracketLeft,
+                KeyCode::BracketRight,
+                KeyCode::Minus,
+                KeyCode::Equal,
+                KeyCode::Arrow(Direction::Up),
+                KeyCode::Arrow(Direction::Down),
+                KeyCode::Arrow(Direction::Left),
+                KeyCode::Arrow(Direction::Right),
+            ] {
+                let chord = ChordSpec::new(modifiers, key);
+                let (win32_modifiers, vk) = chord_to_win32(chord);
+                assert_eq!(chord_from_win32(win32_modifiers, vk), Some(chord));
+            }
+        }
+    }
+
+    #[test]
+    fn reverse_mapping_rejects_unknown_keys_and_modifier_bits() {
+        assert_eq!(chord_from_win32(0, 0), None);
+        assert_eq!(chord_from_win32(0x1000, 0x41), None);
     }
 
     // ---- Letter sanity ---------------------------------------------------

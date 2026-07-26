@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AppInstaller
+  xmlns="http://schemas.microsoft.com/appx/appinstaller/2021"
+  Uri="@BASE_URI@/@ARTIFACT_NAME@.appinstaller"
+  Version="@VERSION@">
+  <MainBundle
+    Name="@IDENTITY@"
+    Publisher="@PUBLISHER@"
+    Version="@VERSION@"
+    Uri="@BASE_URI@/@ARTIFACT_NAME@.msixbundle" />
+  <UpdateSettings>
+    <OnLaunch
+      HoursBetweenUpdateChecks="0"
+      ShowPrompt="true"
+      UpdateBlocksActivation="false" />
+    <AutomaticBackgroundTask />
+  </UpdateSettings>
+</AppInstaller>

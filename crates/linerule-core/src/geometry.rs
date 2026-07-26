@@ -156,8 +156,29 @@ impl<S: CoordSpace> Serialize for ScreenRect<S> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tagged_geometry_serializes_with_its_coordinate_space() {
+        let point: Point<Logical> = Point::new(-3, 7);
+        assert_eq!(
+            serde_json::to_value(point).expect("serialize point"),
+            serde_json::json!({"space": "logical", "x": -3, "y": 7})
+        );
+
+        let rect: ScreenRect<Physical> = ScreenRect::new(Point::new(11, 13), 17, 19);
+        assert_eq!(
+            serde_json::to_value(rect).expect("serialize rectangle"),
+            serde_json::json!({
+                "space": "physical",
+                "origin": {"space": "physical", "x": 11, "y": 13},
+                "width": 17,
+                "height": 19
+            })
+        );
+    }
 
     #[test]
     fn contains_excludes_right_and_bottom_edges() {

@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: linerule-rs contributors <https://github.com/P4suta/linerule-rs>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[tools]
+rust = { version = "nightly-2026-07-01", profile = "minimal", components = ["llvm-tools"] }

@@ -77,6 +77,7 @@ const fn px(p: i32) -> f32 {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::config::OverlayConfig;
@@ -125,7 +126,10 @@ mod tests {
         assert!(apply_envelope(base, 0).abs() < 1e-6, "0 = invisible");
         let mid_lo = apply_envelope(base, 64);
         let mid_hi = apply_envelope(base, 192);
-        assert!(mid_lo > 0.0 && mid_lo < mid_hi && mid_hi < base);
+        assert_eq!(
+            (mid_lo > 0.0, mid_lo < mid_hi, mid_hi < base),
+            (true, true, true)
+        );
     }
 
     #[test]

@@ -1,5 +1,6 @@
 [package]
 name = "linerule-platform-windows"
+autoexamples = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +12,9 @@ publish = false
 
 [dependencies]
 linerule-core = { path = "../linerule-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -38,14 +42,18 @@ features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Security",
     "Win32_System_Com",
+    "Win32_System_Console",
     "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
     "Win32_System_WinRT",
     "Win32_System_WinRT_Composition",
     "Win32_System_WinRT_Graphics_Direct2D",
     "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ]
 
@@ -57,13 +65,3 @@ tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true
-
-[[example]]
-name = "overlay_smoke"
-path = "examples/overlay_smoke.rs"
-required-features = []
-
-[[example]]
-name = "inject_chords"
-path = "examples/inject_chords.rs"
-required-features = []

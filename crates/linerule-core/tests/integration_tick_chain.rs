@@ -4,18 +4,25 @@
 use std::time::Duration;
 
 use linerule_core::{
-    AnimConfig, Mode, OverlayAction, Point, State,
-    input::tick::{TickEffect, TickInput, TickWorld, step},
+    ActionBatch, AnimConfig, Mode, OverlayAction, Point, State, TickEffect, TickInput, TickWorld,
+    tick as step,
 };
 
 const REFRESH: Duration = Duration::from_secs(2);
 const ANIM: AnimConfig = AnimConfig::DEFAULT;
 
-const fn tick(actions: Vec<OverlayAction>, now_ms: i64) -> TickInput {
+fn tick(actions: Vec<OverlayAction>, now_ms: i64) -> TickInput {
+    let mut drained_hotkeys = ActionBatch::EMPTY;
+    for action in actions {
+        assert!(
+            drained_hotkeys.try_push(action).is_ok(),
+            "test input exceeds the fixed action batch"
+        );
+    }
     TickInput {
         now_ms,
         polled_cursor: Some(Point::new(960, 540)),
-        drained_hotkeys: actions,
+        drained_hotkeys,
     }
 }
 

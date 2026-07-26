@@ -6,7 +6,7 @@
 )]
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use linerule_core::{Mode, OverlayAction, State, state::reduce};
+use linerule_core::{Mode, OverlayAction, State, reduce};
 use std::hint::black_box;
 
 fn bench_reduce(c: &mut Criterion) {
@@ -14,11 +14,11 @@ fn bench_reduce(c: &mut Criterion) {
     group.bench_function("cycle_mode", |b| {
         // Axis flip only acts while on; measure the active path, not a reject.
         let on = State::with_mode(Mode::Horizontal);
-        b.iter(|| reduce::apply(black_box(on), black_box(OverlayAction::CycleMode)));
+        b.iter(|| reduce(black_box(on), black_box(OverlayAction::CycleMode)));
     });
     group.bench_function("toggle_on_off", |b| {
         b.iter(|| {
-            reduce::apply(
+            reduce(
                 black_box(State::DEFAULT),
                 black_box(OverlayAction::ToggleOnOff),
             )
@@ -30,17 +30,17 @@ fn bench_reduce(c: &mut Criterion) {
     };
     group.bench_function("bump_thickness_active", |b| {
         b.iter(|| {
-            reduce::apply(
+            reduce(
                 black_box(active),
                 black_box(OverlayAction::BumpThickness(8)),
             )
         });
     });
     group.bench_function("bump_opacity_active", |b| {
-        b.iter(|| reduce::apply(black_box(active), black_box(OverlayAction::BumpOpacity(8))));
+        b.iter(|| reduce(black_box(active), black_box(OverlayAction::BumpOpacity(8))));
     });
     group.bench_function("quit", |b| {
-        b.iter(|| reduce::apply(black_box(State::DEFAULT), black_box(OverlayAction::Quit)));
+        b.iter(|| reduce(black_box(State::DEFAULT), black_box(OverlayAction::Quit)));
     });
     group.finish();
 }

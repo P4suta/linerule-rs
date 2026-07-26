@@ -693,9 +693,8 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "linerule-app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
- "anyhow",
  "assert_cmd",
  "clap",
  "embed-resource",
@@ -717,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "linerule-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bitflags",
  "criterion",
@@ -731,12 +730,15 @@ dependencies = [
 
 [[package]]
 name = "linerule-platform-windows"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "insta",
  "linerule-core",
  "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror",
  "tracing",
  "tracing-subscriber",
@@ -2045,11 +2047,14 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "cargo_metadata",
  "clap",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

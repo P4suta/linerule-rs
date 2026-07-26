@@ -9,9 +9,6 @@ authors.workspace = true
 description = "Pure logic core for linerule-rs: ADTs, reducers, render, parsers."
 publish = false
 
-[package.metadata.cargo-rdme]
-readme-path = "../../README.md"
-
 [dependencies]
 bitflags = { workspace = true, features = ["serde"] }
 serde = { workspace = true }

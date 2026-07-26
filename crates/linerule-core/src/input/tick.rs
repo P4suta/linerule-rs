@@ -9,8 +9,102 @@ use crate::{
     config::{AnimConfig, OverlayConfig},
     geometry::{Logical, Point},
     render::{HudTier, OverlaySample},
-    state::{Mode, OverlayAction, RejectReason, State, reduce},
+    state::{Mode, OverlayAction, RejectReason, State, apply},
 };
+
+const MAX_ACTIONS_PER_TICK: usize = 16;
+// State-change and rejection telemetry is coalesced to one effect of each kind
+// per tick. Quit, draw/clear, HUD opacity, and HUD refresh add at most four.
+const MAX_EFFECTS_PER_TICK: usize = 6;
+
+/// Fixed-capacity actions consumed by one tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ActionBatch {
+    actions: [OverlayAction; MAX_ACTIONS_PER_TICK],
+    len: usize,
+}
+
+impl ActionBatch {
+    /// Empty action batch.
+    pub const EMPTY: Self = Self {
+        actions: [OverlayAction::Quit; MAX_ACTIONS_PER_TICK],
+        len: 0,
+    };
+
+    /// Maximum number of actions processed by one tick.
+    pub const CAPACITY: usize = MAX_ACTIONS_PER_TICK;
+
+    /// Append one action, returning it unchanged when the batch is full.
+    ///
+    /// # Errors
+    /// Returns `action` when [`Self::CAPACITY`] is already reached.
+    pub fn try_push(&mut self, action: OverlayAction) -> core::result::Result<(), OverlayAction> {
+        let Some(slot) = self.actions.get_mut(self.len) else {
+            return Err(action);
+        };
+        *slot = action;
+        self.len += 1;
+        Ok(())
+    }
+
+    /// Build a batch without truncating an oversized iterator.
+    ///
+    /// # Errors
+    /// Returns the first action that does not fit.
+    pub fn try_from_actions(
+        actions: impl IntoIterator<Item = OverlayAction>,
+    ) -> core::result::Result<Self, OverlayAction> {
+        let mut batch = Self::EMPTY;
+        for action in actions {
+            batch.try_push(action)?;
+        }
+        Ok(batch)
+    }
+
+    /// Actions in arrival order.
+    #[must_use]
+    pub fn as_slice(&self) -> &[OverlayAction] {
+        &self.actions[..self.len]
+    }
+
+    /// Number of queued actions.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether no action is queued.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Whether another action must wait for a later tick.
+    #[must_use]
+    pub const fn is_full(&self) -> bool {
+        self.len == Self::CAPACITY
+    }
+
+    /// Iterate in arrival order.
+    pub fn iter(&self) -> core::slice::Iter<'_, OverlayAction> {
+        self.as_slice().iter()
+    }
+}
+
+impl Default for ActionBatch {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+impl<'a> IntoIterator for &'a ActionBatch {
+    type Item = &'a OverlayAction;
+    type IntoIter = core::slice::Iter<'a, OverlayAction>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
 
 /// Per-tick input from the platform.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -20,7 +114,7 @@ pub struct TickInput {
     /// Latest cursor sample from the OS (`None` if not yet known).
     pub polled_cursor: Option<Point<Logical>>,
     /// Hotkey actions drained from the platform channel this tick.
-    pub drained_hotkeys: Vec<OverlayAction>,
+    pub drained_hotkeys: ActionBatch,
 }
 
 /// Overlay visual-glide transition channels. Integer endpoints keep the world
@@ -69,7 +163,7 @@ impl OverlayAnim {
 /// reducer/`render::frame` and time-coupled (`boot_at_ms`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct HudView {
-    /// Current presentation tier (chip / full).
+    /// Current presentation tier.
     pub tier: HudTier,
     /// Set once `ToggleHudDetail` is pressed; suppresses startup auto-demotion.
     pub user_touched: bool,
@@ -102,7 +196,7 @@ pub struct TickWorld {
     pub last_hud_refresh_at_ms: i64,
     /// Overlay transition channels (show/hide fade, value glides).
     pub anim: OverlayAnim,
-    /// HUD presentation tier (chip / full) view-state.
+    /// HUD presentation view-state.
     pub hud_view: HudView,
     /// HUD fade envelope (`0` = invisible, `255` = full). Ramps 0 → 255 on boot
     /// and chip ⇄ full swaps; multiplied into `SetOpacity2` so fading needs no
@@ -136,6 +230,36 @@ impl TickWorld {
             hud_envelope: Transition::settled(0),
         }
     }
+
+    /// Choose whether the five-second teaching guide appears at startup.
+    ///
+    /// The application enables this only while creating the first preferences
+    /// document. Later launches start with the HUD fully hidden and idle.
+    #[must_use]
+    pub const fn with_startup_guide(mut self, show: bool) -> Self {
+        if !show {
+            self.hud_view = HudView {
+                tier: HudTier::Hidden,
+                user_touched: false,
+                boot_at_ms: 0,
+            };
+            self.hud_envelope = Transition::settled(0);
+        }
+        self
+    }
+
+    /// Whether another vsync-driven tick is required. Off + hidden + settled
+    /// is a true idle state; hotkey messages wake the platform explicitly.
+    #[must_use]
+    pub fn needs_continuous_ticks(self, now_ms: i64) -> bool {
+        !matches!(self.state.mode, Mode::Off)
+            || !matches!(self.hud_view.tier, HudTier::Hidden)
+            || self.anim.master.is_live(now_ms)
+            || self.anim.thickness.is_live(now_ms)
+            || self.anim.mask_alpha.is_live(now_ms)
+            || self.anim.style_mix.is_live(now_ms)
+            || self.hud_envelope.is_live(now_ms)
+    }
 }
 
 impl Default for TickWorld {
@@ -165,11 +289,11 @@ pub enum TickEffect {
     /// Hide the overlay (mode off with fade completed, or no cursor yet).
     ClearOverlay,
     /// Refresh the HUD with the supplied state snapshot, in the given
-    /// presentation tier (chip / full).
+    /// presentation tier.
     RefreshHud {
         /// State snapshot to lay out.
         state: State,
-        /// Presentation tier (chip / full).
+        /// Presentation tier.
         tier: HudTier,
     },
     /// Update HUD opacity for the current cursor distance and fade envelope.
@@ -182,30 +306,107 @@ pub enum TickEffect {
         /// into the distance fade via [`crate::input::hud_fade::apply_envelope`].
         envelope: u8,
     },
-    /// Log a `LogStateChanged` event after a successful reduce.
+    /// Log the last successful reduce in this tick.
     LogStateChanged {
         /// Action that caused the change.
         action: OverlayAction,
         /// New mode.
         mode: Mode,
     },
-    /// Surface a rejected action; always followed by a forced `RefreshHud` in
-    /// the same tick so the toast shows immediately.
+    /// Surface the last rejected action in this tick; always followed by a
+    /// forced `RefreshHud` so the toast shows immediately.
     NotifyRejected {
         /// Why the reducer refused the action.
         reason: RejectReason,
     },
 }
 
+/// Fixed-capacity ordered output of one tick.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TickEffects {
+    effects: [TickEffect; MAX_EFFECTS_PER_TICK],
+    len: usize,
+}
+
+impl TickEffects {
+    /// Empty effect list.
+    pub const EMPTY: Self = Self {
+        effects: [TickEffect::ClearOverlay; MAX_EFFECTS_PER_TICK],
+        len: 0,
+    };
+
+    fn push(&mut self, effect: TickEffect) {
+        let Some(slot) = self.effects.get_mut(self.len) else {
+            tracing::error!(
+                capacity = MAX_EFFECTS_PER_TICK,
+                "tick effect capacity invariant violated"
+            );
+            return;
+        };
+        *slot = effect;
+        self.len += 1;
+    }
+
+    /// Effects in application order.
+    #[must_use]
+    pub fn as_slice(&self) -> &[TickEffect] {
+        &self.effects[..self.len]
+    }
+
+    /// Number of emitted effects.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether no effects were emitted.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Iterate in application order.
+    pub fn iter(&self) -> core::slice::Iter<'_, TickEffect> {
+        self.as_slice().iter()
+    }
+}
+
+impl Default for TickEffects {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+impl<'a> IntoIterator for &'a TickEffects {
+    type Item = &'a TickEffect;
+    type IntoIter = core::slice::Iter<'a, TickEffect>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl core::ops::Deref for TickEffects {
+    type Target = [TickEffect];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
 /// Pure tick step.
 #[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the tick reducer is one ordered, exhaustive state transition"
+)]
 pub fn step(
     world: TickWorld,
     input: &TickInput,
     telemetry_refresh: Duration,
     anim_config: AnimConfig,
-) -> (TickWorld, Vec<TickEffect>) {
-    let mut effects = Vec::with_capacity(4);
+) -> (TickWorld, TickEffects) {
+    let mut effects = TickEffects::EMPTY;
 
     let prev_state = world.state;
     let mut state = world.state;
@@ -221,6 +422,8 @@ pub fn step(
 
     let mut quit_requested = false;
     let mut rejected_this_tick = false;
+    let mut last_rejection = None;
+    let mut last_state_change = None;
     for action in &input.drained_hotkeys {
         if matches!(action, OverlayAction::Quit) {
             quit_requested = true;
@@ -231,27 +434,30 @@ pub fn step(
             hud_view.tier = hud_view.tier.toggle();
             hud_view.user_touched = true;
         }
-        let (next, delta) = reduce::apply(state, *action);
+        let (next, delta) = apply(state, *action);
         if let Some(reason) = delta.rejected {
             rejected_this_tick = true;
-            effects.push(TickEffect::NotifyRejected { reason });
+            last_rejection = Some(reason);
         }
         if delta.is_any() {
-            effects.push(TickEffect::LogStateChanged {
-                action: *action,
-                mode: next.mode,
-            });
+            last_state_change = Some((*action, next.mode));
         }
         state = next;
     }
+    if let Some((action, mode)) = last_state_change {
+        effects.push(TickEffect::LogStateChanged { action, mode });
+    }
+    if let Some(reason) = last_rejection {
+        effects.push(TickEffect::NotifyRejected { reason });
+    }
 
-    // Auto-demote full → chip once startup_full_hud_ms passes, unless the user
+    // Auto-hide the first-run guide once startup_full_hud_ms passes, unless the user
     // has toggled.
     if !hud_view.user_touched
         && matches!(hud_view.tier, HudTier::Full)
         && now.saturating_sub(hud_view.boot_at_ms) >= i64::from(anim_config.startup_full_hud_ms)
     {
-        hud_view.tier = HudTier::Chip;
+        hud_view.tier = HudTier::Hidden;
     }
 
     if quit_requested {
@@ -266,11 +472,15 @@ pub fn step(
         // Chip ⇄ full swap: content/size change instantly (RefreshHud), new
         // look fades in. Ramp-up is less noisy than crossfading panels of
         // different sizes.
-        hud_envelope = Transition {
-            from: 0,
-            to: u8::MAX,
-            start_ms: now,
-            duration_ms: anim_config.hud_swap_ms,
+        hud_envelope = if matches!(hud_view.tier, HudTier::Hidden) {
+            hud_envelope.retarget(now, 0, anim_config.hud_swap_ms)
+        } else {
+            Transition {
+                from: 0,
+                to: u8::MAX,
+                start_ms: now,
+                duration_ms: anim_config.hud_swap_ms,
+            }
         };
     }
 
@@ -430,6 +640,7 @@ fn retarget_channels(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
@@ -444,8 +655,325 @@ mod tests {
         TickInput {
             now_ms,
             polled_cursor: None,
-            drained_hotkeys: Vec::new(),
+            drained_hotkeys: ActionBatch::EMPTY,
         }
+    }
+
+    fn hidden_idle_world() -> TickWorld {
+        TickWorld {
+            hud_view: HudView {
+                tier: HudTier::Hidden,
+                user_touched: true,
+                boot_at_ms: 0,
+            },
+            last_hud_refresh_at_ms: 0,
+            ..TickWorld::INITIAL
+        }
+    }
+
+    #[test]
+    fn action_batch_is_bounded_ordered_and_never_truncates_silently() {
+        let mut batch = ActionBatch::EMPTY;
+        assert_eq!(ActionBatch::default(), ActionBatch::EMPTY);
+        assert!(batch.is_empty());
+        assert!(!batch.is_full());
+        for index in 0..ActionBatch::CAPACITY {
+            let action = if index.is_multiple_of(2) {
+                OverlayAction::CycleMode
+            } else {
+                OverlayAction::ToggleOnOff
+            };
+            batch.try_push(action).expect("action fits");
+        }
+        assert!(!batch.is_empty());
+        assert!(batch.is_full());
+        assert_eq!(batch.len(), ActionBatch::CAPACITY);
+        assert_eq!(batch.as_slice()[0], OverlayAction::CycleMode);
+        assert_eq!(batch.as_slice()[1], OverlayAction::ToggleOnOff);
+        assert_eq!(
+            batch.try_push(OverlayAction::Quit),
+            Err(OverlayAction::Quit)
+        );
+
+        let oversized =
+            std::iter::repeat_n(OverlayAction::BumpOpacity(8), ActionBatch::CAPACITY + 1);
+        assert_eq!(
+            ActionBatch::try_from_actions(oversized),
+            Err(OverlayAction::BumpOpacity(8))
+        );
+    }
+
+    #[test]
+    fn tick_effect_collection_reports_length_emptiness_and_iteration() {
+        let empty = TickEffects::EMPTY;
+        assert_eq!(TickEffects::default(), empty);
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+        assert_eq!((&empty).into_iter().count(), 0);
+
+        let (_, effects) = step(world(), &input(0), TELEMETRY, ANIM);
+        assert!(!effects.is_empty());
+        assert_eq!(effects.len(), 2);
+        assert_eq!((&effects).into_iter().count(), effects.len());
+        assert_eq!(
+            effects.iter().copied().collect::<Vec<_>>(),
+            effects.as_slice()
+        );
+
+        let mut saturated = TickEffects {
+            effects: [TickEffect::ClearOverlay; MAX_EFFECTS_PER_TICK],
+            len: MAX_EFFECTS_PER_TICK,
+        };
+        saturated.push(TickEffect::Quit);
+    }
+
+    #[test]
+    fn maximum_effect_tick_fills_the_exact_fixed_capacity() {
+        let mut full = input(0);
+        full.polled_cursor = Some(Point::new(960, 540));
+        for action in [
+            OverlayAction::ToggleOnOff,
+            OverlayAction::ToggleOnOff,
+            OverlayAction::BumpThickness(8),
+        ] {
+            full.drained_hotkeys
+                .try_push(action)
+                .expect("capacity-sized action sequence");
+        }
+        for _ in full.drained_hotkeys.len()..ActionBatch::CAPACITY {
+            full.drained_hotkeys
+                .try_push(OverlayAction::Quit)
+                .expect("capacity-sized action sequence");
+        }
+
+        let (_, effects) = step(world(), &full, TELEMETRY, ANIM);
+        assert_eq!(effects.len(), MAX_EFFECTS_PER_TICK);
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| matches!(effect, TickEffect::LogStateChanged { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| matches!(effect, TickEffect::NotifyRejected { .. }))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            effects[0],
+            TickEffect::LogStateChanged {
+                action: OverlayAction::ToggleOnOff,
+                mode: Mode::Off
+            }
+        ));
+        assert!(matches!(
+            effects[1],
+            TickEffect::NotifyRejected {
+                reason: RejectReason::AdjustWhileOff
+            }
+        ));
+        assert!(matches!(
+            effects[MAX_EFFECTS_PER_TICK - 3],
+            TickEffect::ClearOverlay
+        ));
+        assert!(matches!(
+            effects[MAX_EFFECTS_PER_TICK - 2],
+            TickEffect::SetHudOpacity { .. }
+        ));
+        assert!(matches!(
+            effects[MAX_EFFECTS_PER_TICK - 1],
+            TickEffect::RefreshHud { .. }
+        ));
+    }
+
+    #[test]
+    fn state_change_telemetry_keeps_only_the_last_change_in_a_tick() {
+        let mut actions = input(0);
+        for action in [
+            OverlayAction::ToggleOnOff,
+            OverlayAction::CycleMode,
+            OverlayAction::BumpThickness(8),
+        ] {
+            actions
+                .drained_hotkeys
+                .try_push(action)
+                .expect("test action");
+        }
+
+        let (_, effects) = step(world(), &actions, TELEMETRY, ANIM);
+        let logs = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                TickEffect::LogStateChanged { action, mode } => Some((*action, *mode)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            logs,
+            vec![(OverlayAction::BumpThickness(8), Mode::Vertical)]
+        );
+    }
+
+    #[test]
+    fn continuous_ticks_are_required_by_each_independent_visual_source() {
+        let now = 50;
+        let idle = hidden_idle_world();
+        assert_eq!(TickWorld::default(), TickWorld::INITIAL);
+        assert!(!idle.needs_continuous_ticks(now));
+
+        let active = TickWorld {
+            state: State::with_mode(Mode::Horizontal),
+            ..idle
+        };
+        assert!(active.needs_continuous_ticks(now));
+
+        let visible_hud = TickWorld {
+            hud_view: HudView {
+                tier: HudTier::Full,
+                ..idle.hud_view
+            },
+            ..idle
+        };
+        assert!(visible_hud.needs_continuous_ticks(now));
+
+        let live_u8 = Transition {
+            from: 0,
+            to: u8::MAX,
+            start_ms: 0,
+            duration_ms: 100,
+        };
+        let live_u16 = Transition {
+            from: 1,
+            to: 2,
+            start_ms: 0,
+            duration_ms: 100,
+        };
+
+        let mut candidate = idle;
+        candidate.anim.master = live_u8;
+        assert!(candidate.needs_continuous_ticks(now));
+
+        let mut candidate = idle;
+        candidate.anim.thickness = live_u16;
+        assert!(candidate.needs_continuous_ticks(now));
+
+        let mut candidate = idle;
+        candidate.anim.mask_alpha = live_u8;
+        assert!(candidate.needs_continuous_ticks(now));
+
+        let mut candidate = idle;
+        candidate.anim.style_mix = live_u8;
+        assert!(candidate.needs_continuous_ticks(now));
+
+        let candidate = TickWorld {
+            hud_envelope: live_u8,
+            ..idle
+        };
+        assert!(candidate.needs_continuous_ticks(now));
+    }
+
+    #[test]
+    fn later_launch_starts_with_the_guide_hidden_and_idle() {
+        let world = TickWorld::with_initial_state(State::DEFAULT).with_startup_guide(false);
+        assert_eq!(world.hud_view.tier, HudTier::Hidden);
+        assert_eq!(world.hud_view.boot_at_ms, 0);
+        assert!(!world.needs_continuous_ticks(0));
+
+        let (next, effects) = step(world, &input(0), TELEMETRY, ANIM);
+        assert_eq!(next.hud_view.tier, HudTier::Hidden);
+        assert!(!next.hud_envelope.is_live(0));
+        assert!(!next.needs_continuous_ticks(0));
+        assert!(
+            effects
+                .iter()
+                .all(|effect| !matches!(effect, TickEffect::SetHudOpacity { .. }))
+        );
+    }
+
+    #[test]
+    fn first_launch_keeps_the_teaching_guide_active() {
+        let world = TickWorld::with_initial_state(State::DEFAULT).with_startup_guide(true);
+
+        assert_eq!(world.hud_view, HudView::INITIAL);
+        assert!(world.needs_continuous_ticks(0));
+    }
+
+    #[test]
+    fn retarget_channels_tracks_each_changed_value() {
+        let previous = State::with_mode(Mode::Horizontal);
+        let animation = OverlayAnim::settled_for(previous);
+
+        let mut thicker = previous;
+        thicker.config.thickness = thicker.config.thickness.saturating_add(7);
+        let thickness_animation = retarget_channels(animation, previous, thicker, 25, ANIM);
+        assert_eq!(
+            thickness_animation.thickness,
+            Transition {
+                from: previous.config.thickness.get(),
+                to: thicker.config.thickness.get(),
+                start_ms: 25,
+                duration_ms: ANIM.value_glide_ms,
+            }
+        );
+
+        let mut more_opaque = previous;
+        more_opaque.config.opacity = more_opaque.config.opacity.saturating_add(9);
+        let opacity_animation = retarget_channels(animation, previous, more_opaque, 40, ANIM);
+        assert_eq!(
+            opacity_animation.mask_alpha,
+            Transition {
+                from: previous.config.opacity.get(),
+                to: more_opaque.config.opacity.get(),
+                start_ms: 40,
+                duration_ms: ANIM.value_glide_ms,
+            }
+        );
+
+        let mut white_wash = previous;
+        white_wash.config.effect = crate::SurroundEffect::WhiteWash;
+        let _ = retarget_channels(animation, previous, white_wash, 50, ANIM);
+
+        let mut blur = previous;
+        blur.config.effect = crate::SurroundEffect::Blur;
+        let mut dim_after_blur = blur;
+        dim_after_blur.config.effect = crate::SurroundEffect::DimBlack;
+        let _ = retarget_channels(
+            OverlayAnim::settled_for(blur),
+            blur,
+            dim_after_blur,
+            60,
+            ANIM,
+        );
+
+        let mut vertical_blur = previous;
+        vertical_blur.mode = Mode::Vertical;
+        vertical_blur.config.effect = crate::SurroundEffect::Blur;
+        let _ = retarget_channels(animation, previous, vertical_blur, 70, ANIM);
+    }
+
+    #[test]
+    fn flat_to_blur_soft_cut_restarts_master_in_the_same_mode() {
+        let previous = State::with_mode(Mode::Horizontal);
+        let mut blur = previous;
+        blur.config.effect = crate::SurroundEffect::Blur;
+        let animation =
+            retarget_channels(OverlayAnim::settled_for(previous), previous, blur, 60, ANIM);
+        assert_eq!(
+            animation.master,
+            Transition {
+                from: 0,
+                to: u8::MAX,
+                start_ms: 60,
+                duration_ms: ANIM.overlay_fade_ms,
+            }
+        );
+        assert_eq!(
+            animation.style_mix,
+            Transition::settled(blur.config.effect.mix_target())
+        );
     }
 
     #[test]
@@ -459,7 +987,10 @@ mod tests {
     #[test]
     fn toggle_on_emits_log_and_draws_overlay() {
         let mut input = input(0);
-        input.drained_hotkeys.push(OverlayAction::ToggleOnOff);
+        input
+            .drained_hotkeys
+            .try_push(OverlayAction::ToggleOnOff)
+            .expect("test action");
         input.polled_cursor = Some(Point::new(100, 100));
         let (next, fx) = step(world(), &input, TELEMETRY, ANIM);
         assert!(matches!(fx[0], TickEffect::LogStateChanged { .. }));
@@ -473,7 +1004,10 @@ mod tests {
     #[test]
     fn quit_action_emits_quit_effect() {
         let mut input = input(0);
-        input.drained_hotkeys.push(OverlayAction::Quit);
+        input
+            .drained_hotkeys
+            .try_push(OverlayAction::Quit)
+            .expect("test action");
         let (_, fx) = step(world(), &input, TELEMETRY, ANIM);
         assert!(fx.contains(&TickEffect::Quit));
     }
@@ -487,7 +1021,9 @@ mod tests {
         let (w1, _) = step(world(), &input(0), TELEMETRY, ANIM);
         // Tick 2: BumpThickness while still Off, inside the interval (200ms).
         let mut i2 = input(50);
-        i2.drained_hotkeys.push(OverlayAction::BumpThickness(8));
+        i2.drained_hotkeys
+            .try_push(OverlayAction::BumpThickness(8))
+            .expect("test action");
         let (w2, fx) = step(w1, &i2, TELEMETRY, ANIM);
         assert_eq!(w2.state, w1.state, "rejected action must not change state");
         let notify_pos = fx.iter().position(|e| {
@@ -522,15 +1058,20 @@ mod tests {
     #[test]
     fn saturated_bump_in_active_mode_emits_no_notify() {
         let mut on = input(0);
-        on.drained_hotkeys.push(OverlayAction::ToggleOnOff);
+        on.drained_hotkeys
+            .try_push(OverlayAction::ToggleOnOff)
+            .expect("test action");
         let (w1, _) = step(world(), &on, TELEMETRY, ANIM);
         // Drop opacity straight to MIN, then bump down again to saturate.
         let mut i2 = input(50);
         i2.drained_hotkeys
-            .push(OverlayAction::BumpOpacity(-100_000));
+            .try_push(OverlayAction::BumpOpacity(-100_000))
+            .expect("test action");
         let (w2, _) = step(w1, &i2, TELEMETRY, ANIM);
         let mut i3 = input(100);
-        i3.drained_hotkeys.push(OverlayAction::BumpOpacity(-8));
+        i3.drained_hotkeys
+            .try_push(OverlayAction::BumpOpacity(-8))
+            .expect("test action");
         let (_, fx) = step(w2, &i3, TELEMETRY, ANIM);
         assert!(
             !fx.iter()
@@ -546,7 +1087,9 @@ mod tests {
         let cursor = Some(Point::new(100, 100));
         let mut on = input(0);
         on.polled_cursor = cursor;
-        on.drained_hotkeys.push(OverlayAction::ToggleOnOff);
+        on.drained_hotkeys
+            .try_push(OverlayAction::ToggleOnOff)
+            .expect("test action");
         let (w1, fx1) = step(world(), &on, TELEMETRY, ANIM);
         assert_eq!(
             w1.state.mode,
@@ -563,7 +1106,9 @@ mod tests {
         let fade = i64::from(ANIM.overlay_fade_ms);
         let mut off = input(fade + 10);
         off.polled_cursor = cursor;
-        off.drained_hotkeys.push(OverlayAction::ToggleOnOff);
+        off.drained_hotkeys
+            .try_push(OverlayAction::ToggleOnOff)
+            .expect("test action");
         let (w2, fx2) = step(w1, &off, TELEMETRY, ANIM);
         assert_eq!(w2.state.mode, Mode::Off);
         let draw = fx2.iter().find_map(|e| match e {
@@ -591,7 +1136,9 @@ mod tests {
         let cursor = Some(Point::new(100, 100));
         let mut on = input(0);
         on.polled_cursor = cursor;
-        on.drained_hotkeys.push(OverlayAction::ToggleOnOff);
+        on.drained_hotkeys
+            .try_push(OverlayAction::ToggleOnOff)
+            .expect("test action");
         let (w1, fx1) = step(world(), &on, TELEMETRY, ANIM);
         let s1 = fx1
             .iter()
@@ -637,7 +1184,9 @@ mod tests {
         for _ in 0..4 {
             let mut i = input(now);
             i.polled_cursor = cursor;
-            i.drained_hotkeys.push(OverlayAction::BumpThickness(8));
+            i.drained_hotkeys
+                .try_push(OverlayAction::BumpThickness(8))
+                .expect("test action");
             let (next, fx) = step(w, &i, TELEMETRY, ANIM);
             let s = fx
                 .iter()
@@ -669,7 +1218,9 @@ mod tests {
         let cursor = Some(Point::new(100, 100));
         let mut on = input(0);
         on.polled_cursor = cursor;
-        on.drained_hotkeys.push(OverlayAction::ToggleOnOff);
+        on.drained_hotkeys
+            .try_push(OverlayAction::ToggleOnOff)
+            .expect("test action");
         let (w1, _) = step(world(), &on, TELEMETRY, ANIM);
         let mut later = input(10_000);
         later.polled_cursor = cursor;
@@ -695,9 +1246,9 @@ mod tests {
     // ---- HUD tier FSM ------------------------------------------------------
 
     /// Boots full, auto-demotes to chip on the first tick after
-    /// `startup_full_hud_ms`, which emits `RefreshHud { tier: Chip }`.
+    /// `startup_full_hud_ms`, which emits `RefreshHud { tier: Hidden }`.
     #[test]
-    fn hud_boots_full_then_auto_demotes_to_chip() {
+    fn hud_boots_full_then_auto_hides() {
         let (w1, fx1) = step(world(), &input(0), TELEMETRY, ANIM);
         assert_eq!(
             fx1.iter().copied().find_map(refresh_tier_of),
@@ -713,11 +1264,11 @@ mod tests {
         // Teaching period over: auto-demote to Chip + RefreshHud that tick.
         let demote_at = i64::from(ANIM.startup_full_hud_ms);
         let (w3, fx3) = step(w2, &input(demote_at), TELEMETRY, ANIM);
-        assert_eq!(w3.hud_view.tier, HudTier::Chip);
+        assert_eq!(w3.hud_view.tier, HudTier::Hidden);
         assert_eq!(
             fx3.iter().copied().find_map(refresh_tier_of),
-            Some(HudTier::Chip),
-            "demotion tick must refresh in Chip tier, got {fx3:?}"
+            Some(HudTier::Hidden),
+            "timeout tick must refresh in Hidden tier, got {fx3:?}"
         );
     }
 
@@ -729,19 +1280,23 @@ mod tests {
 
         // User collapses to Chip during the teaching period.
         let mut i2 = input(100);
-        i2.drained_hotkeys.push(OverlayAction::ToggleHudDetail);
+        i2.drained_hotkeys
+            .try_push(OverlayAction::ToggleHudDetail)
+            .expect("test action");
         let (w2, fx2) = step(w1, &i2, TELEMETRY, ANIM);
-        assert_eq!(w2.hud_view.tier, HudTier::Chip);
+        assert_eq!(w2.hud_view.tier, HudTier::Hidden);
         assert!(w2.hud_view.user_touched);
         assert_eq!(
             fx2.iter().copied().find_map(refresh_tier_of),
-            Some(HudTier::Chip),
+            Some(HudTier::Hidden),
             "tier change must force a refresh, got {fx2:?}"
         );
 
         // Toggle again back to Full.
         let mut i3 = input(200);
-        i3.drained_hotkeys.push(OverlayAction::ToggleHudDetail);
+        i3.drained_hotkeys
+            .try_push(OverlayAction::ToggleHudDetail)
+            .expect("test action");
         let (w3, _) = step(w2, &i3, TELEMETRY, ANIM);
         assert_eq!(w3.hud_view.tier, HudTier::Full);
 
@@ -761,7 +1316,9 @@ mod tests {
     #[test]
     fn toggle_hud_detail_does_not_touch_overlay_state() {
         let mut i = input(0);
-        i.drained_hotkeys.push(OverlayAction::ToggleHudDetail);
+        i.drained_hotkeys
+            .try_push(OverlayAction::ToggleHudDetail)
+            .expect("test action");
         let (w, fx) = step(world(), &i, TELEMETRY, ANIM);
         assert_eq!(w.state, TickWorld::INITIAL.state);
         assert!(
@@ -839,10 +1396,9 @@ mod tests {
         );
     }
 
-    /// On a chip ⇄ full swap tick, the envelope restarts from 0 (the new
-    /// look fades in).
+    /// Hiding fades out from the current envelope; showing restarts at zero.
     #[test]
-    fn tier_swap_restarts_hud_envelope_from_zero() {
+    fn tier_swap_uses_directional_hud_envelope() {
         let p1 = Point::new(100, 100);
         let mut i1 = input(0);
         i1.polled_cursor = Some(p1);
@@ -853,16 +1409,26 @@ mod tests {
         i2.polled_cursor = Some(p1);
         let (w2, _) = step(w1, &i2, TELEMETRY, ANIM);
 
-        // Toggle: the tier-swap tick emits even with a stationary cursor,
-        // with value 0.
+        // Full -> Hidden starts from the current fully-visible value.
         let mut i3 = input(i64::from(ANIM.hud_swap_ms) + 100);
         i3.polled_cursor = Some(p1);
-        i3.drained_hotkeys.push(OverlayAction::ToggleHudDetail);
-        let (_, fx3) = step(w2, &i3, TELEMETRY, ANIM);
+        i3.drained_hotkeys
+            .try_push(OverlayAction::ToggleHudDetail)
+            .expect("test action");
+        let (w3, fx3) = step(w2, &i3, TELEMETRY, ANIM);
         assert_eq!(
             envelope_of(&fx3),
-            Some(0),
-            "tier swap must restart the envelope from 0, got {fx3:?}"
+            Some(255),
+            "hide must fade out from the current envelope, got {fx3:?}"
         );
+
+        // Once hidden, Hidden -> Full starts the new look at zero.
+        let mut i4 = input(i3.now_ms + i64::from(ANIM.hud_swap_ms) + 1);
+        i4.polled_cursor = Some(p1);
+        i4.drained_hotkeys
+            .try_push(OverlayAction::ToggleHudDetail)
+            .expect("test action");
+        let (_, fx4) = step(w3, &i4, TELEMETRY, ANIM);
+        assert_eq!(envelope_of(&fx4), Some(0), "show must fade in, got {fx4:?}");
     }
 }

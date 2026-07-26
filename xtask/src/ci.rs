@@ -6,30 +6,33 @@ use std::process::Command;
 use anyhow::{Result, anyhow};
 
 pub(crate) fn run() -> Result<()> {
-    // Native Windows: event_ring tests share process state and fail under
-    // parallel threads. Use nextest (process-per-test) or fall back to serial.
-    let test_step: (&str, Vec<&str>) = if crate::mode::is_native() {
-        if crate::mode::nextest_available() {
-            (
-                "test-workspace",
-                vec!["cargo", "nextest", "run", "--workspace"],
-            )
-        } else {
-            (
-                "test-workspace",
-                vec!["cargo", "test", "--workspace", "--", "--test-threads=1"],
-            )
-        }
-    } else {
-        ("test-workspace", vec!["cargo", "test", "--workspace"])
-    };
-
     let steps: Vec<(&str, Vec<&str>)> = vec![
         (
             "build-workspace",
             vec!["cargo", "build", "--workspace", "--all-targets"],
         ),
-        test_step,
+        (
+            "test-nextest",
+            vec![
+                "cargo",
+                "nextest",
+                "run",
+                "--workspace",
+                "--all-targets",
+                "--no-fail-fast",
+            ],
+        ),
+        (
+            "test-doctests",
+            vec!["cargo", "test", "--doc", "--workspace"],
+        ),
+        // Keep the stock Cargo runner as an isolation-compatibility gate. This
+        // must remain parallel: global test state may not be hidden by
+        // nextest's process-per-test execution model.
+        (
+            "test-cargo-parallel",
+            vec!["cargo", "test", "--workspace", "--all-targets"],
+        ),
         (
             "release-build-app",
             vec!["cargo", "build", "--release", "-p", "linerule-app"],
@@ -40,7 +43,9 @@ pub(crate) fn run() -> Result<()> {
     let mut failed: Vec<&str> = Vec::new();
     for (name, argv) in &steps {
         println!("=== ci: {name} ===");
-        let (program, args) = argv.split_first().expect("non-empty argv");
+        let Some((program, args)) = argv.split_first() else {
+            return Err(anyhow!("ci: step `{name}` has no command"));
+        };
         let status = Command::new(program).args(args).status();
         match status {
             Ok(s) if s.success() => {},

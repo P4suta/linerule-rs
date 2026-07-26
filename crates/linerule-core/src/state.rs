@@ -1,14 +1,15 @@
 //! Overlay state model and reducer.
 
-pub mod action;
-pub mod delta;
-pub mod mode;
-pub mod reduce;
-pub mod surround;
+mod action;
+mod delta;
+mod mode;
+mod reduce;
+mod surround;
 
 pub use action::OverlayAction;
 pub use delta::{RejectReason, StateDelta};
 pub use mode::{ActiveMode, Mode};
+pub use reduce::apply;
 pub use surround::SurroundEffect;
 
 use serde::{Deserialize, Serialize};
@@ -41,7 +42,7 @@ impl State {
     };
 
     /// State with the given mode and an invariant-consistent `last_active`
-    /// (default config). Used by `--initial-mode` and tests.
+    /// (default config). Used by callers that need an explicit initial state.
     #[must_use]
     pub const fn with_mode(mode: Mode) -> Self {
         let last_active = match mode {
@@ -59,5 +60,16 @@ impl State {
 impl Default for State {
     fn default() -> Self {
         Self::DEFAULT
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_delegates_to_the_pinned_off_state() {
+        assert_eq!(State::default(), State::DEFAULT);
     }
 }

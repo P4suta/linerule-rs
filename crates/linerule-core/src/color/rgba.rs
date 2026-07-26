@@ -46,8 +46,14 @@ impl Default for Rgba {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_is_fully_transparent() {
+        assert_eq!(Rgba::default(), Rgba::TRANSPARENT);
+    }
 
     #[test]
     fn default_mask_is_translucent_black() {

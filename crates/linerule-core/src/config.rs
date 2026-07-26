@@ -64,59 +64,6 @@ impl Default for TapStepConfig {
     }
 }
 
-/// Hold-to-repeat timing parameters consumed by
-/// [`crate::input::hold::step`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct RepeatConfig {
-    /// Delay before the first repeat fires after the initial press.
-    pub initial_delay: Duration,
-    /// Hold time beyond which `ToggleOnOff` is treated as a long-press undo.
-    pub long_press_threshold: Duration,
-    /// Steady interval for the `Slow` cadence.
-    pub slow_repeat_interval: Duration,
-    /// Polling interval used while in `AwaitingRelease`.
-    pub release_poll: Duration,
-}
-
-impl RepeatConfig {
-    /// Default timings tuned for comfortable text-row tracking.
-    pub const DEFAULT: Self = Self {
-        initial_delay: Duration::from_millis(250),
-        long_press_threshold: Duration::from_millis(250),
-        slow_repeat_interval: Duration::from_millis(400),
-        release_poll: Duration::from_millis(50),
-    };
-}
-
-impl Default for RepeatConfig {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
-}
-
-/// Aggregated input timing config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct InputConfig {
-    /// Per-tap magnitudes.
-    pub tap_step: TapStepConfig,
-    /// Hold-to-repeat timings.
-    pub repeat: RepeatConfig,
-}
-
-impl InputConfig {
-    /// Default tap-step × default repeat.
-    pub const DEFAULT: Self = Self {
-        tap_step: TapStepConfig::DEFAULT,
-        repeat: RepeatConfig::DEFAULT,
-    };
-}
-
-impl Default for InputConfig {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
-}
-
 /// Render-budget tunables.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RenderConfig {
@@ -384,45 +331,24 @@ impl Default for AnimConfig {
     }
 }
 
-/// Root configuration aggregate. Compile-time constant; no runtime config-file
-/// load path. `Deserialize` is omitted; see [`HudFonts`].
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub struct UserConfig {
-    /// Overlay (mask + slit) configuration.
-    pub overlay: OverlayConfig,
-    /// Hotkey chord assignments.
-    pub hotkeys: crate::input::hotkey_map::HotkeyMap,
-    /// Input timing (tap step / hold repeat).
-    pub input: InputConfig,
-    /// HUD configuration.
-    pub hud: HudConfig,
-    /// Render-budget tunables.
-    pub render: RenderConfig,
-    /// Transition timings.
-    pub anim: AnimConfig,
-}
-
-impl UserConfig {
-    /// Default user configuration — every sub-config at its `DEFAULT`.
-    pub const DEFAULT: Self = Self {
-        overlay: OverlayConfig::DEFAULT,
-        hotkeys: crate::input::hotkey_map::HotkeyMap::DEFAULT,
-        input: InputConfig::DEFAULT,
-        hud: HudConfig::DEFAULT,
-        render: RenderConfig::DEFAULT,
-        anim: AnimConfig::DEFAULT,
-    };
-}
-
-impl Default for UserConfig {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
-}
-
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_implementations_delegate_to_the_pinned_constants() {
+        assert_eq!(OverlayConfig::default(), OverlayConfig::DEFAULT);
+        assert_eq!(TapStepConfig::default(), TapStepConfig::DEFAULT);
+        assert_eq!(RenderConfig::default(), RenderConfig::DEFAULT);
+        assert_eq!(HudGeometry::default(), HudGeometry::DEFAULT);
+        assert_eq!(HudPadding::default(), HudPadding::DEFAULT);
+        assert_eq!(HudFonts::default(), HudFonts::DEFAULT);
+        assert_eq!(HudColors::default(), HudColors::DEFAULT);
+        assert_eq!(HudChip::default(), HudChip::DEFAULT);
+        assert_eq!(HudConfig::default(), HudConfig::DEFAULT);
+        assert_eq!(AnimConfig::default(), AnimConfig::DEFAULT);
+    }
 
     // base_opacity is otherwise only read by the platform render path; pin it here.
     #[test]
@@ -471,6 +397,13 @@ mod tests {
         assert_eq!(a.value_glide_ms, 130);
         assert_eq!(a.hud_swap_ms, 140);
         assert_eq!(a.startup_full_hud_ms, 5_000);
-        assert!(a.overlay_fade_ms < 200 && a.value_glide_ms < 200 && a.hud_swap_ms < 200);
+        assert_eq!(
+            (
+                a.overlay_fade_ms < 200,
+                a.value_glide_ms < 200,
+                a.hud_swap_ms < 200,
+            ),
+            (true, true, true)
+        );
     }
 }

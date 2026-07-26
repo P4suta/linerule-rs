@@ -1,7 +1,7 @@
 # linerule-rs CI.
 #
 # Policy:
-#   - No `on: schedule` here; `nightly.yml` is the one scheduled workflow (ADR-0018).
+#   - No `on: schedule` here; product nightlies and security audits stay isolated.
 #   - Actions SHA-pinned; Dependabot bumps weekly.
 #   - Cross-platform jobs on ubuntu-latest; Windows-native build/test on
 #     windows-latest (platform crate is `#![cfg(windows)]`).
@@ -39,32 +39,180 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          tool: cargo-nextest
+          version: 2026.7.13
+          install_args: rust cargo:cargo-nextest
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: cargo build (exclude platform-windows)
-        run: cargo build --workspace --exclude linerule-platform-windows --all-targets
+        run: mise exec rust --command 'cargo build --workspace --exclude linerule-platform-windows --all-targets'
       - name: cargo nextest (exclude platform-windows)
-        run: cargo nextest run --workspace --exclude linerule-platform-windows
-      # nextest does not run doctests; run them as a separate step.
+        run: mise exec cargo:cargo-nextest --command 'cargo nextest run --profile ci --workspace --all-targets --exclude linerule-platform-windows'
       - name: cargo test --doc (exclude platform-windows)
-        run: cargo test --doc --workspace --exclude linerule-platform-windows
+        # nextest does not run doctests; run them as a separate step.
+        run: mise exec rust --command 'cargo test --doc --workspace --exclude linerule-platform-windows'
+      - name: cargo test compatibility (parallel, exclude platform-windows)
+        run: mise exec rust --command 'cargo test --workspace --all-targets --exclude linerule-platform-windows'
+      - name: Upload nextest JUnit report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nextest-junit-linux
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: error
 
   build-test-windows:
-    name: build + test (windows)
-    runs-on: windows-latest
-    timeout-minutes: 25
+    name: build + test (windows-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          tool: cargo-nextest
-      - run: cargo build --workspace --all-targets
-      - run: cargo nextest run --workspace --run-ignored all
-      # nextest does not run doctests; run them as a separate step.
-      - run: cargo test --doc --workspace
+          version: 2026.7.13
+          install_args: rust cargo:cargo-nextest
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: mise exec rust --command 'cargo build --workspace --all-targets --target ${{ matrix.target }}'
+      - run: mise exec cargo:cargo-nextest --command 'cargo nextest run --profile ci --workspace --all-targets --target ${{ matrix.target }} --run-ignored all'
+      - run: mise exec rust --command 'cargo test --doc --workspace --target ${{ matrix.target }}'
+        # nextest does not run doctests; run them as a separate step.
+      - name: cargo test compatibility (parallel)
+        run: mise exec rust --command 'cargo test --workspace --all-targets --target ${{ matrix.target }}'
+      - run: mise exec rust --command 'cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings'
+      - name: Backdrop Blur pixel and one-second exit gate
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: >-
+          ./tools/Test-Blur.ps1
+          -Executable target/${{ matrix.target }}/debug/linerule.exe
+          -OutputDirectory artifacts/blur
+      - name: Upload Backdrop Blur evidence
+        if: always() && matrix.arch == 'x64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backdrop-blur-windows-x64
+          path: artifacts/blur
+          if-no-files-found: error
+      - name: Upload nextest JUnit report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nextest-junit-windows-${{ matrix.arch }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: error
+
+  winui-settings:
+    name: Fluent settings (windows-${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            platform: x64
+            target: x86_64-pc-windows-msvc
+            runtime: win-x64
+          - arch: arm64
+            runner: windows-11-arm
+            platform: ARM64
+            target: aarch64-pc-windows-msvc
+            runtime: win-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust dotnet node npm:@microsoft/winappcli
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: enable Developer Mode for WinApp CLI
+        shell: pwsh
+        run: |
+          $path = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock"
+          New-Item -Path $path -Force | Out-Null
+          New-ItemProperty -Path $path `
+            -Name AllowDevelopmentWithoutDevLicense `
+            -PropertyType DWord `
+            -Value 1 `
+            -Force | Out-Null
+      - name: compile XAML and C# through the supported entry point
+        shell: pwsh
+        run: >-
+          ./ui/linerule-settings/BuildAndRun.ps1
+          -Platform ${{ matrix.platform }}
+          -Configuration Release
+          -SkipRun
+      - name: settings UI Automation
+        shell: pwsh
+        run: >-
+          ./ui/linerule-settings/UiTests.ps1
+          -Platform ${{ matrix.platform }}
+          -Configuration Release
+          -SkipBuild
+          -OutputDirectory artifacts/ui-${{ matrix.arch }}
+      - name: High Contrast settings UI Automation
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: >-
+          ./ui/linerule-settings/UiTests.ps1
+          -Platform x64
+          -Configuration Release
+          -SkipBuild
+          -EnableHighContrast
+          -OutputDirectory artifacts/ui-x64/high-contrast
+      - name: build resident shell for integrated UI Automation
+        run: >-
+          mise exec rust --command
+          'cargo build --release -p linerule-app
+          --target ${{ matrix.target }}'
+      - name: publish distribution settings sidecar
+        shell: pwsh
+        run: |
+          $project = "ui/linerule-settings/Linerule.Settings.csproj"
+          mise exec dotnet --command (
+            "dotnet publish `"$project`" --no-restore -c Release " +
+            "-p:Platform=${{ matrix.platform }} -r ${{ matrix.runtime }} " +
+            "--self-contained true " +
+            "-p:PublishDir=$PWD/settings-publish/"
+          )
+          if ($LASTEXITCODE -ne 0) {
+            throw "dotnet publish failed with exit code $LASTEXITCODE"
+          }
+      - name: resident shell UI Automation
+        shell: pwsh
+        run: >-
+          ./tools/Test-Shell.ps1
+          -Executable target/${{ matrix.target }}/release/linerule.exe
+          -SettingsExecutable settings-publish/linerule-settings.exe
+          -OutputDirectory artifacts/shell-${{ matrix.arch }}
+      - name: Upload settings UI evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: settings-ui-${{ matrix.arch }}
+          path: artifacts/ui-${{ matrix.arch }}
+          if-no-files-found: error
+      - name: Upload resident shell evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: resident-shell-windows-${{ matrix.arch }}
+          path: artifacts/shell-${{ matrix.arch }}
+          if-no-files-found: error
 
   cross-check:
     name: cross-check (linux → win-x64)
@@ -76,65 +224,71 @@ jobs:
       XWIN_CROSS_COMPILER: clang
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          tool: cargo-xwin
-      # Cache unpacked sysroot so re-runs skip the 25s fetch. cargo-xwin v0.18+
-      # stores it under ~/.cache/cargo-xwin/. Bump key on upstream schema change.
+          version: 2026.7.13
+          install_args: rust cargo:cargo-xwin
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # Cache unpacked sysroot so re-runs skip the 25s fetch. cargo-xwin v0.18+
+        # stores it under ~/.cache/cargo-xwin/. Bump key on upstream schema change.
         with:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-clang-sysroot-${{ runner.os }}
-      - run: rustup target add x86_64-pc-windows-msvc
-      # `--all-targets` covers examples/tests/benches, matching Windows native CI's detection scope.
-      - run: cargo xwin check --workspace --all-targets --target x86_64-pc-windows-msvc
-
+      - run: mise exec cargo:cargo-xwin --command 'cargo xwin check --workspace --all-targets --target x86_64-pc-windows-msvc'
+        # `--all-targets` covers examples/tests/benches, matching Windows native CI's detection scope.
   release-build:
-    name: release build (win-x64, native)
-    runs-on: windows-latest
+    name: release build + CLI smoke (win-${{ matrix.arch }}, native)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust
+          cache: true
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo build --release -p linerule-app
-      # Native smoke: built binary must start and respond to subcommands (clap
-      # parse gate). linerule.exe is `windows_subsystem = "windows"` (GUI), so
+      - run: mise exec rust --command 'cargo build --release -p linerule-app --target ${{ matrix.target }}'
       # pwsh `& $exe` returns immediately and never sets `$LASTEXITCODE`;
       # `Start-Process -Wait -PassThru` blocks and exposes `ExitCode`.
       - name: smoke - linerule.exe version
+        # Native smoke: built binary must start and respond to subcommands (clap
+        # parse gate). linerule.exe is `windows_subsystem = "windows"` (GUI), so
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath "target/release/linerule.exe" `
+          $proc = Start-Process -FilePath "target/${{ matrix.target }}/release/linerule.exe" `
             -ArgumentList "version" -Wait -PassThru -NoNewWindow
           if ($proc.ExitCode -ne 0) {
             Write-Host "::error::linerule.exe version exited with $($proc.ExitCode)"
             exit 1
           }
-      - name: smoke - linerule.exe diagnostics --dry-run
+      - name: smoke - linerule.exe diagnostics
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath "target/release/linerule.exe" `
-            -ArgumentList "diagnostics", "--dry-run" -Wait -PassThru -NoNewWindow
+          $proc = Start-Process -FilePath "target/${{ matrix.target }}/release/linerule.exe" `
+            -ArgumentList "diagnostics" -Wait -PassThru -NoNewWindow
           if ($proc.ExitCode -ne 0) {
-            Write-Host "::error::linerule.exe diagnostics --dry-run exited with $($proc.ExitCode)"
+            Write-Host "::error::linerule.exe diagnostics exited with $($proc.ExitCode)"
             exit 1
           }
-      # GUI smoke via `cargo xtask verify` (shared with `just verify-blur`):
-      # launches the real overlay 3s in Horizontal+Blur (exercises WinRT
-      # backdrop-blur COM path), then judges events.jsonl — no ERROR / tick
-      # failure / crash dump, clean message-loop exit (headless 0xE0464645
-      # teardown tolerated). Blocks E_NOINTERFACE / D2D WRONG_STATE / missing
-      # commit / missing ShowWindow.
-      - name: smoke - GUI (cargo xtask verify; mirrors local just verify-blur)
-        run: cargo xtask verify --profile release --mode horizontal --effect blur
       - name: Upload binary artifact
-        # Upload the binary even if smoke crashes (to eyeball GUI/blur without real hardware).
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: linerule-win-x64
-          path: target/release/linerule.exe
+          name: linerule-win-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release/linerule.exe
           if-no-files-found: error
 
   fmt:
@@ -143,12 +297,14 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          tool: cargo-sort,taplo-cli
-      - run: cargo fmt --all -- --check
-      - run: cargo sort --workspace --check
-      - run: taplo fmt --check
+          version: 2026.7.13
+          install_args: rust cargo:cargo-sort taplo
+          cache: true
+      - run: mise exec rust --command 'cargo fmt --all -- --check'
+      - run: mise exec cargo:cargo-sort --command 'cargo sort --workspace --check'
+      - run: mise exec taplo --command 'taplo fmt --check'
 
   fmt-non-rust:
     name: fmt (json / yaml)
@@ -156,16 +312,13 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: install biome + yamlfmt
-        run: |
-          curl -fsSL "https://github.com/biomejs/biome/releases/latest/download/biome-linux-x64" \
-            -o /usr/local/bin/biome
-          sudo chmod +x /usr/local/bin/biome
-          YAMLFMT_VERSION=0.13.0
-          curl -fsSL "https://github.com/google/yamlfmt/releases/download/v${YAMLFMT_VERSION}/yamlfmt_${YAMLFMT_VERSION}_Linux_x86_64.tar.gz" \
-            | sudo tar xz -C /usr/local/bin yamlfmt
-      - run: biome format .
-      - run: yamlfmt --lint .
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: biome yamlfmt
+          cache: true
+      - run: mise exec biome --command 'biome format .'
+      - run: mise exec yamlfmt --command 'yamlfmt --lint -gitignore_excludes .'
 
   clippy:
     name: clippy
@@ -174,12 +327,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust
+          cache: true
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo clippy --workspace --all-targets --exclude linerule-platform-windows -- -D warnings
+      - run: mise exec rust --command 'cargo clippy --workspace --all-targets --exclude linerule-platform-windows -- -D warnings'
 
-  # Gate `cargo doc -D warnings` on PRs. The `docs` workflow only builds rustdoc
-  # on push-to-main, so doc-only breakage (e.g. public→private intra-doc link)
-  # could slip through PR CI. Keep this command in sync with docs.yml.
+  # Gate `cargo doc -D warnings` on every CI trigger.
   doc:
     name: doc (cargo doc)
     runs-on: ubuntu-latest
@@ -187,10 +343,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust
+          cache: true
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --no-deps --exclude linerule-platform-windows
+        run: mise exec rust --command 'cargo doc --workspace --no-deps --exclude linerule-platform-windows'
 
   dep-graph:
     name: dep-graph (xtask)
@@ -199,8 +360,27 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust
+          cache: true
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo xtask dep-graph
+      - run: mise exec rust --command 'cargo xtask dep-graph'
+
+  policy:
+    name: source policy + public API
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: mise exec rust --command 'cargo xtask policy'
 
   spell-check:
     name: typos
@@ -208,7 +388,12 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: typos
+          cache: true
+      - run: mise exec typos --command 'typos'
 
   actionlint:
     name: actionlint
@@ -216,13 +401,12 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: actionlint
-        env:
-          ACTIONLINT_VERSION: 1.7.12
-        run: |
-          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
-            | tar xz -C /tmp actionlint
-          /tmp/actionlint -color
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: actionlint
+          cache: true
+      - run: mise exec actionlint --command 'actionlint -color'
 
   cargo-deny:
     name: cargo-deny
@@ -230,22 +414,13 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          tool: cargo-deny
-      # Workaround for rustsec/advisory-db RUSTSEC-2026-0076.md (TOML wrapped in
-      # backtick fences, unparseable by cargo-deny/cargo-audit). cargo-deny v0.18+
-      # clones to advisory-db-3157b0e258782691; drop the bad file, then
-      # `--disable-fetch` so it isn't pulled back.
-      - name: Pre-fetch advisory-db (RUSTSEC-2026-0076 workaround)
-        run: |
-          set -eux
-          DB="$HOME/.cargo/advisory-dbs/advisory-db-3157b0e258782691"
-          mkdir -p "$(dirname "$DB")"
-          git clone --depth 1 https://github.com/rustsec/advisory-db "$DB"
-          rm -f "$DB/crates/libcrux-ml-dsa/RUSTSEC-2026-0076.md"
-      - run: cargo deny check --disable-fetch advisories bans licenses sources
+          version: 2026.7.13
+          install_args: rust cargo:cargo-deny
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: mise exec cargo:cargo-deny --command 'cargo deny check advisories bans licenses sources'
 
   cargo-machete:
     name: cargo-machete (unused deps)
@@ -253,10 +428,12 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          tool: cargo-machete
-      - run: cargo machete
+          version: 2026.7.13
+          install_args: rust cargo:cargo-machete
+          cache: true
+      - run: mise exec cargo:cargo-machete --command 'cargo machete'
 
   cargo-audit:
     name: cargo-audit
@@ -264,22 +441,148 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          tool: cargo-audit
-      # Workaround for upstream rustsec/advisory-db RUSTSEC-2026-0076.md (see
-      # cargo-deny job).
-      - name: Pre-fetch advisory-db (RUSTSEC-2026-0076 workaround)
-        run: |
-          set -eux
-          DB="$HOME/.cargo/advisory-db"
-          git clone --depth 1 https://github.com/rustsec/advisory-db "$DB"
-          rm -f "$DB/crates/libcrux-ml-dsa/RUSTSEC-2026-0076.md"
-      # `--no-fetch` also skips the crates.io index, which cargo-audit needs for
-      # yanked-crate checks; without it every crate errors ("No such crate in
-      # crates.io index"). Populate the index from Cargo.lock first.
-      - run: cargo fetch --locked
-      - run: cargo audit --no-fetch --deny warnings
+          version: 2026.7.13
+          install_args: rust cargo:cargo-audit
+          cache: true
+      - run: mise exec cargo:cargo-audit --command 'cargo audit --deny warnings'
+
+  reuse:
+    name: REUSE 3.3
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: python pipx:reuse
+          cache: true
+      - run: mise exec pipx:reuse --command 'reuse lint'
+      - run: mise exec pipx:reuse --command 'reuse spdx --output linerule-source.spdx'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: source-spdx
+          path: linerule-source.spdx
+          if-no-files-found: error
+
+  sbom:
+    name: CycloneDX dependency SBOM
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust dotnet dotnet:CycloneDX cyclonedx cargo:cargo-sbom
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Generate and validate Rust, WinUI x64, and WinUI ARM64 dependencies
+        shell: pwsh
+        run: >-
+          mise exec rust cargo:cargo-sbom dotnet dotnet:CycloneDX cyclonedx
+          --command
+          "powershell.exe -NoProfile -ExecutionPolicy Bypass
+          -File tools/New-Sbom.ps1
+          -OutputFile target/ci-sbom.cdx.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-sbom
+          path: target/ci-sbom.cdx.json
+          if-no-files-found: error
+
+  mutants:
+    name: cargo-mutants (linerule-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust cargo:cargo-mutants cargo:cargo-nextest python
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Run core mutation tests
+        run: mise exec cargo:cargo-mutants cargo:cargo-nextest --command 'cargo mutants -p linerule-core --test-tool nextest --no-shuffle'
+      - name: Require every viable mutant to be caught
+        run: mise exec python --command 'python tools/check_mutants.py mutants.out/outcomes.json'
+      - name: Upload mutation outcomes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cargo-mutants
+          path: mutants.out
+          if-no-files-found: error
+
+  performance:
+    name: core performance regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/performance
+      BASE_SHA: >-
+        ${{ github.event.pull_request.base.sha ||
+        github.event.merge_group.base_sha ||
+        github.event.before }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust python
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: criterion-comparison
+      - name: Select and stage the comparison commit
+        id: baseline
+        shell: bash
+        run: |-
+          base="$BASE_SHA"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          git merge-base --is-ancestor "$base" HEAD
+          git worktree add --detach "$RUNNER_TEMP/linerule-base" "$base"
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+      - name: Benchmark comparison commit
+        shell: bash
+        run: >-
+          mise exec rust --command
+          "cargo bench
+          --manifest-path '$RUNNER_TEMP/linerule-base/Cargo.toml'
+          -p linerule-core
+          --bench frame --bench reduce --bench tick
+          --locked --
+          --save-baseline previous --noplot"
+      - name: Benchmark current commit
+        run: >-
+          mise exec rust --command
+          'cargo bench -p linerule-core
+          --bench frame --bench reduce --bench tick
+          --locked --
+          --baseline-lenient previous --noplot'
+      - name: Reject significant regressions of 10% or more
+        run: >-
+          mise exec python --command
+          'python tools/check_benchmarks.py
+          target/performance/criterion
+          --maximum-percent 10
+          --minimum-comparisons 12'
+      - name: Upload Criterion comparison
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: criterion-comparison
+          path: target/performance/criterion
+          if-no-files-found: error
 
   coverage:
     # Required gate. Scope = linerule-core + linerule-app (platform-windows is
@@ -290,26 +593,61 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
-          tool: cargo-llvm-cov,cargo-nextest
-      - run: rustup component add llvm-tools-preview
-      - name: cargo llvm-cov (fail under 80% lines)
-        run: |
-          cargo llvm-cov nextest \
-            --workspace \
-            --exclude linerule-platform-windows \
-            --exclude xtask \
-            --lcov \
-            --output-path lcov.info \
-            --fail-under-lines 80
+          version: 2026.7.13
+          install_args: rust cargo:cargo-llvm-cov cargo:cargo-nextest python
+          cache: true
+      - name: Install pinned nightly coverage toolchain
+        run: mise --env coverage install
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: cargo llvm-cov (line/function/region gates)
+        run: mise exec cargo:cargo-llvm-cov cargo:cargo-nextest --command 'cargo llvm-cov nextest --workspace --exclude linerule-platform-windows --exclude xtask --json --summary-only --output-path coverage-lines.json --fail-under-lines 90 --fail-under-functions 90 --fail-under-regions 90'
+      - name: cargo llvm-cov (branch measurement)
+        run: mise --env coverage exec cargo:cargo-llvm-cov cargo:cargo-nextest --command 'cargo llvm-cov nextest --workspace --exclude linerule-platform-windows --exclude xtask --branch --no-cfg-coverage-nightly --json --summary-only --output-path coverage-branch.json'
+      - name: branch coverage gate (85%)
+        run: mise exec python --command 'python tools/check_coverage.py coverage-branch.json branches 85'
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-lcov
-          path: lcov.info
+          name: coverage-json
+          path: |
+            coverage-lines.json
+            coverage-branch.json
+          if-no-files-found: error
+
+  windows-coverage:
+    name: Windows non-FFI coverage
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust cargo:cargo-llvm-cov cargo:cargo-nextest python
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: cargo llvm-cov (non-FFI line gate)
+        run: >-
+          mise exec cargo:cargo-llvm-cov cargo:cargo-nextest
+          --command 'cargo llvm-cov nextest
+          -p linerule-platform-windows
+          --all-targets
+          --run-ignored all
+          --ignore-filename-regex win32_ffi
+          --json --summary-only
+          --output-path windows-coverage.json'
+      - name: Windows line coverage gate (80%)
+        run: mise exec python --command 'python tools/check_coverage.py windows-coverage.json lines 80'
+      - name: Upload Windows coverage artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-nonffi-coverage
+          path: windows-coverage.json
+          if-no-files-found: error
 
   dependency-review:
     name: dependency review
@@ -341,16 +679,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Single aggregation gate. Branch/tag protection (`.github/rulesets/`) reference
-  # one status context — `ci-required` — so adding/renaming a job never desyncs
-  # the ruleset. `if: always()` so it runs when an upstream job fails; `skipped`
-  # counts as pass, letting PR-only jobs report green on merge_group/push. See ADR-0019.
+  # Single aggregation gate. Only the two PR-only jobs may be skipped, and only
+  # outside pull_request runs. See ADR-0019.
   ci-required:
     name: ci-required
     if: always()
     needs:
       - build-test-linux
       - build-test-windows
+      - winui-settings
       - cross-check
       - release-build
       - fmt
@@ -358,25 +695,43 @@ jobs:
       - clippy
       - doc
       - dep-graph
+      - policy
       - spell-check
       - actionlint
       - cargo-deny
       - cargo-machete
       - cargo-audit
+      - reuse
+      - sbom
+      - mutants
+      - performance
       - coverage
+      - windows-coverage
       - dependency-review
       - conventional-commits
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: verify all required jobs passed (skipped counts as pass)
+      - name: verify all required jobs passed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          NEEDS_JSON: ${{ toJson(needs) }}
         run: |-
-          results="${{ join(needs.*.result, ' ') }}"
-          echo "needs results: $results"
-          for r in $results; do
-            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
-              echo "::error::a required job did not pass ($r)"
-              exit 1
-            fi
-          done
+          bad="$(
+            jq -r --arg event "$EVENT_NAME" '
+              to_entries[]
+              | select(
+                  if (.key == "dependency-review" or .key == "conventional-commits")
+                    and $event != "pull_request"
+                  then .value.result != "skipped"
+                  else .value.result != "success"
+                  end
+                )
+              | "\(.key)=\(.value.result)"
+            ' <<<"$NEEDS_JSON"
+          )"
+          if [[ -n "$bad" ]]; then
+            echo "::error::required jobs did not reach their expected result: $bad"
+            exit 1
+          fi
           echo "all required jobs passed"

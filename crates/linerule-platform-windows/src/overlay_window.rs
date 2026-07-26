@@ -4,12 +4,9 @@
 
 #![forbid(unsafe_code)]
 
-use core::ptr::NonNull;
-
-use linerule_core::input::chord;
-use linerule_core::input::win32_vk::chord_to_win32;
 use linerule_core::{
-    AnimConfig, HotkeyMap, HudConfig, Logical, OverlayAction, ScreenRect, TapStepConfig,
+    AnimConfig, Command, HotkeyBindings, HudConfig, Logical, NotificationClass, ScreenRect, State,
+    TapStepConfig, TickWorld, chord_to_win32,
 };
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -19,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use crate::error::{PlatformError, Result};
-use crate::overlay_state::{HotkeyConflict, HotkeyFailure, OverlayWndState};
+use crate::overlay_state::OverlayWndState;
 use crate::win32_ffi::hotkey as hotkey_ffi;
 use crate::{ex_style_snapshot, win32_ffi, window_class};
 
@@ -38,34 +35,13 @@ pub const OVERLAY_EX_STYLE: WINDOW_EX_STYLE = WINDOW_EX_STYLE(
 /// `UnregisterHotKey` and `DestroyWindow`.
 pub struct OverlayWindow {
     hwnd: HWND,
-    /// Pointer from `Box::into_raw`; reclaimed via `win32_ffi::take_userdata`
-    /// on WM_NCDESTROY.
-    state: NonNull<OverlayWndState>,
 }
 
 // SAFETY: HWND is thread-affine, so no Send/Sync is implemented.
 
 impl OverlayWindow {
-    /// Create the HWND covering `monitor`, starting at `TickWorld::INITIAL`
-    /// (mode = Off).
-    ///
-    /// # Errors
-    /// If `RegisterClassExW` / `CreateWindowExW` / `GetModuleHandleW` fail.
-    pub fn new(
-        monitor: ScreenRect<Logical>,
-        hud_config: HudConfig,
-        anim_config: AnimConfig,
-    ) -> Result<Self> {
-        Self::new_with_initial_world(
-            monitor,
-            hud_config,
-            anim_config,
-            linerule_core::input::tick::TickWorld::INITIAL,
-        )
-    }
-
-    /// Create the HWND covering `monitor` with an explicit `TickWorld`, used to
-    /// override the startup mode (e.g. `--initial-mode horizontal`).
+    /// Create the HWND covering `monitor` with an explicit caller-owned
+    /// `TickWorld`.
     ///
     /// # Errors
     /// If `RegisterClassExW` / `CreateWindowExW` / `GetModuleHandleW` fail.
@@ -73,19 +49,17 @@ impl OverlayWindow {
         monitor: ScreenRect<Logical>,
         hud_config: HudConfig,
         anim_config: AnimConfig,
-        initial_world: linerule_core::input::tick::TickWorld,
+        initial_world: TickWorld,
     ) -> Result<Self> {
         let _atom = window_class::ensure_registered()?;
 
-        let state_box = Box::new(OverlayWndState::new_with_initial_world(
+        let state = Box::new(OverlayWndState::new_with_initial_world(
             tracing::info_span!("overlay_window", class = "linerule-rs-overlay"),
             monitor,
             hud_config,
             anim_config,
             initial_world,
         ));
-        let state_ptr = Box::into_raw(state_box);
-
         let width = i32::try_from(monitor.width).unwrap_or(i32::MAX);
         let height = i32::try_from(monitor.height).unwrap_or(i32::MAX);
 
@@ -98,7 +72,7 @@ impl OverlayWindow {
             monitor.top(),
             width,
             height,
-            state_ptr,
+            state,
         );
 
         match create_result {
@@ -108,23 +82,14 @@ impl OverlayWindow {
                 // SW_SHOWNOACTIVATE + WS_EX_NOACTIVATE both prevent focus steal.
                 win32_ffi::show_window_noactivate(hwnd);
 
-                // SAFETY: Box::into_raw is never null.
-                #[allow(
-                    clippy::expect_used,
-                    reason = "Box::into_raw never yields null; this is an enforced invariant, not fallible I/O"
-                )]
-                let state = NonNull::new(state_ptr).expect("Box::into_raw is never null");
-                // Shelve the HWND so device-lost rebuild can call
-                // `WinrtCompositionRenderer::new(hwnd)` again.
-                win32_ffi::state_ref(state).set_hwnd(hwnd);
-                Ok(Self { hwnd, state })
+                win32_ffi::with_userdata(hwnd, |state| state.set_hwnd(hwnd)).ok_or(
+                    PlatformError::NullHandle {
+                        operation: "GWLP_USERDATA after CreateWindowExW",
+                    },
+                )??;
+                Ok(Self { hwnd })
             },
-            Err(e) => {
-                // On CreateWindowExW failure, reclaim the box here; no-op if
-                // WM_NCDESTROY already reclaimed it via `take_userdata`.
-                win32_ffi::drop_userdata_raw(state_ptr);
-                Err(e)
-            },
+            Err(e) => Err(e),
         }
     }
 
@@ -134,127 +99,186 @@ impl OverlayWindow {
         self.hwnd
     }
 
-    /// The instance state (test / diagnostics).
-    #[must_use]
-    pub fn state(&self) -> &OverlayWndState {
-        win32_ffi::state_ref(self.state)
+    fn with_state<R>(
+        &self,
+        operation: &'static str,
+        f: impl for<'state> FnOnce(&'state OverlayWndState) -> R,
+    ) -> Result<R> {
+        win32_ffi::with_userdata(self.hwnd, f).ok_or(PlatformError::NullHandle { operation })
     }
 
     /// Attach the WinRT composition visual tree and install the overlay / HUD
     /// renderers into `OverlayWndState`.
     ///
     /// # Errors
-    /// If D3D11 / DXGI / D2D / DWrite / WinRT composition init fails (fatal, no fallback).
+    /// If D3D11 / DXGI / D2D / DWrite / WinRT composition init fails.
     pub fn attach_compositor(&mut self) -> Result<()> {
-        let hud_config = *self.state().hud_config();
-        let (overlay, hud) = crate::renderer_backend::build_backends(self.hwnd, &hud_config)?;
+        let hud_config = self.with_state("attach_compositor", |state| *state.hud_config())?;
+        let (overlay, hud) = crate::renderer_backend::build_backends(
+            self.hwnd,
+            &hud_config,
+            crate::win32_ffi::graphics::GraphicsBackend::Auto,
+        )?;
         ex_style_snapshot::capture(self.hwnd, "after attach_compositor");
-        self.state().install_renderer(overlay);
-        self.state().install_hud_renderer(hud);
+        self.with_state("attach_compositor", |state| {
+            state.install_renderer(overlay);
+            state.install_hud_renderer(hud);
+        })?;
         tracing::info!(backend = "winrt", "composition backend attached");
         Ok(())
     }
 
-    /// Parse and `RegisterHotKey` each chord in the `HotkeyMap`, recording the
-    /// successes; failed chords are warned and pushed to the conflict list.
-    ///
-    /// # Errors
-    /// Per-chord failures become conflicts; `Result` reserved for OS-level failure.
-    pub fn register_hotkeys(&self, hotkeys: &HotkeyMap, tap_step: TapStepConfig) -> Result<()> {
-        // Chords feed the HUD hotkey-help rows.
-        self.state().record_hotkeys(*hotkeys);
-        let bumps = (tap_step.thickness, tap_step.opacity);
-        // `repeatable` true only for Bump actions (drops `MOD_NOREPEAT` for
-        // hold-to-repeat); Toggle actions stay false.
-        let pairs: [(i32, &'static str, OverlayAction, bool); 9] = [
-            (1, hotkeys.cycle_mode, OverlayAction::CycleMode, false),
-            (2, hotkeys.toggle_on_off, OverlayAction::ToggleOnOff, false),
-            (
-                3,
-                hotkeys.thicker,
-                OverlayAction::BumpThickness(bumps.0),
-                true,
-            ),
-            (
-                4,
-                hotkeys.thinner,
-                OverlayAction::BumpThickness(-bumps.0),
-                true,
-            ),
-            (
-                5,
-                hotkeys.more_opaque,
-                OverlayAction::BumpOpacity(bumps.1),
-                true,
-            ),
-            (
-                6,
-                hotkeys.less_opaque,
-                OverlayAction::BumpOpacity(-bumps.1),
-                true,
-            ),
-            (7, hotkeys.quit, OverlayAction::Quit, false),
-            (8, hotkeys.cycle_effect, OverlayAction::CycleEffect, false),
-            (9, hotkeys.toggle_hud, OverlayAction::ToggleHudDetail, false),
-        ];
-        for (id, spec, action, repeatable) in pairs {
-            self.register_one(id, spec, action, repeatable);
-        }
-        Ok(())
+    /// Keep the window/controller alive with drawing disabled until the user
+    /// next changes the ruler from Off to visible.
+    pub fn disable_rendering_until_display_retry(&self, message: String) -> Result<()> {
+        self.with_state("disable_rendering_until_display_retry", |state| {
+            state.disable_renderers();
+            state.device_lost_count().set(u8::MAX);
+            state.push_notification(NotificationClass::Error, message, 10_000);
+        })
     }
 
-    fn register_one(&self, id: i32, spec: &'static str, action: OverlayAction, repeatable: bool) {
-        let state = self.state();
-        let chord = match chord::parse(spec) {
-            Ok(c) => c,
-            Err(err) => {
-                tracing::warn!(spec, ?action, ?err, "chord parse failed; skipping hotkey");
-                state.record_hotkey_conflict(HotkeyConflict {
-                    spec,
-                    action,
-                    reason: HotkeyFailure::ChordParse(err),
-                });
-                return;
+    /// Validate and register the entire binding set. Any registration failure
+    /// unregisters every chord from this attempt before returning.
+    ///
+    /// # Errors
+    /// A validation or OS registration error after rollback.
+    pub fn register_hotkeys(
+        &self,
+        hotkeys: &HotkeyBindings,
+        tap_step: TapStepConfig,
+    ) -> Result<()> {
+        hotkeys.validate()?;
+        let old = self.with_state("register_hotkeys snapshot", OverlayWndState::hotkeys)?;
+        let old_ids = self.with_state(
+            "register_hotkeys registered IDs",
+            OverlayWndState::registered_hotkey_ids,
+        )?;
+        for id in &old_ids {
+            if let Err(error) = hotkey_ffi::unregister_hotkey(self.hwnd, *id) {
+                tracing::warn!(id, %error, "old hotkey was already unavailable during transaction");
+            }
+        }
+
+        let mappings = match self.register_set(hotkeys, tap_step) {
+            Ok(mappings) => mappings,
+            Err(error) => {
+                if !old_ids.is_empty()
+                    && let Err(rollback) = self.register_set(&old, tap_step)
+                {
+                    return Err(PlatformError::HotkeyRollback {
+                        original: error.to_string(),
+                        rollback: rollback.to_string(),
+                    });
+                }
+                return Err(error);
             },
         };
-        let (mods, vk) = chord_to_win32(chord);
-        match hotkey_ffi::register_hotkey(self.hwnd, id, mods, vk, repeatable) {
-            Ok(()) => {
-                state.record_hotkey(id, action);
-                tracing::info!(spec, ?action, id, "hotkey registered");
-            },
-            Err(err) => {
-                let hresult = match err {
-                    PlatformError::BadHr { hr, .. } => hr,
-                    _ => 0,
-                };
-                tracing::warn!(
-                    spec,
-                    ?action,
-                    ?err,
-                    "RegisterHotKey failed; skipping hotkey"
-                );
-                state.record_hotkey_conflict(HotkeyConflict {
-                    spec,
-                    action,
-                    reason: HotkeyFailure::RegisterHotKey { hresult },
+        self.with_state("register_hotkeys commit", |state| {
+            state.replace_hotkeys(hotkeys.clone(), mappings);
+        })
+    }
+
+    fn register_set(
+        &self,
+        hotkeys: &HotkeyBindings,
+        tap_step: TapStepConfig,
+    ) -> Result<Vec<(i32, linerule_core::OverlayAction)>> {
+        let parsed = hotkeys.validate()?;
+        let mut registered = Vec::with_capacity(parsed.len());
+        let mut mappings = Vec::with_capacity(parsed.len());
+        for (index, (command, chord)) in parsed.into_iter().enumerate() {
+            let id = i32::try_from(index + 1).unwrap_or(i32::MAX);
+            let action = command.action(tap_step);
+            let repeatable = matches!(
+                command,
+                Command::Thicker | Command::Thinner | Command::MoreOpaque | Command::LessOpaque
+            );
+            let (modifiers, key) = chord_to_win32(chord);
+            if let Err(error) =
+                hotkey_ffi::register_hotkey(self.hwnd, id, modifiers, key, repeatable)
+            {
+                for registered_id in registered {
+                    if let Err(rollback_error) =
+                        hotkey_ffi::unregister_hotkey(self.hwnd, registered_id)
+                    {
+                        tracing::error!(
+                            id = registered_id,
+                            error = %rollback_error,
+                            "hotkey rollback failed"
+                        );
+                    }
+                }
+                return Err(PlatformError::HotkeyRegistration {
+                    command,
+                    source: Box::new(error),
                 });
-            },
+            }
+            tracing::info!(spec = %chord, ?command, id, "hotkey registered");
+            registered.push(id);
+            mappings.push((id, action));
         }
+        Ok(mappings)
+    }
+
+    pub fn push_notification(
+        &self,
+        class: NotificationClass,
+        message: String,
+        lifetime_ms: i64,
+    ) -> Result<()> {
+        self.with_state("push_notification", |state| {
+            state.push_notification(class, message, lifetime_ms);
+            state.request_tick(self.hwnd);
+        })
+    }
+
+    pub fn state_snapshot(&self) -> Result<State> {
+        self.with_state("state_snapshot", |state| state.tick_world_snapshot().state)
+    }
+
+    pub fn telemetry_snapshot(&self) -> Result<(linerule_core::HudTelemetry, usize)> {
+        self.with_state("telemetry_snapshot", |state| {
+            let tracker = state.frame_timing().borrow();
+            (tracker.snapshot(), tracker.sample_count())
+        })
+    }
+
+    pub fn install_render_clock(
+        &self,
+        control: crate::render_clock::RenderClockControl,
+    ) -> Result<()> {
+        self.with_state("install_render_clock", |state| {
+            state.install_render_clock(control)
+        })?
+    }
+
+    pub fn enqueue_action(&self, action: linerule_core::OverlayAction) -> Result<()> {
+        self.with_state("enqueue_action", |state| {
+            state
+                .hotkey_sender()
+                .send(action)
+                .map_err(|_| PlatformError::Invariant {
+                    operation: "OverlayWindow action receiver",
+                })?;
+            state.request_tick(self.hwnd);
+            Ok(())
+        })?
     }
 }
 
 impl Drop for OverlayWindow {
     fn drop(&mut self) {
         // Unregister hotkeys while the HWND is still alive.
-        let ids = self.state().registered_hotkey_ids();
+        let ids = win32_ffi::with_userdata(self.hwnd, OverlayWndState::registered_hotkey_ids)
+            .unwrap_or_default();
         for id in ids {
             if let Err(e) = hotkey_ffi::unregister_hotkey(self.hwnd, id) {
                 tracing::warn!(id, error = %e, "UnregisterHotKey failed during OverlayWindow::drop");
             }
         }
-        // `DestroyWindow` fires WM_NCDESTROY, which reclaims the
-        // `Box<OverlayWndState>` via `win32_ffi::take_userdata`.
+        // `DestroyWindow` fires WM_NCDESTROY, whose FFI callback clears the
+        // userdata slot and reclaims the `Box<OverlayWndState>` in place.
         if let Err(e) = win32_ffi::destroy_window(self.hwnd) {
             tracing::warn!(error = %e, "DestroyWindow failed during OverlayWindow::drop");
         }

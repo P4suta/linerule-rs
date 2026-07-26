@@ -7,21 +7,20 @@
 
 #![forbid(unsafe_code)]
 
-use linerule_core::input::hud_fade;
-use linerule_core::input::tick::{TickEffect, TickInput, step};
 use linerule_core::{
-    DeviceLostOutcome, HudFrame, Logical, OverlayAction, OverlayFrame, Point, RejectReason,
-    ScreenRect, hud_frame, is_device_lost_hresult, record_device_lost_failure, render,
+    ActionBatch, DeviceLostOutcome, HudFrame, Logical, Mode, OverlayAction, OverlayFrame, Point,
+    RejectReason, ScreenRect, TickEffect, TickInput, apply_hud_envelope, frame,
+    hud_distance_opacity, hud_frame, is_device_lost_hresult, record_device_lost_failure, tick,
 };
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     WM_APP, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_HOTKEY, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-    WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_RBUTTONDOWN,
+    WM_NCHITTEST, WM_PAINT, WM_RBUTTONDOWN,
 };
 
 use crate::cursor_tracker;
 use crate::error::{PlatformError, Result};
-use crate::messages::{HTTRANSPARENT, WM_APP_QUIT_TIMER, WM_APP_REASSERT_TOPMOST, WM_APP_TICK};
+use crate::messages::{HTTRANSPARENT, WM_APP_REASSERT_TOPMOST, WM_APP_TICK};
 use crate::monitor_info;
 use crate::overlay_state::OverlayWndState;
 use crate::win32_ffi;
@@ -40,9 +39,19 @@ const REJECT_TOAST_MS: i64 = 3_000;
 /// to `DefWindowProcW`.
 #[must_use]
 pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-    let state_ptr = win32_ffi::get_userdata(hwnd)?;
-    let state = win32_ffi::state_ref(state_ptr);
+    win32_ffi::with_userdata(hwnd, |state| {
+        dispatch_with_state(state, hwnd, msg, wparam, lparam)
+    })
+    .flatten()
+}
 
+fn dispatch_with_state(
+    state: &OverlayWndState,
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> Option<LRESULT> {
     match msg {
         WM_NCHITTEST => {
             if let Some(count) = state.tick_nchit() {
@@ -74,6 +83,7 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
                     } else {
                         tracing::debug!(parent: state.span(), id, ?action,
                             "WM_HOTKEY queued");
+                        state.request_tick(hwnd);
                     }
                 },
                 None => {
@@ -84,16 +94,18 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             Some(LRESULT(0))
         },
         WM_APP_TICK => {
-            if let Err(e) = apply_tick(state) {
+            let (result, hotkey_backlog) = apply_tick(state);
+            if let Err(e) = result {
                 tracing::error!(parent: state.span(), error = %e,
                     "tick processing failed");
             }
-            Some(LRESULT(0))
-        },
-        WM_APP_QUIT_TIMER => {
-            // Auto-quit timer (`--duration-ms`); same effect as a Quit hotkey.
-            tracing::info!(parent: state.span(), "auto-quit timer fired (--duration-ms)");
-            win32_ffi::post_quit(0);
+            tracing::trace!(
+                target: "linerule_render_tick",
+                parent: state.span(),
+                hotkey_backlog,
+                "render tick processed"
+            );
+            state.complete_tick(hotkey_backlog);
             Some(LRESULT(0))
         },
         WM_DPICHANGED => {
@@ -158,11 +170,6 @@ pub fn dispatch(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<
             win32_ffi::post_quit(0);
             Some(LRESULT(0))
         },
-        WM_NCDESTROY => {
-            // Reclaim and drop the `Box<OverlayWndState>` (clears GWLP_USERDATA).
-            let _ = win32_ffi::take_userdata(hwnd);
-            None
-        },
         _ => None,
     }
 }
@@ -175,11 +182,32 @@ fn wparam_as_hotkey_id(wparam: WPARAM) -> i32 {
 
 /// One tick: cursor poll → hotkey drain → `tick::step` → `apply_effects`. The
 /// elapsed time is fed to `FrameTimingTracker::record_tick` for HUD telemetry.
-fn apply_tick(state: &OverlayWndState) -> Result<()> {
+fn apply_tick(state: &OverlayWndState) -> (Result<()>, bool) {
     let tick_start = std::time::Instant::now();
-    let polled_cursor = cursor_tracker::poll();
+    let polled_cursor = match cursor_tracker::poll() {
+        Ok(cursor) => {
+            if state.set_cursor_poll_available(true) {
+                tracing::info!(
+                    parent: state.span(),
+                    "cursor polling recovered after session became available"
+                );
+            }
+            Some(cursor)
+        },
+        Err(error) => {
+            if state.set_cursor_poll_available(false) {
+                tracing::warn!(
+                    parent: state.span(),
+                    %error,
+                    "cursor polling unavailable; retaining the previous sample"
+                );
+            }
+            None
+        },
+    };
     follow_active_monitor(state, polled_cursor);
     let drained_hotkeys = state.drain_hotkeys();
+    let hotkey_backlog = drained_hotkeys.is_full();
     let now_ms = state.now_ms();
     let input = TickInput {
         now_ms,
@@ -188,16 +216,67 @@ fn apply_tick(state: &OverlayWndState) -> Result<()> {
     };
     let world = state.tick_world_snapshot();
     let telemetry_refresh = state.hud_config().telemetry_refresh;
-    let (next_world, effects) = step(world, &input, telemetry_refresh, state.anim_config());
+    let (next_world, effects) = tick(world, &input, telemetry_refresh, state.anim_config());
     state.store_tick_world(next_world);
-    let result = apply_effects(state, &effects);
+    let retry_result = if should_retry_renderers(
+        state.device_lost_count().get(),
+        world.state.mode,
+        next_world.state.mode,
+        &input.drained_hotkeys,
+    ) {
+        retry_disabled_renderers(state)
+    } else {
+        Ok(())
+    };
+    let result = retry_result.and_then(|()| apply_effects(state, effects.as_slice()));
     let elapsed = tick_start.elapsed();
     let over_budget = is_over_budget(elapsed, crate::render_timing::refresh_rate_hz());
     state
         .frame_timing()
         .borrow_mut()
         .record_tick(elapsed, over_budget);
-    result
+    (result, hotkey_backlog)
+}
+
+fn should_retry_renderers(
+    device_lost_count: u8,
+    previous_mode: Mode,
+    next_mode: Mode,
+    actions: &ActionBatch,
+) -> bool {
+    device_lost_count == u8::MAX
+        && matches!(previous_mode, Mode::Off)
+        && !matches!(next_mode, Mode::Off)
+        && actions
+            .iter()
+            .any(|action| matches!(action, OverlayAction::ToggleOnOff))
+}
+
+fn retry_disabled_renderers(state: &OverlayWndState) -> Result<()> {
+    tracing::info!(
+        target: "renderer.device_lost",
+        parent: state.span(),
+        "display request is retrying the disabled graphics pipeline"
+    );
+    match rebuild_renderers(state, crate::win32_ffi::graphics::GraphicsBackend::Auto) {
+        Ok(()) => {
+            state.device_lost_count().set(0);
+            state.push_notification(
+                linerule_core::NotificationClass::Info,
+                "Drawing recovered".to_owned(),
+                3_000,
+            );
+            Ok(())
+        },
+        Err(error) => {
+            state.push_notification(
+                linerule_core::NotificationClass::Error,
+                "Drawing retry failed; hide and show to retry".to_owned(),
+                5_000,
+            );
+            Err(error)
+        },
+    }
 }
 
 /// Resolve the active monitor from the cursor and update `state` if it changed.
@@ -252,7 +331,7 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                 config,
                 sample,
             } => {
-                let frame = render::frame(mode, config, cursor, state.monitor(), sample);
+                let frame = frame(mode, config, cursor, state.monitor(), sample);
                 with_device_lost_recovery(state, "DrawOverlay", &|s| {
                     apply_overlay_frame(s, &frame)
                 })?;
@@ -266,13 +345,14 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                 let hz = crate::render_timing::refresh_rate_hz();
                 let notifications = build_notifications(state);
                 let telemetry = state.frame_timing().borrow().snapshot();
+                let hotkeys = state.hotkeys();
                 let frame = hud_frame(
                     s,
                     *state.hud_config(),
                     state.monitor(),
                     hz,
                     &notifications,
-                    state.hotkeys(),
+                    &hotkeys,
                     telemetry,
                     tier,
                 );
@@ -290,13 +370,13 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
                 // Apply distance fade x envelope via `SpriteVisual::SetOpacity`;
                 // cursor moves / envelope progress don't redraw the surface
                 // (baked color alpha is RefreshHud's job).
-                let distance = hud_fade::compute_opacity(
+                let distance = hud_distance_opacity(
                     s,
                     cursor,
                     state.hud_panel_rect(),
                     state.hud_config().fade_decay_px,
                 );
-                apply_hud_opacity(state, hud_fade::apply_envelope(distance, envelope))?;
+                apply_hud_opacity(state, apply_hud_envelope(distance, envelope))?;
             },
             TickEffect::LogStateChanged { action, mode } => {
                 tracing::info!(
@@ -309,8 +389,10 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
             TickEffect::NotifyRejected { reason } => match reason {
                 RejectReason::AdjustWhileOff => {
                     // Core carries only the semantic reason; the configured
-                    // chord string is formatted here (the HotkeyMap owner).
-                    let chord = state.hotkeys().toggle_on_off;
+                    let hotkeys = state.hotkeys();
+                    let chord = hotkeys
+                        .get(linerule_core::Command::ToggleOnOff)
+                        .unwrap_or("the configured shortcut");
                     state.push_notification(
                         linerule_core::NotificationClass::Info,
                         format!("Overlay is off — {chord} to show"),
@@ -324,8 +406,21 @@ fn apply_effects(state: &OverlayWndState, effects: &[TickEffect]) -> Result<()> 
 }
 
 fn apply_overlay_frame(state: &OverlayWndState, frame: &OverlayFrame) -> Result<()> {
-    if let Some(renderer) = state.renderer().borrow_mut().as_mut() {
-        renderer.apply(frame)?;
+    let using_blur_fallback = {
+        let mut slot = state.renderer().borrow_mut();
+        if let Some(renderer) = slot.as_mut() {
+            renderer.apply(frame)?;
+            renderer.uses_blur_fallback()
+        } else {
+            false
+        }
+    };
+    if using_blur_fallback {
+        state.push_notification(
+            linerule_core::NotificationClass::Warn,
+            "Backdrop Blur unavailable; using Dim".to_owned(),
+            5_000,
+        );
     }
     Ok(())
 }
@@ -347,7 +442,8 @@ fn apply_hud_opacity(state: &OverlayWndState, opacity: f32) -> Result<()> {
 }
 
 /// Wrap a render op with device-lost recovery: on a device-lost HRESULT,
-/// rebuild the renderers and retry once; Quit after 3 consecutive failures.
+/// rebuild the renderers and retry once; disable drawing after 3 consecutive
+/// failures while the controller, tray, and settings remain alive.
 ///
 /// `op` must release its `borrow_mut` before returning Err (the `apply_*_frame`
 /// helpers scope it to an `if let`), so the rebuild can re-borrow without a
@@ -357,12 +453,24 @@ fn with_device_lost_recovery(
     operation: &'static str,
     op: &dyn Fn(&OverlayWndState) -> Result<()>,
 ) -> Result<()> {
+    with_device_lost_recovery_using(state, operation, op, &|state, backend| {
+        rebuild_renderers(state, backend)
+    })
+}
+
+fn with_device_lost_recovery_using(
+    state: &OverlayWndState,
+    operation: &'static str,
+    op: &dyn Fn(&OverlayWndState) -> Result<()>,
+    rebuild: &dyn Fn(&OverlayWndState, crate::win32_ffi::graphics::GraphicsBackend) -> Result<()>,
+) -> Result<()> {
     match op(state) {
         Ok(()) => {
             state.device_lost_count().set(0);
             Ok(())
         },
         Err(e) => {
+            state.frame_timing().borrow_mut().record_timeout();
             let Some(hr) = device_lost_hr(&e) else {
                 return Err(e);
             };
@@ -378,24 +486,37 @@ fn with_device_lost_recovery(
                         "device-lost detected; rebuilding pipeline and retrying once"
                     );
                     state.device_lost_count().set(next);
-                    rebuild_renderers(state)?;
-                    op(state)
+                    let backend = if next >= 2 {
+                        crate::win32_ffi::graphics::GraphicsBackend::Warp
+                    } else {
+                        crate::win32_ffi::graphics::GraphicsBackend::Auto
+                    };
+                    rebuild(state, backend)?;
+                    op(state)?;
+                    state.device_lost_count().set(0);
+                    state.push_notification(
+                        linerule_core::NotificationClass::Info,
+                        "Drawing recovered".to_owned(),
+                        3_000,
+                    );
+                    Ok(())
                 },
-                DeviceLostOutcome::Quit => {
+                DeviceLostOutcome::Degrade => {
                     tracing::error!(
                         target: "renderer.device_lost",
                         parent: state.span(),
                         operation,
                         hr = format_args!("{hr:#010x}").to_string(),
-                        "device-lost exhausted (3 consecutive failures); requesting Quit"
+                        "device-lost exhausted; disabling drawing while controller remains alive"
                     );
-                    if let Err(send_err) = state.hotkey_sender().send(OverlayAction::Quit) {
-                        tracing::error!(parent: state.span(), error = %send_err,
-                            "failed to send Quit after device-lost exhaustion");
-                    }
-                    // Quit is async (drained next tick); still propagate this
-                    // tick's Err to the caller.
-                    Err(e)
+                    state.device_lost_count().set(u8::MAX);
+                    state.disable_renderers();
+                    state.push_notification(
+                        linerule_core::NotificationClass::Error,
+                        "Drawing disabled after repeated graphics failures".to_owned(),
+                        5_000,
+                    );
+                    Ok(())
                 },
             }
         },
@@ -412,11 +533,15 @@ fn device_lost_hr(e: &PlatformError) -> Option<i32> {
 
 /// Rebuild the overlay + HUD renderers and reinstall them. The old renderers
 /// Drop on replacement, releasing their COM objects.
-fn rebuild_renderers(state: &OverlayWndState) -> Result<()> {
+fn rebuild_renderers(
+    state: &OverlayWndState,
+    backend: crate::win32_ffi::graphics::GraphicsBackend,
+) -> Result<()> {
     let hwnd = state.hwnd().ok_or(PlatformError::NullHandle {
         operation: "rebuild_renderers: HWND unset",
     })?;
-    let (overlay, hud) = crate::renderer_backend::build_backends(hwnd, state.hud_config())?;
+    let (overlay, hud) =
+        crate::renderer_backend::build_backends(hwnd, state.hud_config(), backend)?;
     state.install_renderer(overlay);
     state.install_hud_renderer(hud);
     tracing::info!(
@@ -428,30 +553,9 @@ fn rebuild_renderers(state: &OverlayWndState) -> Result<()> {
     Ok(())
 }
 
-/// Build the `HudNotification` list from hotkey conflicts plus live toasts.
+/// Build the current HUD notification list.
 fn build_notifications(state: &OverlayWndState) -> Vec<linerule_core::HudNotification> {
-    let conflicts = state.hotkey_conflicts();
-    let mut out = Vec::with_capacity(conflicts.len() + 1);
-    if !conflicts.is_empty() {
-        out.push(linerule_core::HudNotification {
-            class: linerule_core::NotificationClass::Warn,
-            message: format!("Hotkey conflicts: {}", conflicts.len()),
-            until_ms: i64::MAX,
-        });
-        for c in conflicts.iter().take(6) {
-            let reason = match &c.reason {
-                crate::overlay_state::HotkeyFailure::ChordParse(_) => "parse error",
-                crate::overlay_state::HotkeyFailure::RegisterHotKey { .. } => "already in use",
-            };
-            out.push(linerule_core::HudNotification {
-                class: linerule_core::NotificationClass::Warn,
-                message: format!("  {} → {}", c.spec, reason),
-                until_ms: i64::MAX,
-            });
-        }
-    }
-    out.extend(state.live_notifications());
-    out
+    state.live_notifications()
 }
 
 /// Round a `HudFrame`'s panel rect to `ScreenRect<Logical>`; cached as the
@@ -482,8 +586,19 @@ fn panel_rect_of(frame: &HudFrame) -> ScreenRect<Logical> {
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
+    use std::cell::{Cell, RefCell};
+    use std::time::Duration;
 
     use super::*;
+
+    fn test_state() -> OverlayWndState {
+        OverlayWndState::new(
+            tracing::Span::none(),
+            ScreenRect::new(Point::new(0, 0), 1920, 1080),
+            linerule_core::HudConfig::DEFAULT,
+            linerule_core::AnimConfig::DEFAULT,
+        )
+    }
 
     #[test]
     fn wparam_to_id_truncates_safely() {
@@ -501,6 +616,206 @@ mod tests {
             i32::MAX,
             "i32::MAX boundary should pass through exactly"
         );
+    }
+
+    #[test]
+    fn render_budget_handles_normal_over_budget_and_zero_refresh_rates() {
+        assert!(!is_over_budget(Duration::from_millis(1), 60));
+        assert!(is_over_budget(Duration::from_millis(14), 60));
+        assert!(!is_over_budget(Duration::from_millis(100), 0));
+        assert!(is_over_budget(Duration::from_millis(801), 0));
+    }
+
+    #[test]
+    fn panel_rect_rounds_origins_and_clamps_negative_dimensions() {
+        let frame = HudFrame {
+            panel_left: -1.6,
+            panel_top: 2.4,
+            panel_width: -10.0,
+            panel_height: 20.6,
+            background: linerule_core::Rgba::TRANSPARENT,
+            corner_radius: 0.0,
+            opacity: 1.0,
+            rules: Vec::new(),
+            rows: Vec::new(),
+        };
+        let rectangle = panel_rect_of(&frame);
+        assert_eq!((rectangle.left(), rectangle.top()), (-2, 2));
+        assert_eq!((rectangle.width, rectangle.height), (0, 21));
+    }
+
+    #[test]
+    fn effect_dispatch_covers_overlay_hud_opacity_logging_and_rejection() {
+        let state = test_state();
+        let config = linerule_core::OverlayConfig::DEFAULT;
+        let effects = [
+            TickEffect::DrawOverlay {
+                mode: linerule_core::Mode::Horizontal,
+                cursor: Point::new(960, 540),
+                config,
+                sample: linerule_core::OverlaySample::settled(config),
+            },
+            TickEffect::ClearOverlay,
+            TickEffect::RefreshHud {
+                state: linerule_core::State::DEFAULT,
+                tier: linerule_core::HudTier::Full,
+            },
+            TickEffect::SetHudOpacity {
+                state: linerule_core::State::DEFAULT,
+                cursor: Point::new(960, 540),
+                envelope: 128,
+            },
+            TickEffect::LogStateChanged {
+                action: linerule_core::OverlayAction::CycleMode,
+                mode: linerule_core::Mode::Horizontal,
+            },
+            TickEffect::NotifyRejected {
+                reason: RejectReason::AdjustWhileOff,
+            },
+        ];
+        apply_effects(&state, &effects).expect("effect dispatch without renderers");
+        let notifications = build_notifications(&state);
+        assert_eq!(notifications.len(), 1);
+        assert!(notifications[0].message.contains("Ctrl+Alt+H"));
+    }
+
+    #[test]
+    fn device_lost_recovery_covers_success_non_device_retry_and_degrade() {
+        let state = test_state();
+        state.device_lost_count().set(2);
+        with_device_lost_recovery(&state, "success", &|_| Ok(())).expect("successful operation");
+        assert_eq!(state.device_lost_count().get(), 0);
+
+        let ordinary = PlatformError::BadHr {
+            operation: "fixture",
+            hr: -1,
+        };
+        assert_eq!(
+            with_device_lost_recovery(&state, "ordinary", &|_| Err(ordinary.clone())),
+            Err(ordinary)
+        );
+
+        let device_removed = i32::from_ne_bytes(0x887A_0005_u32.to_ne_bytes());
+        let lost = PlatformError::BadHr {
+            operation: "fixture",
+            hr: device_removed,
+        };
+
+        let auto_calls = Cell::new(0_u8);
+        let auto_backends = RefCell::new(Vec::new());
+        with_device_lost_recovery_using(
+            &state,
+            "hardware retry",
+            &|_| {
+                auto_calls.set(auto_calls.get().saturating_add(1));
+                if auto_calls.get() == 1 {
+                    Err(lost.clone())
+                } else {
+                    Ok(())
+                }
+            },
+            &|_, backend| {
+                auto_backends.borrow_mut().push(backend);
+                Ok(())
+            },
+        )
+        .expect("first device loss rebuilds the hardware-preferred pipeline");
+        assert_eq!(auto_calls.get(), 2);
+        assert_eq!(
+            *auto_backends.borrow(),
+            [crate::win32_ffi::graphics::GraphicsBackend::Auto]
+        );
+        assert_eq!(state.device_lost_count().get(), 0);
+        assert!(
+            build_notifications(&state)
+                .iter()
+                .any(|notification| notification.message.contains("Drawing recovered"))
+        );
+
+        state.device_lost_count().set(1);
+        let warp_backends = RefCell::new(Vec::new());
+        assert_eq!(
+            with_device_lost_recovery_using(
+                &state,
+                "WARP retry",
+                &|_| Err(lost.clone()),
+                &|_, backend| {
+                    warp_backends.borrow_mut().push(backend);
+                    Ok(())
+                },
+            ),
+            Err(lost.clone())
+        );
+        assert_eq!(
+            *warp_backends.borrow(),
+            [crate::win32_ffi::graphics::GraphicsBackend::Warp]
+        );
+        assert_eq!(state.device_lost_count().get(), 2);
+
+        state.device_lost_count().set(0);
+        let rebuild_failure = PlatformError::Invariant {
+            operation: "injected renderer rebuild",
+        };
+        assert_eq!(
+            with_device_lost_recovery_using(
+                &state,
+                "failed rebuild",
+                &|_| Err(lost.clone()),
+                &|_, _| Err(rebuild_failure.clone()),
+            ),
+            Err(rebuild_failure)
+        );
+        assert_eq!(state.device_lost_count().get(), 1);
+
+        state.device_lost_count().set(2);
+        let degraded_rebuild_calls = Cell::new(0_u8);
+        with_device_lost_recovery_using(&state, "degrade", &|_| Err(lost.clone()), &|_, _| {
+            degraded_rebuild_calls.set(degraded_rebuild_calls.get().saturating_add(1));
+            Ok(())
+        })
+        .expect("third loss degrades drawing");
+        assert_eq!(degraded_rebuild_calls.get(), 0);
+        assert_eq!(state.device_lost_count().get(), u8::MAX);
+        assert!(
+            build_notifications(&state)
+                .iter()
+                .any(|notification| notification.message.contains("Drawing disabled"))
+        );
+        assert_eq!(device_lost_hr(&lost), Some(device_removed));
+        assert_eq!(device_lost_hr(&PlatformError::AlreadyRunning), None);
+    }
+
+    #[test]
+    fn disabled_renderer_retries_only_on_an_explicit_off_to_on_toggle() {
+        let toggle = ActionBatch::try_from_actions([OverlayAction::ToggleOnOff])
+            .expect("single toggle fits");
+        let unrelated = ActionBatch::try_from_actions([OverlayAction::CycleEffect])
+            .expect("single action fits");
+
+        assert!(should_retry_renderers(
+            u8::MAX,
+            Mode::Off,
+            Mode::Horizontal,
+            &toggle
+        ));
+        assert!(!should_retry_renderers(
+            2,
+            Mode::Off,
+            Mode::Horizontal,
+            &toggle
+        ));
+        assert!(!should_retry_renderers(
+            u8::MAX,
+            Mode::Horizontal,
+            Mode::Off,
+            &toggle
+        ));
+        assert!(!should_retry_renderers(
+            u8::MAX,
+            Mode::Off,
+            Mode::Horizontal,
+            &unrelated
+        ));
     }
 
     proptest! {

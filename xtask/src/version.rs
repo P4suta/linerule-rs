@@ -88,34 +88,29 @@ mod tests {
 
     #[test]
     fn stable_is_the_clean_base() {
-        assert_eq!(
-            compute("0.4.1", Channel::Stable, None, Some("abc1234")).unwrap(),
-            "0.4.1"
-        );
+        let result = compute("0.4.1", Channel::Stable, None, Some("abc1234"));
+        assert!(matches!(result.as_deref(), Ok("0.4.1")));
     }
 
     #[test]
     fn dev_carries_channel_and_sha() {
-        assert_eq!(
-            compute("0.4.1", Channel::Dev, None, Some("abc1234")).unwrap(),
-            "0.4.1-dev+gabc1234"
-        );
+        let result = compute("0.4.1", Channel::Dev, None, Some("abc1234"));
+        assert!(matches!(result.as_deref(), Ok("0.4.1-dev+gabc1234")));
     }
 
     #[test]
     fn dev_without_sha_drops_metadata() {
-        assert_eq!(
-            compute("0.4.1", Channel::Dev, None, None).unwrap(),
-            "0.4.1-dev"
-        );
+        let result = compute("0.4.1", Channel::Dev, None, None);
+        assert!(matches!(result.as_deref(), Ok("0.4.1-dev")));
     }
 
     #[test]
     fn nightly_embeds_date_and_sha() {
-        assert_eq!(
-            compute("0.4.1", Channel::Nightly, Some("20260629"), Some("abc1234")).unwrap(),
-            "0.4.1-nightly.20260629+gabc1234"
-        );
+        let result = compute("0.4.1", Channel::Nightly, Some("20260629"), Some("abc1234"));
+        assert!(matches!(
+            result.as_deref(),
+            Ok("0.4.1-nightly.20260629+gabc1234")
+        ));
     }
 
     #[test]
@@ -136,9 +131,9 @@ mod tests {
     #[test]
     fn channel_parse_rejects_unknown() {
         assert!(Channel::from_str("canary", false).is_err());
-        assert_eq!(
-            Channel::from_str("nightly", false).unwrap(),
-            Channel::Nightly
-        );
+        assert!(matches!(
+            Channel::from_str("nightly", false),
+            Ok(Channel::Nightly)
+        ));
     }
 }

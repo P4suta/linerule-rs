@@ -1,6 +1,8 @@
 //! Aggregated lint pipeline (fmt, clippy, deny, typos, actionlint, machete, dep-graph).
 //! All steps run to completion (no early bail); errors if any failed.
 
+use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Result, anyhow};
@@ -57,6 +59,10 @@ pub(crate) fn run() -> Result<()> {
         "clippy::disallowed_macros",
     ]);
 
+    let yaml_files = yaml_files()?;
+    let mut yamlfmt = vec!["yamlfmt", "--lint"];
+    yamlfmt.extend(yaml_files.iter().map(String::as_str));
+
     let steps: Vec<(&str, Vec<&str>)> = vec![
         ("rustfmt", vec!["cargo", "fmt", "--all", "--", "--check"]),
         (
@@ -65,8 +71,7 @@ pub(crate) fn run() -> Result<()> {
         ),
         ("taplo", vec!["taplo", "fmt", "--check"]),
         ("biome", vec!["biome", "format", "."]),
-        // Don't pass "." — it bypasses .yamlfmt include/exclude and walks node_modules/.
-        ("yamlfmt", vec!["yamlfmt", "--lint"]),
+        ("yamlfmt", yamlfmt),
         (
             "clippy",
             vec![
@@ -103,12 +108,16 @@ pub(crate) fn run() -> Result<()> {
         // which older versions misinterpret as a target path.
         ("cargo-machete", vec!["cargo-machete"]),
         ("dep-graph", vec!["cargo", "xtask", "dep-graph"]),
+        ("policy", vec!["cargo", "xtask", "policy"]),
+        ("reuse", vec!["reuse", "lint"]),
     ];
 
     let mut failed: Vec<&str> = Vec::new();
     for (name, argv) in &steps {
         println!("=== lint: {name} ===");
-        let (program, args) = argv.split_first().expect("non-empty argv");
+        let Some((program, args)) = argv.split_first() else {
+            return Err(anyhow!("lint: step `{name}` has no command"));
+        };
         let status = Command::new(program).args(args).status();
         match status {
             Ok(s) if s.success() => {},
@@ -129,4 +138,48 @@ pub(crate) fn run() -> Result<()> {
     } else {
         Err(anyhow!("lint: failed steps: {}", failed.join(", ")))
     }
+}
+
+fn yaml_files() -> Result<Vec<String>> {
+    let mut files = Vec::new();
+    collect_yaml_files(Path::new("."), &mut files)?;
+    files.sort_unstable();
+    Ok(files)
+}
+
+fn collect_yaml_files(directory: &Path, output: &mut Vec<String>) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let excluded = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    matches!(
+                        name,
+                        ".git"
+                            | ".sccache"
+                            | ".xwin-cache"
+                            | "artifacts"
+                            | "bin"
+                            | "node_modules"
+                            | "obj"
+                            | "target"
+                    )
+                });
+            if !excluded {
+                collect_yaml_files(&path, output)?;
+            }
+        } else if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("yml") || extension.eq_ignore_ascii_case("yaml")
+            })
+        {
+            output.push(path.to_string_lossy().into_owned());
+        }
+    }
+    Ok(())
 }

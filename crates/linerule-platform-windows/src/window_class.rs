@@ -24,7 +24,13 @@ pub fn ensure_registered() -> Result<u16> {
         return Ok(*atom);
     }
     let atom = win32_ffi::register_class(OVERLAY_CLASS_NAME, Some(win32_ffi::overlay_wnd_proc))?;
-    // On a set race the atom is identical, so ignore the Err.
-    let _ = OVERLAY_CLASS_ATOM.set(atom);
-    Ok(atom)
+    match OVERLAY_CLASS_ATOM.set(atom) {
+        Ok(()) => Ok(atom),
+        Err(_) => OVERLAY_CLASS_ATOM
+            .get()
+            .copied()
+            .ok_or(crate::error::PlatformError::Invariant {
+                operation: "overlay class atom initialization",
+            }),
+    }
 }

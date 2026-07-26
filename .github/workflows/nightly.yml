@@ -1,7 +1,7 @@
-# Scheduled nightly: unsigned, tagless win-x64 binary as an Actions artifact
-# (14-day retention). Channel identity is the version string only:
-# `X.Y.Z-nightly.<date>+g<sha>` via LINERULE_VERSION. No tag/Release/signing/
-# SBOM/attestation; retrieve with `gh run download --name linerule-nightly`.
+# Scheduled nightly: unsigned, tagless x64/ARM64 package and Portable artifacts
+# with the separate `P4suta.linerule.Nightly` MSIX identity (14-day retention).
+# The executable version is `X.Y.Z-nightly.<date>+g<sha>` via LINERULE_VERSION.
+# No tag/Release/signing/SBOM/attestation is performed.
 # Scheduled run skips when main is idle 24h; workflow_dispatch always builds.
 
 name: nightly
@@ -26,7 +26,7 @@ env:
 
 jobs:
   nightly-build:
-    name: nightly build (win-x64, unsigned artifact)
+    name: nightly build (x64/ARM64, separate unsigned identity)
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -50,6 +50,13 @@ jobs:
             echo "::notice::no commits to main in the last 24h - skipping nightly"
           fi
 
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        if: steps.freshness.outputs.build == 'true'
+        with:
+          version: 2026.7.13
+          install_args: rust dotnet
+          cache: true
+
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         if: steps.freshness.outputs.build == 'true'
 
@@ -58,35 +65,110 @@ jobs:
         shell: bash
         run: |
           DATE="$(date -u +%Y%m%d)"
-          echo "LINERULE_VERSION=$(cargo xtask version --channel nightly --date "$DATE")" >> "$GITHUB_ENV"
+          VERSION="$(mise exec rust --command "cargo xtask version --channel nightly --date $DATE")"
+          echo "LINERULE_VERSION=${VERSION}" >> "$GITHUB_ENV"
 
-      - name: cargo build --release (shipping profile, panic=abort, strip=symbols)
+      - name: cargo build --release for x64 and ARM64
         if: steps.freshness.outputs.build == 'true'
-        run: cargo build --release -p linerule-app
+        shell: pwsh
+        run: |
+          mise exec rust --command (
+            "cargo build --locked --release -p linerule-app " +
+            "--target x86_64-pc-windows-msvc"
+          )
+          if ($LASTEXITCODE -ne 0) { throw "x64 Rust build failed" }
+          mise exec rust --command (
+            "cargo build --locked --release -p linerule-app " +
+            "--target aarch64-pc-windows-msvc"
+          )
+          if ($LASTEXITCODE -ne 0) { throw "ARM64 Rust build failed" }
 
-      # GUI smoke mirrors CI release-build: don't ship a nightly that can't boot.
-      - name: smoke - GUI (cargo xtask verify; mirrors CI release-build)
+      - name: publish self-contained Fluent settings executables
         if: steps.freshness.outputs.build == 'true'
-        run: cargo xtask verify --profile release --mode horizontal --effect blur
+        shell: pwsh
+        run: |
+          $project = "ui/linerule-settings/Linerule.Settings.csproj"
+          foreach ($target in @(
+            @{
+              Platform = "x64"
+              Runtime = "win-x64"
+              Output = "$PWD/settings-publish-x64/"
+            },
+            @{
+              Platform = "ARM64"
+              Runtime = "win-arm64"
+              Output = "$PWD/settings-publish-arm64/"
+            }
+          )) {
+            $restore = (
+              "dotnet restore $project --locked-mode " +
+              "-p:Platform=$($target.Platform) " +
+              "-p:RuntimeIdentifier=$($target.Runtime)"
+            )
+            mise exec dotnet --command $restore
+            if ($LASTEXITCODE -ne 0) {
+              throw "WinUI restore failed for $($target.Platform)"
+            }
+            $publish = (
+              "dotnet publish $project --no-restore -c Release " +
+              "-p:Platform=$($target.Platform) " +
+              "-r $($target.Runtime) --self-contained true " +
+              "-p:Version=$env:LINERULE_VERSION " +
+              "-p:PublishDir=$($target.Output)"
+            )
+            mise exec dotnet --command $publish
+            if ($LASTEXITCODE -ne 0) {
+              throw "WinUI publish failed for $($target.Platform)"
+            }
+          }
 
-      - name: rename EXE + write SHA256SUMS.txt
+      - name: smoke CLI and build separate-identity Nightly packages
         if: steps.freshness.outputs.build == 'true'
         shell: pwsh
         run: |-
-          $exe = "linerule-$env:LINERULE_VERSION-win-x64.exe"
-          Copy-Item target/release/linerule.exe $exe
-          # `sha256sum -c` compatible: lowercase hex, bare filename, LF (Out-File emits CRLF).
-          $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
-          [System.IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", "$hash  $exe`n")
-          Get-Content SHA256SUMS.txt
+          $x64 = "target/x86_64-pc-windows-msvc/release/linerule.exe"
+          $arm64 = "target/aarch64-pc-windows-msvc/release/linerule.exe"
+          & $x64 version
+          if ($LASTEXITCODE -ne 0) { throw "version smoke failed" }
+          & $x64 diagnostics
+          if ($LASTEXITCODE -ne 0) { throw "diagnostics smoke failed" }
+          $baseVersion = ($env:LINERULE_VERSION -split "-")[0]
+          $revision = [uint64]$env:GITHUB_RUN_NUMBER
+          if ($revision -gt 65535) {
+            throw "GITHUB_RUN_NUMBER exceeds the MSIX version component limit"
+          }
+          ./packaging/package.ps1 `
+            -Version $baseVersion `
+            -PackageVersion "$baseVersion.$revision" `
+            -Publisher "CN=linerule Nightly Development" `
+            -Identity "P4suta.linerule.Nightly" `
+            -ArtifactName "linerule-nightly" `
+            -X64Exe $x64 `
+            -Arm64Exe $arm64 `
+            -X64SettingsExe settings-publish-x64/linerule-settings.exe `
+            -Arm64SettingsExe settings-publish-arm64/linerule-settings.exe `
+            -OutputDirectory nightly-dist `
+            -SkipAppInstaller
+          $files = @(
+            Get-ChildItem -LiteralPath nightly-dist -File |
+              Sort-Object -Property Name
+          )
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLower()
+            "$hash  $($file.Name)"
+          }
+          [System.IO.File]::WriteAllText(
+            "$PWD/nightly-dist/SHA256SUMS.txt",
+            ($lines -join "`n") + "`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          Get-Content nightly-dist/SHA256SUMS.txt
 
-      - name: upload nightly artifact (unsigned, 14-day retention)
+      - name: upload separate-identity Nightly artifact
         if: steps.freshness.outputs.build == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linerule-nightly
-          path: |
-            linerule-*-win-x64.exe
-            SHA256SUMS.txt
+          path: nightly-dist
           if-no-files-found: error
           retention-days: 14

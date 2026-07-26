@@ -149,38 +149,6 @@ fn boolean(v: bool) -> Result<IPropertyValue> {
         .map_err(map_hr("PropertyValue::cast (boolean)"))
 }
 
-/// Reads an f32 from env; invalid values fall back to `default`.
-fn env_f32(name: &str, default: f32) -> f32 {
-    std::env::var(name)
-        .ok()
-        .and_then(|s| s.trim().parse::<f32>().ok())
-        .filter(|v| v.is_finite())
-        .unwrap_or(default)
-}
-
-/// Blur post-process tuning, parsed once from env at renderer construction.
-#[derive(Clone, Copy)]
-pub struct BlurConfig {
-    /// Saturation effect value, `[0, 1]` (0.5 = identity).
-    saturation: f32,
-    /// Contrast effect value, `[-1, 1]` (0 = identity).
-    contrast: f32,
-    /// Use `CreateHostBackdropBrush` instead of `CreateBackdropBrush`.
-    host_backdrop: bool,
-}
-
-impl BlurConfig {
-    /// Parse the `LINERULE_BLUR_*` env knobs, clamped to valid ranges.
-    #[must_use]
-    pub fn from_env() -> Self {
-        Self {
-            saturation: env_f32("LINERULE_BLUR_SATURATION", BLUR_SATURATION).clamp(0.0, 1.0),
-            contrast: env_f32("LINERULE_BLUR_CONTRAST", BLUR_CONTRAST).clamp(-1.0, 1.0),
-            host_backdrop: std::env::var("LINERULE_BLUR_HOST").is_ok(),
-        }
-    }
-}
-
 /// Creates a `CompositionBrush` that Gaussian-blurs the backdrop and lifts
 /// saturation/contrast. `standard_deviation` is logical px (caller does DPI scaling).
 ///
@@ -189,7 +157,6 @@ impl BlurConfig {
 pub fn create_backdrop_blur_brush(
     compositor: &Compositor,
     standard_deviation: f32,
-    blur: &BlurConfig,
 ) -> Result<CompositionBrush> {
     let source_param = CompositionEffectSourceParameter::Create(&HSTRING::from(SOURCE_NAME))
         .map_err(map_hr("CompositionEffectSourceParameter::Create"))?;
@@ -214,7 +181,7 @@ pub fn create_backdrop_blur_brush(
     let saturation_node = node(
         "LineruleSaturation",
         CLSID_D2D1Saturation,
-        vec![single(blur.saturation)?],
+        vec![single(BLUR_SATURATION)?],
         as_source(&blur_node)?,
     );
 
@@ -222,7 +189,7 @@ pub fn create_backdrop_blur_brush(
     let root = node(
         "LineruleContrast",
         CLSID_D2D1Contrast,
-        vec![single(blur.contrast)?, boolean(false)?],
+        vec![single(BLUR_CONTRAST)?, boolean(false)?],
         as_source(&saturation_node)?,
     );
 
@@ -233,18 +200,11 @@ pub fn create_backdrop_blur_brush(
         .CreateBrush()
         .map_err(map_hr("CompositionEffectFactory::CreateBrush"))?;
 
-    // For this transparent (WS_EX_NOREDIRECTIONBITMAP) overlay,
-    // `CreateBackdropBrush` samples behind the window; `CreateHostBackdropBrush`
-    // returns black for such windows. `LINERULE_BLUR_HOST=1` selects host backdrop.
-    let backdrop = if blur.host_backdrop {
-        compositor
-            .CreateHostBackdropBrush()
-            .map_err(map_hr("Compositor::CreateHostBackdropBrush"))?
-    } else {
-        compositor
-            .CreateBackdropBrush()
-            .map_err(map_hr("Compositor::CreateBackdropBrush"))?
-    };
+    // This transparent WS_EX_NOREDIRECTIONBITMAP overlay must sample the
+    // compositor backdrop. HostBackdrop returns black for this window shape.
+    let backdrop = compositor
+        .CreateBackdropBrush()
+        .map_err(map_hr("Compositor::CreateBackdropBrush"))?;
     brush
         .SetSourceParameter(&HSTRING::from(SOURCE_NAME), &backdrop)
         .map_err(map_hr("CompositionEffectBrush::SetSourceParameter"))?;

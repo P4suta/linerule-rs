@@ -6,7 +6,6 @@
     reason = "FFI boundary; windows crate Win32/COM APIs are all unsafe fn."
 )]
 
-use core::ptr::NonNull;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use windows::Win32::Foundation::{HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, WPARAM};
@@ -15,8 +14,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA,
     GetMessageW, GetSystemMetrics, GetWindowLongPtrW, MSG, PostQuitMessage, RegisterClassExW,
-    SM_CXSCREEN, SM_CYSCREEN, SW_SHOWNOACTIVATE, SetWindowLongPtrW, ShowWindow, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_NCCREATE, WNDCLASSEXW, WNDPROC,
+    SW_SHOWNOACTIVATE, SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_NCCREATE, WM_NCDESTROY, WNDCLASSEXW, WNDPROC,
 };
 use windows::core::PCWSTR;
 
@@ -60,8 +59,8 @@ pub fn register_class(name: PCWSTR, wnd_proc: WNDPROC) -> Result<u16> {
 
 // ---- window lifecycle ------------------------------------------------------
 
-/// Safe wrapper over `CreateWindowExW`. `create_param` is the
-/// `*mut OverlayWndState` (`Box::into_raw`) delivered to the WndProc via WM_NCCREATE.
+/// Safe wrapper over `CreateWindowExW`. A stack-owned `CreatePayload` hands the
+/// boxed state to the synchronous `WM_NCCREATE` callback.
 #[allow(
     clippy::too_many_arguments,
     reason = "mirrors the Win32 API argument shape; flat is clearer for callers"
@@ -75,9 +74,10 @@ pub fn create_window(
     y: i32,
     width: i32,
     height: i32,
-    create_param: *mut OverlayWndState,
+    state: Box<OverlayWndState>,
 ) -> Result<HWND> {
     let h_instance = module_handle()?;
+    let mut payload = CreatePayload { state: Some(state) };
     // SAFETY: all args in valid range. Returns null HWND on failure.
     let hwnd = unsafe {
         CreateWindowExW(
@@ -92,7 +92,7 @@ pub fn create_window(
             None,
             None,
             Some(h_instance),
-            Some(create_param.cast()),
+            Some((&raw mut payload).cast()),
         )
     }
     .map_err(|e| PlatformError::BadHr {
@@ -105,6 +105,13 @@ pub fn create_window(
         });
     }
     Ok(hwnd)
+}
+
+/// Stack-owned handoff used only during the synchronous `CreateWindowExW`
+/// call. `WM_NCCREATE` takes the box; if that message is never delivered the
+/// payload drops it normally.
+struct CreatePayload {
+    state: Option<Box<OverlayWndState>>,
 }
 
 /// Safe wrapper over `DestroyWindow`. May fail (called from Drop) without aborting.
@@ -167,52 +174,21 @@ pub fn show_window_noactivate(hwnd: HWND) {
 
 // ---- GWLP_USERDATA (instance state) ----------------------------------------
 
-/// Stores the WM_NCCREATE `*mut OverlayWndState` (`Box::into_raw`) in `GWLP_USERDATA`.
-pub fn set_userdata(hwnd: HWND, ptr: *mut OverlayWndState) {
-    // SAFETY: hwnd valid; ptr is a caller-owned Box::into_raw result or null.
-    unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr as isize) };
-}
-
-/// Reads the `*mut OverlayWndState` from `GWLP_USERDATA` as `NonNull`.
-/// `None` before WM_NCCREATE sets it.
-pub fn get_userdata(hwnd: HWND) -> Option<NonNull<OverlayWndState>> {
-    // SAFETY: plain read, made safe by the null check.
+/// Borrow instance state only for the duration of `f`. The higher-ranked
+/// callback prevents a reference from escaping the HWND-owned lifetime.
+pub fn with_userdata<R>(
+    hwnd: HWND,
+    f: impl for<'state> FnOnce(&'state OverlayWndState) -> R,
+) -> Option<R> {
+    // SAFETY: plain read; the null check below handles pre-WM_NCCREATE calls.
     let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut OverlayWndState;
-    NonNull::new(raw)
-}
-
-/// Clears `GWLP_USERDATA` and reclaims the stored Box. Call once in WM_NCDESTROY.
-pub fn take_userdata(hwnd: HWND) -> Option<Box<OverlayWndState>> {
-    // SAFETY: writes 0 and returns the prior value (atomic swap).
-    let raw = unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) } as *mut OverlayWndState;
     if raw.is_null() {
         return None;
     }
-    // SAFETY: reclaims the WM_NCCREATE Box::into_raw value once.
-    Some(unsafe { Box::from_raw(raw) })
-}
-
-/// Drops a Box when CreateWindowExW failed before WM_NCCREATE, so the pointer
-/// never reached `GWLP_USERDATA`; the caller passes it directly.
-#[allow(
-    clippy::not_unsafe_ptr_arg_deref,
-    reason = "kept a safe fn for cleanup-path ergonomics; the Box::from_raw contract is documented \
-              in the SAFETY comment below and upheld by the single CreateWindowExW failure caller"
-)]
-pub fn drop_userdata_raw(ptr: *mut OverlayWndState) {
-    if ptr.is_null() {
-        return;
-    }
-    // SAFETY: caller passes a Box::into_raw result and guarantees no double free.
-    drop(unsafe { Box::from_raw(ptr) });
-}
-
-/// Converts `NonNull<OverlayWndState>` to `&OverlayWndState`, valid only for one
-/// WndProc dispatch.
-pub fn state_ref<'a>(ptr: NonNull<OverlayWndState>) -> &'a OverlayWndState {
-    // SAFETY: stable address from WM_NCCREATE; WndProc runs single-threaded and the
-    // box lives until dispatch returns.
-    unsafe { ptr.as_ref() }
+    // SAFETY: the pointer is installed from a Box during WM_NCCREATE, remains
+    // owned by this HWND, and is cleared only during WM_NCDESTROY on the same
+    // UI thread. The callback cannot return a borrow tied to this reference.
+    Some(f(unsafe { &*raw }))
 }
 
 // ---- message dispatch ------------------------------------------------------
@@ -266,18 +242,6 @@ pub fn cursor_pos() -> Result<linerule_core::Point<linerule_core::Logical>> {
 
 // ---- monitor info ----------------------------------------------------------
 
-/// Safe wrapper over `GetSystemMetrics(SM_CXSCREEN)`.
-pub fn screen_width() -> i32 {
-    // SAFETY: GetSystemMetrics is a read-only call with no argument validation.
-    unsafe { GetSystemMetrics(SM_CXSCREEN) }
-}
-
-/// Safe wrapper over `GetSystemMetrics(SM_CYSCREEN)`.
-pub fn screen_height() -> i32 {
-    // SAFETY: as above.
-    unsafe { GetSystemMetrics(SM_CYSCREEN) }
-}
-
 /// Virtual-screen bounds `(left, top, width, height)` covering all monitors.
 pub fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -303,7 +267,8 @@ pub fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
 /// # Safety
 /// Install only as a window class `lpfnWndProc`: `hwnd` must be a valid window of
 /// that class and, for `WM_NCCREATE`, `lparam` must point to a `CREATESTRUCTW`
-/// whose `lpCreateParams` is the `Box::into_raw(OverlayWndState)` pointer.
+/// whose `lpCreateParams` points to the live `CreatePayload` supplied by
+/// [`create_window`].
 pub unsafe extern "system" fn overlay_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -313,9 +278,42 @@ pub unsafe extern "system" fn overlay_wnd_proc(
     if msg == WM_NCCREATE {
         // SAFETY: per Win32, the WM_NCCREATE lparam is a CREATESTRUCTW*.
         let cs = unsafe { &*(lparam.0 as *const CREATESTRUCTW) };
-        let raw = cs.lpCreateParams.cast::<OverlayWndState>();
-        set_userdata(hwnd, raw);
+        let payload = cs.lpCreateParams.cast::<CreatePayload>();
+        // SAFETY: `create_window` passes a live stack `CreatePayload` and
+        // CreateWindowExW delivers WM_NCCREATE synchronously before returning.
+        let state = unsafe { &mut *payload }
+            .state
+            .take()
+            .ok_or(())
+            .map(Box::into_raw);
+        let Ok(raw) = state else {
+            return LRESULT(0);
+        };
+        // SAFETY: `raw` is the unique Box handoff taken from CreatePayload;
+        // this callback installs it exactly once on its new HWND owner.
+        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize) };
         return def_window_proc(hwnd, msg, wparam, lparam);
+    }
+
+    if msg == WM_NCDESTROY {
+        // Let Windows finish default non-client teardown while the state is
+        // still live, then atomically detach and reclaim the Box in this FFI
+        // callback. No safe raw-pointer deallocation API is exposed.
+        let result = def_window_proc(hwnd, msg, wparam, lparam);
+        // SAFETY: WM_NCDESTROY is delivered once for this HWND. The slot holds
+        // only the Box::into_raw value installed during WM_NCCREATE.
+        let raw = unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) } as *mut OverlayWndState;
+        if !raw.is_null() {
+            let cleanup = catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: the atomic slot clear above gives this callback sole
+                // ownership of the original Box allocation.
+                drop(unsafe { Box::from_raw(raw) });
+            }));
+            if cleanup.is_err() {
+                tracing::error!("overlay state Drop panicked during WM_NCDESTROY");
+            }
+        }
+        return result;
     }
 
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -325,8 +323,14 @@ pub unsafe extern "system" fn overlay_wnd_proc(
     match result {
         Ok(Some(lresult)) => lresult,
         Ok(None) => def_window_proc(hwnd, msg, wparam, lparam),
-        Err(_panic) => {
-            // Swallow panic; keep the process alive.
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("<non-string panic payload>");
+            tracing::error!(message, "overlay WndProc caught a panic");
+            // Never unwind across the FFI callback boundary.
             def_window_proc(hwnd, msg, wparam, lparam)
         },
     }
@@ -357,14 +361,6 @@ pub fn last_error(operation: &'static str) -> PlatformError {
 
 // ---- monitor info ----------------------------------------------------------
 
-/// Safe wrapper over `MonitorFromPoint(0, 0, MONITOR_DEFAULTTOPRIMARY)`.
-pub fn primary_monitor() -> HMONITOR {
-    use windows::Win32::Foundation::POINT;
-    use windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTOPRIMARY;
-    // SAFETY: MonitorFromPoint is a read-only API taking a point and flag.
-    unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) }
-}
-
 /// Safe wrapper over `MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST)`. Returns the
 /// nearest monitor to any point (fine if the cursor is off all monitors).
 pub fn monitor_from_point(x: i32, y: i32) -> HMONITOR {
@@ -387,26 +383,6 @@ pub fn get_monitor_info(hmonitor: HMONITOR) -> Result<MONITORINFO> {
         return Err(last_error("GetMonitorInfoW"));
     }
     Ok(info)
-}
-
-// ---- DPI awareness ---------------------------------------------------------
-
-/// Sets per-monitor-aware-V2 DPI awareness (call once at startup). V2 lets the
-/// overlay HWND receive `WM_DPICHANGED` (Windows 10 1703+). Failure is non-fatal.
-///
-/// # Errors
-/// When `SetProcessDpiAwarenessContext` returns `FALSE`.
-pub fn set_dpi_aware() -> Result<()> {
-    use windows::Win32::UI::HiDpi::{
-        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
-    };
-    // SAFETY: windows-rs constant arg; API is idempotent.
-    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }.map_err(
-        |e| PlatformError::BadHr {
-            operation: "SetProcessDpiAwarenessContext",
-            hr: e.code().0,
-        },
-    )
 }
 
 // ---- display settings (refresh rate) ---------------------------------------

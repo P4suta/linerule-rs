@@ -13,23 +13,10 @@ ignore = []
 [licenses]
 version = 2
 confidence-threshold = 0.93
-allow = [
-    "MIT",
-    "Apache-2.0",
-    "Apache-2.0 WITH LLVM-exception",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "BSL-1.0",
-    "ISC",
-    "Unicode-DFS-2016",
-    "Unicode-3.0",
-    "Zlib",
-    "CC0-1.0",
-    "MPL-2.0",
-]
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "Unicode-3.0"]
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "deny"
 wildcards = "deny"
 # Allow path-based deps (workspace internals) to look like wildcards — they
 # don't carry semver implications inside the same workspace.
@@ -40,6 +27,13 @@ external-default-features = "allow"
 # Transitive lazy_static / once_cell from upstream crates is unavoidable;
 # the policy lives in `xtask strict-code` (our own code only).
 deny = [{ name = "openssl" }, { name = "openssl-sys" }]
+skip = [
+    { name = "cpufeatures", version = "0.2.17" },
+    { name = "getrandom", version = "0.3.4" },
+    { name = "r-efi", version = "5.3.0" },
+    { name = "windows-sys", version = "0.59.0" },
+    { name = "wit-bindgen", version = "0.46.0" },
+]
 skip-tree = []
 
 [sources]

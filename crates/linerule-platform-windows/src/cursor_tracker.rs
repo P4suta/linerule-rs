@@ -6,8 +6,13 @@
 
 use linerule_core::{Logical, Point};
 
-/// Current cursor position, or `None` on failure (e.g. locked session).
-#[must_use]
-pub fn poll() -> Option<Point<Logical>> {
-    crate::win32_ffi::cursor_pos().ok()
+use crate::error::Result;
+
+/// Current cursor position.
+///
+/// # Errors
+/// Returns the typed `GetCursorPos` failure. A locked or disconnected session
+/// is handled as a recoverable missing sample by the caller.
+pub fn poll() -> Result<Point<Logical>> {
+    crate::win32_ffi::cursor_pos()
 }

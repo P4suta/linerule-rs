@@ -8,8 +8,8 @@ use serde::Serialize;
 use crate::color::Rgba;
 use crate::config::HudConfig;
 use crate::geometry::{Logical, ScreenRect};
-use crate::input::hotkey_map::HotkeyMap;
 use crate::state::{Mode, State};
+use crate::{Command, HotkeyBindings};
 
 /// HUD panel plus its text rows. Coordinates are `f32` logical pixels;
 /// snapping to integer pixels is the platform layer's job.
@@ -79,12 +79,13 @@ pub enum HudFontKey {
     Mono,
 }
 
-/// HUD presentation tier: `Chip` is the default one-line status; `Full` adds
-/// the hotkey guide and shows only briefly after startup / on `ToggleHudDetail`.
+/// HUD presentation tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HudTier {
-    /// Persistent status chip.
+    /// No HUD is rendered.
+    Hidden,
+    /// Short status chip used for transient operation feedback.
     Chip,
     /// Full panel with the hotkey guide.
     Full,
@@ -95,8 +96,8 @@ impl HudTier {
     #[must_use]
     pub const fn toggle(self) -> Self {
         match self {
-            Self::Chip => Self::Full,
-            Self::Full => Self::Chip,
+            Self::Hidden | Self::Chip => Self::Full,
+            Self::Full => Self::Hidden,
         }
     }
 }
@@ -165,7 +166,7 @@ impl HudTelemetry {
 ///
 /// ```
 /// use linerule_core::{
-///     HotkeyMap, HudConfig, HudTelemetry, Mode, Point, ScreenRect, State, hud_frame,
+///     HotkeyBindings, HudConfig, HudTelemetry, Mode, Point, ScreenRect, State, hud_frame,
 /// };
 ///
 /// let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
@@ -175,7 +176,7 @@ impl HudTelemetry {
 ///     monitor,
 ///     144,
 ///     &[],
-///     HotkeyMap::DEFAULT,
+///     &HotkeyBindings::default(),
 ///     HudTelemetry::ZERO,
 ///     linerule_core::HudTier::Full,
 /// );
@@ -197,11 +198,12 @@ pub fn hud_frame(
     monitor: ScreenRect<Logical>,
     refresh_hz: u32,
     notifications: &[HudNotification],
-    hotkeys: HotkeyMap,
+    hotkeys: &HotkeyBindings,
     telemetry: HudTelemetry,
     tier: HudTier,
 ) -> HudFrame {
     match tier {
+        HudTier::Hidden => hidden_frame(hud),
         HudTier::Chip => chip_frame(state, hud, monitor, notifications, hotkeys),
         HudTier::Full => full_frame(
             state,
@@ -212,6 +214,20 @@ pub fn hud_frame(
             hotkeys,
             telemetry,
         ),
+    }
+}
+
+const fn hidden_frame(hud: HudConfig) -> HudFrame {
+    HudFrame {
+        panel_left: 0.0,
+        panel_top: 0.0,
+        panel_width: 0.0,
+        panel_height: 0.0,
+        background: hud.colors.background,
+        corner_radius: hud.corner_radius,
+        opacity: 0.0,
+        rules: Vec::new(),
+        rows: Vec::new(),
     }
 }
 
@@ -228,7 +244,7 @@ fn full_frame(
     monitor: ScreenRect<Logical>,
     refresh_hz: u32,
     notifications: &[HudNotification],
-    hotkeys: HotkeyMap,
+    hotkeys: &HotkeyBindings,
     telemetry: HudTelemetry,
 ) -> HudFrame {
     let panel_left = monitor_right(monitor) - hud.geometry.margin - hud.geometry.width;
@@ -314,15 +330,15 @@ fn full_frame(
     // are hidden until `ToggleOnOff` brings the overlay back.
     let on = !matches!(state.mode, Mode::Off);
     let hotkey_lines: [(&str, &str, bool); 9] = [
-        ("Mode cycle", hotkeys.cycle_mode, on),
-        ("Effect cycle", hotkeys.cycle_effect, on),
-        ("On/Off", hotkeys.toggle_on_off, true),
-        ("Thicker", hotkeys.thicker, on),
-        ("Thinner", hotkeys.thinner, on),
-        ("More opaque", hotkeys.more_opaque, on),
-        ("Less opaque", hotkeys.less_opaque, on),
-        ("HUD detail", hotkeys.toggle_hud, true),
-        ("Quit", hotkeys.quit, true),
+        ("Mode cycle", binding(hotkeys, Command::CycleMode), on),
+        ("Effect cycle", binding(hotkeys, Command::CycleEffect), on),
+        ("On/Off", binding(hotkeys, Command::ToggleOnOff), true),
+        ("Thicker", binding(hotkeys, Command::Thicker), on),
+        ("Thinner", binding(hotkeys, Command::Thinner), on),
+        ("More opaque", binding(hotkeys, Command::MoreOpaque), on),
+        ("Less opaque", binding(hotkeys, Command::LessOpaque), on),
+        ("HUD detail", binding(hotkeys, Command::ToggleGuide), true),
+        ("Quit", binding(hotkeys, Command::Quit), true),
     ];
     for (label, chord, actionable) in hotkey_lines {
         if !actionable {
@@ -377,7 +393,7 @@ fn chip_frame(
     hud: HudConfig,
     monitor: ScreenRect<Logical>,
     notifications: &[HudNotification],
-    hotkeys: HotkeyMap,
+    hotkeys: &HotkeyBindings,
 ) -> HudFrame {
     let chip = hud.chip;
     let margin = hud.geometry.margin;
@@ -460,11 +476,15 @@ fn estimate_mono_width(text: &str, font_size: f32) -> f32 {
 /// all visible on screen, so the chip only keeps the path to the full guide
 /// alive — the HUD-detail chord while on (`Ctrl+Alt+K`), the restore chord
 /// while off (`Off · Ctrl+Alt+H`).
-fn chip_text(state: State, hotkeys: HotkeyMap) -> String {
+fn chip_text(state: State, hotkeys: &HotkeyBindings) -> String {
     match state.mode {
-        Mode::Off => format!("Off · {}", hotkeys.toggle_on_off),
-        Mode::Horizontal | Mode::Vertical => hotkeys.toggle_hud.to_string(),
+        Mode::Off => format!("Off · {}", binding(hotkeys, Command::ToggleOnOff)),
+        Mode::Horizontal | Mode::Vertical => binding(hotkeys, Command::ToggleGuide).to_owned(),
     }
+}
+
+fn binding(hotkeys: &HotkeyBindings, command: Command) -> &str {
+    hotkeys.get(command).unwrap_or("Unassigned")
 }
 
 /// Sequential row layout: pushes a [`HudRow`] at the running cursor, then the
@@ -539,6 +559,7 @@ const fn mode_label(mode: Mode) -> &'static str {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::geometry::Point;
@@ -547,15 +568,16 @@ mod tests {
         ScreenRect::new(Point::new(0, 0), 1920, 1080)
     }
 
-    /// Call `hud_frame()` (full tier) with default `HotkeyMap` / `HudTelemetry`.
+    /// Call `hud_frame()` with default bindings and telemetry.
     fn default_frame(state: State, refresh_hz: u32, notifications: &[HudNotification]) -> HudFrame {
+        let hotkeys = HotkeyBindings::default();
         hud_frame(
             state,
             HudConfig::DEFAULT,
             monitor(),
             refresh_hz,
             notifications,
-            HotkeyMap::DEFAULT,
+            &hotkeys,
             HudTelemetry::ZERO,
             HudTier::Full,
         )
@@ -563,16 +585,76 @@ mod tests {
 
     /// Test helper for the chip tier.
     fn chip(state: State, notifications: &[HudNotification]) -> HudFrame {
+        let hotkeys = HotkeyBindings::default();
         hud_frame(
             state,
             HudConfig::DEFAULT,
             monitor(),
             60,
             notifications,
-            HotkeyMap::DEFAULT,
+            &hotkeys,
             HudTelemetry::ZERO,
             HudTier::Chip,
         )
+    }
+
+    #[test]
+    fn chip_geometry_is_exact_on_an_offset_monitor_with_two_toasts() {
+        let offset_monitor = ScreenRect::new(Point::new(100, 200), 800, 600);
+        let notifications = [
+            HudNotification {
+                class: NotificationClass::Info,
+                message: "one".to_owned(),
+                until_ms: i64::MAX,
+            },
+            HudNotification {
+                class: NotificationClass::Warn,
+                message: "two".to_owned(),
+                until_ms: i64::MAX,
+            },
+        ];
+        let hotkeys = HotkeyBindings::default();
+        let frame = hud_frame(
+            State::with_mode(Mode::Horizontal),
+            HudConfig::DEFAULT,
+            offset_monitor,
+            60,
+            &notifications,
+            &hotkeys,
+            HudTelemetry::ZERO,
+            HudTier::Chip,
+        );
+
+        assert!((frame.panel_left - 775.0).abs() < f32::EPSILON);
+        assert!((frame.panel_top - 224.0).abs() < f32::EPSILON);
+        assert!((frame.panel_width - 101.0).abs() < f32::EPSILON);
+        assert!((frame.panel_height - 67.0).abs() < f32::EPSILON);
+        assert_eq!(frame.rows.len(), 3);
+        assert_eq!(
+            frame
+                .rows
+                .iter()
+                .map(|row| (row.origin_x, row.origin_y))
+                .collect::<Vec<_>>(),
+            [(785.0, 230.0), (785.0, 251.0), (785.0, 272.0)]
+        );
+    }
+
+    #[test]
+    fn full_panel_preserves_offset_monitor_top() {
+        let offset_monitor = ScreenRect::new(Point::new(100, 200), 800, 600);
+        let hotkeys = HotkeyBindings::default();
+        let frame = hud_frame(
+            State::DEFAULT,
+            HudConfig::DEFAULT,
+            offset_monitor,
+            60,
+            &[],
+            &hotkeys,
+            HudTelemetry::ZERO,
+            HudTier::Full,
+        );
+        assert!((frame.panel_top - 224.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -717,13 +799,14 @@ mod tests {
             frames_dropped: 7,
             commit_timeouts: 2,
         };
+        let hotkeys = HotkeyBindings::default();
         let f = hud_frame(
             State::DEFAULT,
             HudConfig::DEFAULT,
             monitor(),
             60,
             &[],
-            HotkeyMap::DEFAULT,
+            &hotkeys,
             t,
             HudTier::Full,
         );
@@ -898,10 +981,11 @@ mod tests {
     #[test]
     fn chip_shows_restore_key_when_mode_is_off() {
         let f = chip(State::DEFAULT, &[]);
+        let hotkeys = HotkeyBindings::default();
         assert_eq!(f.rows.len(), 1);
         assert_eq!(
             f.rows[0].text,
-            format!("Off · {}", HotkeyMap::DEFAULT.toggle_on_off)
+            format!("Off · {}", binding(&hotkeys, Command::ToggleOnOff))
         );
         assert_eq!(f.rows[0].font, HudFontKey::Mono);
     }
@@ -910,9 +994,10 @@ mod tests {
     /// effect, and values are all visible on screen.
     #[test]
     fn chip_status_text_is_just_the_detail_key_hint() {
+        let hotkeys = HotkeyBindings::default();
         for mode in [Mode::Horizontal, Mode::Vertical] {
             let f = chip(State::with_mode(mode), &[]);
-            assert_eq!(f.rows[0].text, HotkeyMap::DEFAULT.toggle_hud);
+            assert_eq!(f.rows[0].text, binding(&hotkeys, Command::ToggleGuide));
         }
     }
 
@@ -924,7 +1009,8 @@ mod tests {
         let mut s = State::with_mode(Mode::Horizontal);
         s.config.effect = SurroundEffect::Blur;
         let f = chip(s, &[]);
-        assert_eq!(f.rows[0].text, HotkeyMap::DEFAULT.toggle_hud);
+        let hotkeys = HotkeyBindings::default();
+        assert_eq!(f.rows[0].text, binding(&hotkeys, Command::ToggleGuide));
     }
 
     /// The chip anchors top-right on integer px boundaries, far smaller than
@@ -983,8 +1069,10 @@ mod tests {
     /// `HudTier::toggle` round-trips back to the original.
     #[test]
     fn hud_tier_toggle_is_involutive() {
+        assert_eq!(HudTier::Hidden.toggle(), HudTier::Full);
         assert_eq!(HudTier::Chip.toggle(), HudTier::Full);
-        assert_eq!(HudTier::Full.toggle(), HudTier::Chip);
+        assert_eq!(HudTier::Full.toggle(), HudTier::Hidden);
+        assert_eq!(HudTier::Hidden.toggle().toggle(), HudTier::Hidden);
     }
 
     /// The chip shows neither guide rows (Hotkeys) nor a divider.
@@ -1034,24 +1122,27 @@ mod tests {
     fn hotkey_help_rows_reflect_hotkey_map_argument() {
         // Use chords fully distinct from DEFAULT so a short prefix like
         // `Ctrl+Alt+R` can't substring-match e.g. `Ctrl+Alt+Right`.
-        let custom = HotkeyMap {
-            cycle_mode: "Ctrl+Shift+M",
-            cycle_effect: "Ctrl+Shift+E",
-            toggle_on_off: "Ctrl+Shift+V",
-            thicker: "Ctrl+Shift+T",
-            thinner: "Ctrl+Shift+N",
-            more_opaque: "Ctrl+Shift+O",
-            less_opaque: "Ctrl+Shift+S",
-            toggle_hud: "Ctrl+Shift+D",
-            quit: "Ctrl+Shift+X",
-        };
+        let mut custom = HotkeyBindings::default();
+        for (command, chord) in [
+            (Command::CycleMode, "Ctrl+Shift+M"),
+            (Command::CycleEffect, "Ctrl+Shift+E"),
+            (Command::ToggleOnOff, "Ctrl+Shift+V"),
+            (Command::Thicker, "Ctrl+Shift+T"),
+            (Command::Thinner, "Ctrl+Shift+N"),
+            (Command::MoreOpaque, "Ctrl+Shift+O"),
+            (Command::LessOpaque, "Ctrl+Shift+S"),
+            (Command::ToggleGuide, "Ctrl+Shift+D"),
+            (Command::Quit, "Ctrl+Shift+X"),
+        ] {
+            custom.set(command, chord);
+        }
         let f = hud_frame(
             State::with_mode(Mode::Horizontal),
             HudConfig::DEFAULT,
             monitor(),
             60,
             &[],
-            custom,
+            &custom,
             HudTelemetry::ZERO,
             HudTier::Full,
         );

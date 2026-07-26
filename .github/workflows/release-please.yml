@@ -38,6 +38,12 @@ jobs:
     # unreadable and create-github-app-token fails on empty inputs.
     environment: release-please
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust jq aqua:cli/cli
+          cache: true
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         with:
@@ -65,7 +71,7 @@ jobs:
         if: ${{ steps.rp.outputs.pr != '' }}
         env:
           PR_JSON: ${{ steps.rp.outputs.pr }}
-        run: echo "branch=$(printf '%s' "$PR_JSON" | jq -r '.headBranchName')" >> "$GITHUB_OUTPUT"
+        run: echo "branch=$(printf '%s' "$PR_JSON" | mise exec jq -- jq -r '.headBranchName')" >> "$GITHUB_OUTPUT"
       - name: check out the Release PR branch
         if: ${{ steps.rp_branch.outputs.branch != '' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,9 +87,8 @@ jobs:
           BRANCH: ${{ steps.rp_branch.outputs.branch }}
         run: |-
           set -euo pipefail
-          # `cargo update --workspace` only rewrites the path-crate versions in
-          # the lock (no compile), so the runner's default cargo suffices.
-          cargo update --workspace
+          # This rewrites only the path-crate versions in the lock.
+          mise exec rust --command 'cargo update --workspace'
           if git diff --quiet -- Cargo.lock; then
             echo "Cargo.lock already in sync."
             exit 0
@@ -92,7 +97,7 @@ jobs:
           # require-signed-commits ruleset rejects an unsigned bot commit, but a
           # commit created through the API is signed by GitHub (the same way
           # release-please's own commits are). One file, on the Release PR branch.
-          gh api --method PUT "repos/$REPO/contents/Cargo.lock" \
+          mise exec aqua:cli/cli -- gh api --method PUT "repos/$REPO/contents/Cargo.lock" \
             -f message="chore: sync Cargo.lock to the release version" \
             -f branch="$BRANCH" \
             -f sha="$(git rev-parse "HEAD:Cargo.lock")" \
@@ -117,12 +122,15 @@ jobs:
           set -euo pipefail
           # Any merged release PR still marked pending -> tagged (covers the
           # just-merged PR and any historical straggler that blocked the queue).
-          gh pr list --state merged --label "autorelease: pending" --json number \
+          mise exec aqua:cli/cli -- gh pr list --state merged \
+            --label "autorelease: pending" --json number \
             --jq '.[].number' | while read -r pr; do
-            gh pr edit "$pr" --remove-label "autorelease: pending" --add-label "autorelease: tagged"
+            mise exec aqua:cli/cli -- gh pr edit "$pr" \
+              --remove-label "autorelease: pending" \
+              --add-label "autorelease: tagged"
             echo "reconciled autorelease label on PR #${pr}"
           done
-          VERSION=$(jq -r '."."' .release-please-manifest.json)
+          VERSION=$(mise exec jq -- jq -r '."."' .release-please-manifest.json)
           TAG="v${VERSION}"
           if git ls-remote --tags origin "${TAG}" | grep -q "refs/tags/${TAG}$"; then
             echo "tag ${TAG} already exists on origin, nothing to push"

@@ -160,6 +160,19 @@ impl BlurAmount {
     /// Default level — `to_std_dev` ≈ 9 px.
     pub const DEFAULT: Self = Self(111);
 
+    /// Construct from a raw level.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Blur`] when `value == 0`.
+    pub const fn try_new(value: u8) -> Result<Self, CoreError> {
+        if value == 0 {
+            return Err(CoreError::Blur {
+                given: value as i32,
+            });
+        }
+        Ok(Self(value))
+    }
+
     /// σ (logical px) at [`MIN`](Self::MIN).
     const SIGMA_MIN_PX: f32 = 2.0;
     /// σ (logical px) at [`MAX`](Self::MAX).
@@ -194,6 +207,7 @@ impl BlurAmount {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
