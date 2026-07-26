@@ -175,29 +175,45 @@ function Assert-Focused {
     }
 }
 
+function Assert-PropertyContains {
+    param(
+        [Parameter(Mandatory)][string]$AutomationId,
+        [Parameter(Mandatory)][string]$PropertyName,
+        [Parameter(Mandatory)][string]$Value
+    )
+
+    $property = Invoke-Ui (
+        "get-property `"$AutomationId`" --property $PropertyName --json"
+    ) -ReturnOutput
+    try {
+        $properties = ($property | ConvertFrom-Json -ErrorAction Stop).properties
+        $valueProperty = $properties.PSObject.Properties[$PropertyName]
+        $actual = if ($null -eq $valueProperty) {
+            $null
+        } else {
+            $valueProperty.Value
+        }
+    }
+    catch {
+        throw "WinApp returned invalid property JSON for $AutomationId`:`n$property"
+    }
+    if (
+        $actual -isnot [string] -or
+        -not $actual.Contains($Value, [System.StringComparison]::Ordinal)
+    ) {
+        throw (
+            "$AutomationId property $PropertyName did not contain '$Value': " +
+            "'$actual'.")
+    }
+}
+
 function Assert-NameContains {
     param(
         [Parameter(Mandatory)][string]$AutomationId,
         [Parameter(Mandatory)][string]$Value
     )
 
-    $property = Invoke-Ui (
-        "get-property `"$AutomationId`" --property Name --json"
-    ) -ReturnOutput
-    try {
-        $name = ($property | ConvertFrom-Json -ErrorAction Stop).properties.Name
-    }
-    catch {
-        throw "WinApp returned invalid property JSON for $AutomationId`:`n$property"
-    }
-    if (
-        $name -isnot [string] -or
-        -not $name.Contains($Value, [System.StringComparison]::Ordinal)
-    ) {
-        throw (
-            "$AutomationId did not contain '$Value' in its accessible name " +
-            "'$name'.")
-    }
+    Assert-PropertyContains $AutomationId "Name" $Value
 }
 
 function Send-Keys {
@@ -431,7 +447,10 @@ try {
         Invoke-Ui "wait-for `"$id`" --timeout 5000"
     }
 
-    Assert-Focused "Shortcut_cycle_effect"
+    Assert-PropertyContains `
+        "Shortcut_cycle_effect" `
+        "HelpText" `
+        "already registered"
     Invoke-Ui (
         "screenshot --output `"$resolvedOutput\initial.png`" --capture-screen"
     )

@@ -26,13 +26,18 @@ public sealed partial class MainPageViewModel : ObservableObject
     public MainPageViewModel(SettingsRequest request)
     {
         Shortcuts = new(ShortcutDefinitions.CommandOrder.Select(command =>
-            new ShortcutItemViewModel(
+        {
+            var isHighlighted = request.Highlight == command;
+            return new ShortcutItemViewModel(
                 command,
                 ShortcutDefinitions.Label(command),
                 ShortcutDefinitions.Description(command),
                 request.Hotkeys.GetValueOrDefault(
                     command,
-                    ShortcutDefinitions.Defaults[command]))));
+                    ShortcutDefinitions.Defaults[command]),
+                isHighlighted ? request.Error : null,
+                isHighlighted);
+        }));
 
         if (request.Error is { Length: > 0 } error)
         {
@@ -163,6 +168,11 @@ public sealed partial class ShortcutItemViewModel : ObservableObject
     public string AutomationId => ShortcutDefinitions.AutomationId(Command);
     public string CardAutomationId => $"Card_{Command}";
     public string AccessibleName => Strings.Format("ShortcutAccessibleName", Label, DisplayChord);
+    public bool IsHighlighted { get; }
+    public Microsoft.UI.Xaml.Thickness HighlightBorderThickness =>
+        IsHighlighted
+            ? new Microsoft.UI.Xaml.Thickness(2)
+            : new Microsoft.UI.Xaml.Thickness(0);
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DisplayChord))]
@@ -187,11 +197,15 @@ public sealed partial class ShortcutItemViewModel : ObservableObject
         string command,
         string label,
         string description,
-        string chord)
+        string chord,
+        string? error = null,
+        bool isHighlighted = false)
     {
         Command = command;
         Label = label;
         Description = description;
         Chord = chord;
+        Error = error;
+        IsHighlighted = isHighlighted;
     }
 }

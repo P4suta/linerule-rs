@@ -49,6 +49,8 @@
                             <controls:SettingsCard
                                 Margin="0,0,0,4"
                                 AutomationProperties.AutomationId="{x:Bind CardAutomationId, Mode=OneWay}"
+                                BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                                BorderThickness="{x:Bind HighlightBorderThickness, Mode=OneWay}"
                                 Description="{x:Bind StatusText, Mode=OneWay}"
                                 Header="{x:Bind Label, Mode=OneWay}">
                                 <Button
