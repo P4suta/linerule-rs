@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::Level;
 
-use crate::input::chord::ChordError;
+use crate::ChordError;
 
 /// Errors produced by `linerule-core` validators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Error)]
@@ -17,6 +17,12 @@ pub enum CoreError {
     #[error("opacity must be in [1, 255], got {given}")]
     Opacity {
         /// The rejected value.
+        given: i32,
+    },
+    /// Backdrop blur is outside `[1, 255]`.
+    #[error("blur level must be in 1..=255, got {given}")]
+    Blur {
+        /// Invalid raw input.
         given: i32,
     },
     /// `Thickness::try_new` was called outside `[1, 2048]`.
@@ -56,7 +62,9 @@ impl CoreError {
     #[must_use]
     pub const fn class(self) -> ErrorClass {
         match self {
-            Self::Opacity { .. } | Self::Thickness { .. } => ErrorClass::ProgrammerError,
+            Self::Opacity { .. } | Self::Blur { .. } | Self::Thickness { .. } => {
+                ErrorClass::ProgrammerError
+            },
         }
     }
 }
@@ -143,22 +151,24 @@ pub enum DeviceLostOutcome {
         /// Updated counter value.
         next: u8,
     },
-    /// Third consecutive failure reached; requests `OverlayAction::Quit`.
-    Quit,
+    /// Third consecutive failure reached; disable drawing while the resident
+    /// controller remains available.
+    Degrade,
 }
 
 /// Records one device-lost failure and decides the next action: `Retry` while
-/// `prev < 2`, `Quit` once `prev + 1 >= 3`.
+/// `prev < 2`, `Degrade` once `prev + 1 >= 3`.
 #[must_use]
 pub const fn record_device_lost_failure(prev: u8) -> DeviceLostOutcome {
     if prev >= 2 {
-        DeviceLostOutcome::Quit
+        DeviceLostOutcome::Degrade
     } else {
         DeviceLostOutcome::Retry { next: prev + 1 }
     }
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
@@ -267,10 +277,10 @@ mod tests {
     }
 
     #[test]
-    fn record_device_lost_failure_quits_on_third_failure() {
-        assert_eq!(record_device_lost_failure(2), DeviceLostOutcome::Quit);
-        // Unexpectedly high prev still quits.
-        assert_eq!(record_device_lost_failure(100), DeviceLostOutcome::Quit);
+    fn record_device_lost_failure_degrades_on_third_failure() {
+        assert_eq!(record_device_lost_failure(2), DeviceLostOutcome::Degrade);
+        // Unexpectedly high prev still degrades.
+        assert_eq!(record_device_lost_failure(100), DeviceLostOutcome::Degrade);
     }
 
     #[test]

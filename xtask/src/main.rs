@@ -1,19 +1,12 @@
 //! linerule-rs build automation (xtask pattern).
 //!
-//! CLI boundary: stdout/stderr printing and panic-on-misconfig are intentional
-//! (hence the crate-level lint relaxations below).
+//! CLI boundary: stdout/stderr printing is intentional.
 
 #![forbid(unsafe_code)]
 #![allow(
     clippy::print_stdout,
     clippy::print_stderr,
     reason = "xtask is a CLI tool; printing is its job"
-)]
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    reason = "xtask is a boundary; panicking on misconfiguration is correct"
 )]
 #![allow(
     clippy::redundant_pub_crate,
@@ -26,7 +19,8 @@ mod ci;
 mod dep_graph;
 mod lint;
 mod mode;
-mod verify;
+mod policy;
+mod release_check;
 mod version;
 
 use anyhow::Result;
@@ -51,8 +45,10 @@ enum Command {
     Lint,
     /// Replay the CI test/build matrix locally.
     Ci,
-    /// GUI smoke: drive linerule.exe and judge events.jsonl (Windows host).
-    Verify(verify::VerifyArgs),
+    /// Enforce unsafe, panic, ownership, and public-API policy.
+    Policy,
+    /// Validate a clean tree and final staged release artifacts.
+    ReleaseCheck(release_check::ReleaseCheckArgs),
     /// Print the channel-aware build version (dev|nightly|stable).
     Version(version::VersionArgs),
 }
@@ -63,7 +59,8 @@ fn main() -> Result<()> {
         Command::DepGraph => dep_graph::run(),
         Command::Lint => lint::run(),
         Command::Ci => ci::run(),
-        Command::Verify(args) => verify::run(args),
+        Command::Policy => policy::run(),
+        Command::ReleaseCheck(args) => release_check::run(&args),
         Command::Version(args) => version::run(&args),
     }
 }

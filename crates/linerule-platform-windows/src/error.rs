@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use linerule_core::{ChordError, ErrorClass};
+use linerule_core::{BindingErrors, ChordError, Command, ErrorClass, PreferencesError};
 use thiserror::Error;
 
 /// Closed sum of failures handled in `linerule-platform-windows`.
@@ -46,6 +46,50 @@ pub enum PlatformError {
     /// Chord string parse failure, propagated from `linerule-core`.
     #[error(transparent)]
     Chord(#[from] ChordError),
+    /// Complete shortcut validation failure.
+    #[error(transparent)]
+    Bindings(#[from] BindingErrors),
+    /// Preferences schema or binding validation failure.
+    #[error(transparent)]
+    Preferences(#[from] PreferencesError),
+    /// An internal state transition violated a checked invariant.
+    #[error("internal invariant violated: {operation}")]
+    Invariant {
+        /// Operation whose prerequisite was unexpectedly absent.
+        operation: &'static str,
+    },
+    /// Another controller instance already owns the per-user mutex.
+    #[error("linerule is already running")]
+    AlreadyRunning,
+    /// One command failed during the all-at-once RegisterHotKey transaction.
+    #[error("failed to register {command:?}: {source}")]
+    HotkeyRegistration {
+        /// Command whose chord was occupied or rejected.
+        command: Command,
+        /// Typed Win32 registration failure.
+        source: Box<PlatformError>,
+    },
+    /// Restoring the previous shortcut set also failed.
+    #[error("shortcut rollback failed after `{original}`: {rollback}")]
+    HotkeyRollback {
+        /// Failure that triggered rollback.
+        original: String,
+        /// Failure while restoring the old set.
+        rollback: String,
+    },
+    /// The application-owned atomic preferences writer failed.
+    #[error("persisting preferences failed: {message}")]
+    Persistence {
+        /// Storage-layer error text preserved across the crate boundary.
+        message: String,
+    },
+    /// The separate Fluent settings process could not be started or did not
+    /// complete its private request/response protocol.
+    #[error("shortcut settings unavailable: {message}")]
+    SettingsHost {
+        /// Launch, wait, or protocol failure text.
+        message: String,
+    },
 }
 
 /// `Result` alias for `linerule-platform-windows`.
@@ -60,7 +104,14 @@ impl PlatformError {
     #[must_use]
     pub fn class(&self) -> ErrorClass {
         match self {
-            Self::NullHandle { .. } | Self::BadHr { .. } => ErrorClass::Fatal,
+            Self::NullHandle { .. } => ErrorClass::Fatal,
+            Self::BadHr { operation, .. } => {
+                if RECOVERABLE_WIN32_OPS.contains(operation) {
+                    ErrorClass::Recoverable
+                } else {
+                    ErrorClass::Fatal
+                }
+            },
             Self::BoolFalse { operation, .. } | Self::LastError { operation, .. } => {
                 if RECOVERABLE_WIN32_OPS.contains(operation) {
                     ErrorClass::Recoverable
@@ -69,6 +120,12 @@ impl PlatformError {
                 }
             },
             Self::Chord(e) => e.class(),
+            Self::Bindings(_) | Self::Preferences(_) => ErrorClass::Recoverable,
+            Self::Invariant { .. } => ErrorClass::ProgrammerError,
+            Self::AlreadyRunning => ErrorClass::Recoverable,
+            Self::HotkeyRegistration { .. } => ErrorClass::Recoverable,
+            Self::HotkeyRollback { .. } => ErrorClass::Fatal,
+            Self::Persistence { .. } | Self::SettingsHost { .. } => ErrorClass::Recoverable,
         }
     }
 }
@@ -285,5 +342,14 @@ mod tests {
             let e = PlatformError::NullHandle { operation: op };
             assert_eq!(e.class(), ErrorClass::Fatal, "NullHandle({op})");
         }
+    }
+
+    #[test]
+    fn settings_host_failure_is_recoverable() {
+        let error = PlatformError::SettingsHost {
+            message: "sidecar was not found".to_owned(),
+        };
+        assert_eq!(error.class(), ErrorClass::Recoverable);
+        assert!(error.to_string().contains("sidecar was not found"));
     }
 }

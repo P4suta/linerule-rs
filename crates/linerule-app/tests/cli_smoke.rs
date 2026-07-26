@@ -27,27 +27,26 @@ fn version_flag_exits_zero_and_prints_linerule_prefix() {
 }
 
 #[test]
-fn diagnostics_dry_run_exits_zero_with_redirected_data_dir() {
+fn diagnostics_data_dir_exits_zero_with_redirected_local_state() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut cmd = Command::cargo_bin("linerule").expect("binary built");
     cmd.arg("diagnostics")
-        .arg("--dry-run")
-        // Redirect data-dir lookups off the real `%APPDATA%` / `~/.local/share`.
-        .env("APPDATA", dir.path())
-        .env("XDG_DATA_HOME", dir.path())
-        .env("HOME", dir.path());
-    cmd.assert().success();
+        .arg("--data-dir")
+        .env("LOCALAPPDATA", dir.path());
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("P4suta.linerule"));
 }
 
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn no_args_on_non_windows_fails_with_helpful_message() {
-    // Default `Run` subcommand bails on non-Windows: non-zero exit + stderr reason.
+    // Default resident launch bails on non-Windows with a clear platform reason.
     Command::cargo_bin("linerule")
         .expect("binary built")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Windows-only"));
+        .stderr(predicate::str::contains("require Windows 11"));
 }
 
 #[test]
@@ -67,20 +66,16 @@ fn help_flag_succeeds_and_lists_subcommands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("version"))
-        .stdout(predicate::str::contains("diagnostics"));
+        .stdout(predicate::str::contains("diagnostics"))
+        .stdout(predicate::str::contains("settings"));
 }
 
 #[test]
-fn cli_flag_alone_does_not_panic() {
-    // `--cli` without a subcommand defaults to `Run`; just confirm clap accepts it.
-    if cfg!(target_os = "windows") {
-        // Skip: Run on Windows blocks on the message pump.
-        return;
-    }
+fn removed_cli_flag_is_rejected() {
     Command::cargo_bin("linerule")
         .expect("binary built")
         .arg("--cli")
         .assert()
-        .failure() // bails on non-Windows
-        .stderr(predicate::str::contains("Windows-only"));
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument"));
 }

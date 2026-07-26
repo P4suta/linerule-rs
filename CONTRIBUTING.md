@@ -1,57 +1,37 @@
 # Contributing
 
-Contributions to linerule-rs are welcome. See [.github/CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md) for the code of conduct.
+linerule is a Windows 11 reading ruler. Keep changes within that scope and
+preserve the dependency direction:
 
-Before structural changes, review the fixed design rules (one-way dependencies, RAII, exhaustive match, localized `unsafe` — all merge blockers) in [`docs/adr/0002-architecture-principles.md`](docs/adr/0002-architecture-principles.md).
+```text
+linerule-app → linerule-platform-windows → linerule-core
+```
 
 ## Setup
 
-The toolchain is pinned via [mise](https://mise.jdx.dev/) (`mise.toml`); tasks run through [just](https://github.com/casey/just). Two paths exist — **Docker** and **native Windows** — and `just` auto-detects. See the README [Quickstart](README.md#quick-start) for prerequisites.
-
-```
-mise install        # install missing tools (native path)
-just bootstrap      # one-shot setup (auto-detects docker / native)
-just doctor         # check environment matches pins (native: just doctor-native)
+```text
+mise install
+mise exec just --command "just bootstrap"
 ```
 
-Declare tools in `mise.toml` and install via `mise install`; do not add them ad hoc.
+Use native Windows for rendering and UI Automation work.
 
-## Dev loop
+## Required checks
 
-```
-just lint     # fmt + clippy + cargo-deny + typos + actionlint + cargo-machete + dep-graph
-just test     # cargo nextest (falls back to test-threads=1 if absent)
-just docs     # regenerate artifacts (cargo-rdme / cargo modules / cargo depgraph)
+```text
+mise exec just --command "just test lint test-cargo policy"
 ```
 
-GUI verification works **only on native Windows** (overlay rendering is impossible in a Linux container).
+Before a stable tag, run
+`mise exec just --command "just release-check --artifacts dist"`. Hardware, UI
+Automation, install/update, signing, and ARM64 results must also be present; a
+local compile is not release evidence.
 
-```
-just run                # launch the overlay for visual check
-just verify             # GUI smoke: brief launch, health judged from events.jsonl
-just verify-blur        # verify WinRT backdrop-blur with Horizontal + Blur
-just verify-scenario    # inject Ctrl+Alt chord via SendInput, assert state transitions
-```
+Do not introduce test serialization, ignored errors, production
+`unwrap`/`expect`/`panic!`, or unsafe code outside `win32_ffi`.
 
-`just verify` shares the same judgment logic (`cargo xtask verify`) as the CI release build.
+Use Conventional Commit titles. Pull requests are squash-merged. Security
+reports belong in the private channel described by
+[.github/SECURITY.md](.github/SECURITY.md).
 
-## Commit / PR rules
-
-- [Conventional Commits](https://www.conventionalcommits.org/) (`feat:` / `fix:` / `perf:` / `docs:` / `refactor:` / `test:` / `chore:` / `ci:` / `deps:`), enforced by [committed](https://github.com/crate-ci/committed) (`committed.toml`) in the lefthook commit-msg hook.
-- **Squash-merge only.**
-- Releases are cut by [release-please](https://github.com/googleapis/release-please), not a bot: it bumps the CHANGELOG from conventional commits and tags (`.github/workflows/release-please.yml`). On tag push, `release-assets.yml` attaches `linerule-vX.Y.Z-win-x64.exe` and the SBOM to the GitHub Release.
-
-## Before pushing
-
-- `just lint` and `just test` green; run `just verify` too if you have hardware.
-- After CLI / module-layout / dependency-graph changes, sync artifacts with `just docs` and commit. The `lefthook` pre-commit detects drift.
-- **Do not hand-edit generated artifacts**: the README `cargo-rdme` block (source of truth is the crate-level doc in `crates/linerule-core/src/lib.rs`), `docs/modules/`, `docs/dep-graph.svg`. Edit the source (doc comments or code) and regenerate.
-- Do not bypass the pre-push hook with `--no-verify`. If it fails, fix the cause.
-
-## Scope
-
-**Reading-ruler overlay only, Windows only.** Cross-platform support and features beyond a reading ruler are non-goals. Before proposing a feature, read out-of-scope in the [feature_request template](.github/ISSUE_TEMPLATE/feature_request.yml); before architecture changes, read the relevant ADR in [`docs/adr/`](docs/adr/).
-
-## License
-
-Contributions are accepted under the project's dual MIT / Apache-2.0 license ([`LICENSE-MIT`](LICENSE-MIT) / [`LICENSE-APACHE`](LICENSE-APACHE)).
+Contributions are licensed under MIT or Apache-2.0, at your option.

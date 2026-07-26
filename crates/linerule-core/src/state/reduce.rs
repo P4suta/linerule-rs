@@ -13,9 +13,9 @@ use crate::{
 /// `CycleMode` flips the axis (`Horizontal ⇄ Vertical`); on/off is `ToggleOnOff`:
 ///
 /// ```
-/// use linerule_core::{Mode, OverlayAction, State, state::reduce};
+/// use linerule_core::{Mode, OverlayAction, State, reduce};
 /// let on = State::with_mode(Mode::Horizontal);
-/// let (next, delta) = reduce::apply(on, OverlayAction::CycleMode);
+/// let (next, delta) = reduce(on, OverlayAction::CycleMode);
 /// assert_eq!(next.mode, Mode::Vertical);
 /// assert!(delta.is_any());
 /// ```
@@ -23,21 +23,26 @@ use crate::{
 /// `ToggleOnOff` toggles `Off ⇄ last_active`, so twice is the identity:
 ///
 /// ```
-/// use linerule_core::{OverlayAction, State, state::reduce};
-/// let (on, _) = reduce::apply(State::DEFAULT, OverlayAction::ToggleOnOff);
-/// let (off, _) = reduce::apply(on, OverlayAction::ToggleOnOff);
+/// use linerule_core::{OverlayAction, State, reduce};
+/// let (on, _) = reduce(State::DEFAULT, OverlayAction::ToggleOnOff);
+/// let (off, _) = reduce(on, OverlayAction::ToggleOnOff);
 /// assert_eq!(off, State::DEFAULT);
 /// ```
 ///
 /// `Quit` is a pure no-op here (the tick pipeline turns it into `TickEffect::Quit`):
 ///
 /// ```
-/// use linerule_core::{OverlayAction, State, state::reduce};
-/// let (next, delta) = reduce::apply(State::DEFAULT, OverlayAction::Quit);
+/// use linerule_core::{OverlayAction, State, reduce};
+/// let (next, delta) = reduce(State::DEFAULT, OverlayAction::Quit);
 /// assert_eq!(next, State::DEFAULT);
 /// assert!(!delta.is_any());
 /// ```
 #[must_use]
+#[allow(
+    clippy::inline_always,
+    reason = "the reducer is a steady-state hot path and cross-crate calls regressed the pinned Criterion baseline"
+)]
+#[inline(always)]
 pub fn apply(state: State, action: OverlayAction) -> (State, StateDelta) {
     use OverlayAction as A;
     match action {
@@ -162,6 +167,7 @@ impl StateDelta {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::color::{Opacity, Thickness};
@@ -389,4 +395,16 @@ mod tests {
         assert_eq!(s1, s0);
         assert!(!d.is_any());
     }
+}
+#[test]
+fn toggling_off_repairs_stale_last_active_axis() {
+    let inconsistent = State {
+        mode: Mode::Horizontal,
+        last_active: ActiveMode::Vertical,
+        ..State::DEFAULT
+    };
+    let (off, delta) = apply(inconsistent, OverlayAction::ToggleOnOff);
+    assert_eq!(off.mode, Mode::Off);
+    assert_eq!(off.last_active, ActiveMode::Horizontal);
+    assert!(delta.is_any());
 }

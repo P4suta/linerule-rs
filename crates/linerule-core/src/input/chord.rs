@@ -183,17 +183,17 @@ pub enum ChordError {
 /// # Examples
 ///
 /// ```
-/// use linerule_core::input::chord;
-/// let spec = chord::parse("Ctrl+Alt+R").expect("default chord");
+/// use linerule_core::parse_chord;
+/// let spec = parse_chord("Ctrl+Alt+R").expect("default chord");
 /// assert_eq!(spec.display(), "Ctrl+Alt+R");
 /// ```
 ///
 /// Modifier names accept aliases (`opt` for `alt`, `cmd` for `meta`, …):
 ///
 /// ```
-/// use linerule_core::input::chord;
-/// let a = chord::parse("Ctrl+Alt+H").expect("default");
-/// let b = chord::parse("control+option+H").expect("aliased");
+/// use linerule_core::parse_chord;
+/// let a = parse_chord("Ctrl+Alt+H").expect("default");
+/// let b = parse_chord("control+option+H").expect("aliased");
 /// assert_eq!(a, b);
 /// ```
 pub fn parse(input: &str) -> Result<ChordSpec, ChordError> {
@@ -267,6 +267,7 @@ fn parse_key(part: &str) -> Option<KeyCode> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

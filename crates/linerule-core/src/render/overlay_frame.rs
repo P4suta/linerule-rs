@@ -4,9 +4,20 @@
 //! it to D2D draw calls.
 
 use crate::{
-    color::{BlurAmount, Rgba},
-    geometry::{Logical, ScreenRect},
+    color::{BlurAmount, Rgba, Thickness},
+    geometry::{Logical, Point, ScreenRect},
 };
+
+use super::{Axis, band, split_around};
+
+const THICKNESS_MASK: u32 = 0x0fff;
+const STYLE_SHIFT: u32 = 12;
+const VALUE_SHIFT: u32 = 14;
+const OPACITY_SHIFT: u32 = 22;
+const STYLE_HORIZONTAL_SOLID: u32 = 0;
+const STYLE_VERTICAL_SOLID: u32 = 1;
+const STYLE_HORIZONTAL_BLUR: u32 = 2;
+const STYLE_VERTICAL_BLUR: u32 = 3;
 
 /// Fill style for a geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -56,46 +67,158 @@ impl Layer {
 }
 
 /// Immutable composition frame.
-///
-/// A plain `Vec<Layer>`: per-frame allocation is negligible and keeps the crate
-/// `#![forbid(unsafe_code)]` without pulling in `smallvec`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(align(8))]
 pub struct OverlayFrame {
-    layers: Vec<Layer>,
+    monitor: ScreenRect<Logical>,
+    center: i32,
+    packed: u32,
 }
 
 impl OverlayFrame {
     /// Empty frame — emitted in `Mode::Off` or when the cursor is not yet known.
-    pub const EMPTY: Self = Self { layers: Vec::new() };
+    pub const EMPTY: Self = Self {
+        monitor: ScreenRect::new(Point::new(0, 0), 0, 0),
+        center: 0,
+        packed: 0,
+    };
 
-    /// Construct a frame from a layer iterator.
-    #[must_use]
-    pub fn from_layers<I: IntoIterator<Item = Layer>>(layers: I) -> Self {
+    pub(crate) fn from_slit(
+        axis: Axis,
+        monitor: ScreenRect<Logical>,
+        center: i32,
+        thickness: Thickness,
+        brush: Brush,
+    ) -> Self {
+        let (style, value, opacity) = match brush {
+            Brush::Solid(color) => {
+                debug_assert_eq!(color.r, color.g);
+                debug_assert_eq!(color.g, color.b);
+                let style = match axis {
+                    Axis::Horizontal => STYLE_HORIZONTAL_SOLID,
+                    Axis::Vertical => STYLE_VERTICAL_SOLID,
+                };
+                (style, color.r, color.a)
+            },
+            Brush::Blur { amount, opacity } => {
+                let style = match axis {
+                    Axis::Horizontal => STYLE_HORIZONTAL_BLUR,
+                    Axis::Vertical => STYLE_VERTICAL_BLUR,
+                };
+                (style, amount.get(), opacity)
+            },
+        };
+        let packed = u32::from(thickness.get())
+            | (style << STYLE_SHIFT)
+            | (u32::from(value) << VALUE_SHIFT)
+            | (u32::from(opacity) << OPACITY_SHIFT);
         Self {
-            layers: layers.into_iter().collect(),
+            monitor,
+            center,
+            packed,
         }
     }
 
     /// `true` when this frame paints nothing.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.layers.is_empty()
+    pub fn is_empty(self) -> bool {
+        self.packed == 0 || (self.layer_at(0).is_none() && self.layer_at(1).is_none())
     }
 
     /// Number of layers in this frame.
     #[must_use]
-    pub const fn layer_count(&self) -> usize {
-        self.layers.len()
+    pub fn layer_count(self) -> usize {
+        self.layers().count()
     }
 
-    /// Borrow the layer slice for composition.
-    #[must_use]
-    pub fn layers(&self) -> &[Layer] {
-        &self.layers
+    /// Iterate over the at-most-two layers in paint order.
+    pub fn layers(self) -> impl Iterator<Item = Layer> + Clone {
+        self.layer_at(0).into_iter().chain(self.layer_at(1))
+    }
+
+    fn layer_at(self, side: u8) -> Option<Layer> {
+        if self.packed == 0 {
+            return None;
+        }
+        let thickness = i32::try_from(self.packed & THICKNESS_MASK).ok()?;
+        let (before_edge, after_edge) = split_around(self.center, thickness);
+        let style = (self.packed >> STYLE_SHIFT) & 0b11;
+        let axis = match style {
+            STYLE_HORIZONTAL_SOLID | STYLE_HORIZONTAL_BLUR => Axis::Horizontal,
+            STYLE_VERTICAL_SOLID | STYLE_VERTICAL_BLUR => Axis::Vertical,
+            _ => return None,
+        };
+        let rect = match (axis, side) {
+            (Axis::Horizontal, 0) => band(
+                self.monitor.left(),
+                self.monitor.top(),
+                self.monitor.right(),
+                before_edge,
+            ),
+            (Axis::Horizontal, 1) => band(
+                self.monitor.left(),
+                after_edge,
+                self.monitor.right(),
+                self.monitor.bottom(),
+            ),
+            (Axis::Vertical, 0) => band(
+                self.monitor.left(),
+                self.monitor.top(),
+                before_edge,
+                self.monitor.bottom(),
+            ),
+            (Axis::Vertical, 1) => band(
+                after_edge,
+                self.monitor.top(),
+                self.monitor.right(),
+                self.monitor.bottom(),
+            ),
+            (Axis::Horizontal | Axis::Vertical, _) => None,
+        }?;
+        let value = ((self.packed >> VALUE_SHIFT) & 0xff) as u8;
+        let opacity = ((self.packed >> OPACITY_SHIFT) & 0xff) as u8;
+        let brush = match style {
+            STYLE_HORIZONTAL_SOLID | STYLE_VERTICAL_SOLID => {
+                Brush::Solid(Rgba::new(value, value, value, opacity))
+            },
+            STYLE_HORIZONTAL_BLUR | STYLE_VERTICAL_BLUR => Brush::Blur {
+                amount: BlurAmount::try_new(value).ok()?,
+                opacity,
+            },
+            _ => return None,
+        };
+        Some(Layer {
+            geometry: Geometry::Rect(rect),
+            brush,
+        })
+    }
+}
+
+impl Default for OverlayFrame {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+impl core::fmt::Debug for OverlayFrame {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("OverlayFrame")
+            .field("layers", &DebugLayers(*self))
+            .finish()
+    }
+}
+
+struct DebugLayers(OverlayFrame);
+
+impl core::fmt::Debug for DebugLayers {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.debug_list().entries(self.0.layers()).finish()
     }
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::geometry::Point;
@@ -103,6 +226,7 @@ mod tests {
     #[test]
     fn empty_frame_is_empty() {
         let f = OverlayFrame::EMPTY;
+        assert_eq!(OverlayFrame::default(), f);
         assert!(f.is_empty());
         assert_eq!(f.layer_count(), 0);
     }
@@ -113,5 +237,39 @@ mod tests {
         let layer = Layer::solid_rect(rect, Rgba::DEFAULT_MASK);
         assert_eq!(layer.geometry, Geometry::Rect(rect));
         assert_eq!(layer.brush, Brush::Solid(Rgba::DEFAULT_MASK));
+    }
+
+    #[test]
+    fn slit_layers_are_generated_in_paint_order_without_allocating() {
+        let monitor = ScreenRect::new(Point::<Logical>::new(0, 0), 100, 50);
+        let frame = OverlayFrame::from_slit(
+            Axis::Horizontal,
+            monitor,
+            25,
+            Thickness::try_new(10).expect("valid test thickness"),
+            Brush::Solid(Rgba::DEFAULT_MASK),
+        );
+        let mut iterator = frame.layers();
+        assert_eq!(iterator.size_hint(), (2, Some(2)));
+        let first = iterator.next().expect("before layer");
+        assert_eq!(iterator.size_hint(), (1, Some(1)));
+        let second = iterator.next().expect("after layer");
+        assert_eq!(iterator.size_hint(), (0, Some(0)));
+        assert_eq!(iterator.next(), None);
+        assert_eq!(iterator.next(), None);
+
+        let layers = [first, second];
+        assert_eq!(layers.len(), 2);
+        assert_eq!(
+            layers[0].geometry,
+            Geometry::Rect(ScreenRect::new(Point::new(0, 0), 100, 20))
+        );
+        assert_eq!(
+            layers[1].geometry,
+            Geometry::Rect(ScreenRect::new(Point::new(0, 30), 100, 20))
+        );
+        assert_eq!(frame.layers().count(), frame.layer_count());
+        assert_eq!(core::mem::size_of::<OverlayFrame>(), 24);
+        assert_eq!(core::mem::align_of::<OverlayFrame>(), 8);
     }
 }

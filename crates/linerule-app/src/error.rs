@@ -1,145 +1,40 @@
-//! App-layer error aggregator `AppError`.
-//!
-//! Merges core/platform/I/O/serde errors. The merge lives in the app layer so
-//! core stays unaware of platform-windows (orphan rule + dependency direction
-//! `app → platform-windows → core`). `Platform` variant is Windows-only.
+//! Typed failures owned by the executable boundary.
 
 #![forbid(unsafe_code)]
 
-use linerule_core::{ErrorClass, LineruleError};
-#[cfg(target_os = "windows")]
-use linerule_platform_windows::PlatformError;
+use std::path::PathBuf;
+
 use thiserror::Error;
 
-/// Aggregate error type unifying core / platform / I/O / serde.
-///
-/// `dead_code` allow on Linux: the only consumer (`boot::run_overlay`) is
-/// Windows-only.
-#[cfg_attr(
-    not(target_os = "windows"),
-    allow(
-        dead_code,
-        reason = "caller boot::run_overlay is cfg-gated away on Linux; consumed on Windows"
-    )
-)]
+use crate::logging::LoggingError;
+use crate::storage::StorageError;
+
+pub(crate) type Result<T> = std::result::Result<T, AppError>;
+
+/// Top-level application failures.
 #[derive(Debug, Error)]
 pub(crate) enum AppError {
-    /// From `linerule-core` (`CoreError` / `ChordError`).
     #[error(transparent)]
-    Core(#[from] LineruleError),
-    /// From `linerule-platform-windows`. Windows only.
+    Storage(#[from] StorageError),
+    #[error(transparent)]
+    Logging(#[from] LoggingError),
     #[cfg(target_os = "windows")]
     #[error(transparent)]
-    Platform(#[from] PlatformError),
-    /// I/O.
-    #[error("I/O: {0}")]
-    Io(#[from] std::io::Error),
-    /// `serde_json::Error` (crash dump read/write).
-    #[error("serde: {0}")]
-    Serde(#[from] serde_json::Error),
-}
-
-impl AppError {
-    /// Delegates to the inner error's `class()`; `Io` / `Serde` are `Fatal`.
-    #[cfg_attr(
-        not(target_os = "windows"),
-        allow(
-            dead_code,
-            reason = "caller classify_and_log is cfg-gated away on Linux"
-        )
-    )]
-    pub(crate) fn class(&self) -> ErrorClass {
-        match self {
-            Self::Core(e) => e.class(),
-            #[cfg(target_os = "windows")]
-            Self::Platform(e) => e.class(),
-            Self::Io(_) | Self::Serde(_) => ErrorClass::Fatal,
-        }
-    }
-}
-
-/// Log an `AppError` by its [`ErrorClass`]. `Recoverable` -> `Continue`;
-/// `Fatal` / `ProgrammerError` -> `Stop`. Caller handles any HUD push.
-#[cfg(target_os = "windows")]
-pub(crate) fn classify_and_log(err: &AppError) -> RunDecision {
-    let class = err.class();
-    match class {
-        ErrorClass::Recoverable => {
-            tracing::warn!(error = %err, class = "recoverable", "AppError classified recoverable; continuing");
-            RunDecision::Continue
-        },
-        ErrorClass::Fatal => {
-            tracing::error!(error = %err, class = "fatal", "AppError classified fatal");
-            RunDecision::Stop
-        },
-        ErrorClass::ProgrammerError => {
-            tracing::error!(error = %err, class = "programmer", "AppError classified as programmer error; this is a bug");
-            debug_assert!(false, "ProgrammerError reached classify_and_log: {err}");
-            RunDecision::Stop
-        },
-    }
-}
-
-/// Return value of [`classify_and_log`].
-#[cfg(target_os = "windows")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RunDecision {
-    /// Recoverable. Caller pushes a HUD notification.
-    Continue,
-    /// Fatal / `ProgrammerError`. Caller does `Err(_)?`.
-    Stop,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use linerule_core::CoreError;
-
-    #[test]
-    fn app_error_absorbs_linerule_error() {
-        let e: AppError = LineruleError::from(CoreError::Opacity { given: 0 }).into();
-        assert!(matches!(e, AppError::Core(_)));
-        assert_eq!(e.class(), ErrorClass::ProgrammerError);
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn app_error_absorbs_platform_error() {
-        let e: AppError = PlatformError::NullHandle {
-            operation: "CreateWindowExW",
-        }
-        .into();
-        assert!(matches!(e, AppError::Platform(_)));
-        assert_eq!(e.class(), ErrorClass::Fatal);
-    }
-
-    #[test]
-    fn app_error_absorbs_io_error() {
-        let io = std::io::Error::other("test io error");
-        let e: AppError = io.into();
-        assert!(matches!(e, AppError::Io(_)));
-        assert_eq!(e.class(), ErrorClass::Fatal);
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn chord_error_via_platform_is_recoverable() {
-        // ChordError stays `Recoverable` through PlatformError and AppError.
-        use linerule_core::ChordError;
-        let e: AppError = PlatformError::from(ChordError::Empty).into();
-        assert_eq!(e.class(), ErrorClass::Recoverable);
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn app_error_converts_into_anyhow_via_question_mark() {
-        // Compile-time check that `?` converts into anyhow.
-        fn try_chain() -> anyhow::Result<()> {
-            let app: AppError = PlatformError::NullHandle { operation: "test" }.into();
-            Err(app)?;
-            Ok(())
-        }
-        let err = try_chain().unwrap_err();
-        assert!(err.to_string().contains("test"));
-    }
+    Platform(#[from] linerule_platform_windows::PlatformError),
+    #[cfg(not(target_os = "windows"))]
+    #[error("linerule's resident shell and settings window require Windows 11")]
+    UnsupportedPlatform,
+    #[error("cannot {operation} {path}: {source}")]
+    DiagnosticIo {
+        operation: &'static str,
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("cannot decode diagnostic JSON {path}: {source}")]
+    DiagnosticJson {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    #[error("cannot encode diagnostic JSON: {0}")]
+    EncodeDiagnosticJson(serde_json::Error),
 }

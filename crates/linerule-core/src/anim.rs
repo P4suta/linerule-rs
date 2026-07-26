@@ -53,7 +53,7 @@ fn lerp_f32(from: f32, to: f32, t: f32) -> f32 {
 
 /// Cubic ease-out `1 - (1 - t)³`. `t` clamped to `[0, 1]`; non-finite → `0`.
 #[must_use]
-pub fn ease_out(t: f32) -> f32 {
+pub(crate) fn ease_out(t: f32) -> f32 {
     if !t.is_finite() || t <= 0.0 {
         return 0.0;
     }
@@ -143,6 +143,7 @@ impl<T: Lerp> Transition<T> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use proptest::prelude::*;
 

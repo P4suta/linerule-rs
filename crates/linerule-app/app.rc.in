@@ -1,0 +1,40 @@
+#pragma code_page(65001)
+
+// Application icon, embedded into linerule.exe via embed-resource (build.rs).
+// Shown in Explorer, Task Manager, etc. No `#include`, so llvm-rc (cargo-xwin
+// cross builds) compiles it too.
+//
+// The manifest is compiled from app.manifest.in by build.rs as a separate
+// required resource. Keeping the templates separate makes version substitution
+// explicit while still failing the build if either resource cannot compile.
+
+// The lowest-id icon group becomes the executable's default shell icon.
+1 ICON "@ICON_PATH@"
+
+1 VERSIONINFO
+FILEVERSION @VERSION_COMMAS@
+PRODUCTVERSION @VERSION_COMMAS@
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "linerule-rs contributors\0"
+            VALUE "FileDescription", "linerule reading ruler\0"
+            VALUE "FileVersion", "@FILE_VERSION@\0"
+            VALUE "InternalName", "linerule\0"
+            VALUE "OriginalFilename", "linerule.exe\0"
+            VALUE "ProductName", "linerule\0"
+            VALUE "ProductVersion", "@FILE_VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

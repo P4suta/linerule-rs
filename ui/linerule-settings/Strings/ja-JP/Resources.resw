@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+
+  <data name="WindowTitle" xml:space="preserve"><value>linerule ショートカット設定</value></data>
+  <data name="AppTitleBar.Title" xml:space="preserve"><value>linerule</value></data>
+  <data name="AppTitleBar.Subtitle" xml:space="preserve"><value>ショートカット設定</value></data>
+  <data name="KeyboardShortcutsHeading.Text" xml:space="preserve"><value>キーボード ショートカット</value></data>
+  <data name="ShortcutInstructions.Text" xml:space="preserve"><value>変更する項目を選び、新しいキーの組み合わせを押してください。</value></data>
+  <data name="ResetButton.Content" xml:space="preserve"><value>既定値に戻す</value></data>
+  <data name="CancelButton.Content" xml:space="preserve"><value>キャンセル</value></data>
+  <data name="SaveButton.Content" xml:space="preserve"><value>保存</value></data>
+
+  <data name="LabelCycleMode" xml:space="preserve"><value>ルーラーの向きを変更</value></data>
+  <data name="LabelCycleEffect" xml:space="preserve"><value>表示効果を変更</value></data>
+  <data name="LabelToggleOnOff" xml:space="preserve"><value>ルーラーを表示または非表示</value></data>
+  <data name="LabelThicker" xml:space="preserve"><value>太さを増やす</value></data>
+  <data name="LabelThinner" xml:space="preserve"><value>太さを減らす</value></data>
+  <data name="LabelMoreOpaque" xml:space="preserve"><value>不透明度またはぼかしを増やす</value></data>
+  <data name="LabelLessOpaque" xml:space="preserve"><value>不透明度またはぼかしを減らす</value></data>
+  <data name="LabelToggleGuide" xml:space="preserve"><value>ショートカット ガイドを表示</value></data>
+  <data name="LabelQuit" xml:space="preserve"><value>linerule を終了</value></data>
+
+  <data name="DescriptionDefault" xml:space="preserve"><value>linerule の起動中に使えるグローバル ショートカットです。</value></data>
+  <data name="DescriptionToggleOnOff" xml:space="preserve"><value>ルーラーのメイン ショートカットです。</value></data>
+  <data name="DescriptionToggleGuide" xml:space="preserve"><value>アプリ内の完全な操作ガイドを表示します。</value></data>
+  <data name="DescriptionQuit" xml:space="preserve"><value>常駐アプリを終了します。</value></data>
+
+  <data name="ModifierRequired" xml:space="preserve"><value>Ctrl、Alt、Shift、Windows のいずれかを含めてください。</value></data>
+  <data name="UnsupportedKey" xml:space="preserve"><value>英字、矢印、角かっこ、マイナス、イコールのいずれかを使ってください。</value></data>
+  <data name="InvalidChord" xml:space="preserve"><value>修飾キーと対応するキーを1つ入力してください。</value></data>
+  <data name="ChooseKey" xml:space="preserve"><value>英字、矢印、角かっこ、マイナス、イコールのいずれかを選んでください。</value></data>
+  <data name="RecordingPrompt" xml:space="preserve"><value>ショートカットを入力…</value></data>
+  <data name="ShortcutAccessibleName" xml:space="preserve"><value>{0}: {1}</value></data>
+  <data name="DuplicateFormat" xml:space="preserve"><value>{0} にも割り当てられています。</value></data>
+
+  <data name="RegistrationFailedTitle" xml:space="preserve"><value>ショートカットを登録できませんでした</value></data>
+  <data name="ShortcutNotAcceptedTitle" xml:space="preserve"><value>このショートカットは使えません</value></data>
+  <data name="DefaultsRestoredTitle" xml:space="preserve"><value>既定値に戻しました</value></data>
+  <data name="DefaultsRestoredMessage" xml:space="preserve"><value>適用するには［保存］を選んでください。</value></data>
+  <data name="ResolveConflictsTitle" xml:space="preserve"><value>ショートカットの競合を解消してください</value></data>
+  <data name="ResolveConflictsMessage" xml:space="preserve"><value>各操作には修飾キーを含む一意のショートカットが必要です。</value></data>
+  <data name="SettingsSaveFailedTitle" xml:space="preserve"><value>設定を保存できませんでした</value></data>
+  <data name="RequestLoadFailedFormat" xml:space="preserve"><value>設定要求を読み込めませんでした: {0}</value></data>
+
+  <data name="RestoreDialogTitle" xml:space="preserve"><value>既定のショートカットに戻しますか？</value></data>
+  <data name="RestoreDialogContent" xml:space="preserve"><value>9件すべての割り当てが置き換えられます。</value></data>
+  <data name="RestoreDialogPrimary" xml:space="preserve"><value>戻す</value></data>
+  <data name="Cancel" xml:space="preserve"><value>キャンセル</value></data>
+</root>

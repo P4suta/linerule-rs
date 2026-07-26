@@ -130,6 +130,16 @@ impl Thickness {
         Ok(Self(value))
     }
 
+    pub(crate) const fn clamped(value: u16) -> Self {
+        if value == 0 {
+            Self::MIN
+        } else if value > Self::MAX.0 {
+            Self::MAX
+        } else {
+            Self(value)
+        }
+    }
+
     /// Inner value in `[1, 2048]`.
     #[must_use]
     pub const fn get(self) -> u16 {
@@ -159,6 +169,19 @@ impl BlurAmount {
 
     /// Default level — `to_std_dev` ≈ 9 px.
     pub const DEFAULT: Self = Self(111);
+
+    /// Construct from a raw level.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Blur`] when `value == 0`.
+    pub const fn try_new(value: u8) -> Result<Self, CoreError> {
+        if value == 0 {
+            return Err(CoreError::Blur {
+                given: value as i32,
+            });
+        }
+        Ok(Self(value))
+    }
 
     /// σ (logical px) at [`MIN`](Self::MIN).
     const SIGMA_MIN_PX: f32 = 2.0;
@@ -194,6 +217,7 @@ impl BlurAmount {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
@@ -223,6 +247,13 @@ mod tests {
     fn thickness_saturating_add_clamps() {
         assert_eq!(Thickness::DEFAULT.saturating_add(99_999), Thickness::MAX);
         assert_eq!(Thickness::DEFAULT.saturating_add(-99_999), Thickness::MIN);
+    }
+
+    #[test]
+    fn thickness_clamped_covers_both_bounds_and_the_valid_range() {
+        assert_eq!(Thickness::clamped(0), Thickness::MIN);
+        assert_eq!(Thickness::clamped(2049), Thickness::MAX);
+        assert_eq!(Thickness::clamped(100).get(), 100);
     }
 
     #[test]

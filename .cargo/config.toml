@@ -4,8 +4,8 @@ xtask = "run --quiet --package xtask --"
 [build]
 # Default target stays native; CI overrides for cross checks.
 
-# Linux native: use clang + mold linker. mold is 2-5x faster at linking than
-# the default ld. Set in Dockerfile and developer setup; binary is required.
+# Linux native: use clang + mold linker. CI installs mold explicitly; local
+# Linux users install the system linker while every versioned tool stays in mise.
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]

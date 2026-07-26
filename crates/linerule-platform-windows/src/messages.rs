@@ -10,12 +10,9 @@ pub const HTTRANSPARENT: i32 = -1;
 /// `WM_APP` band message: pacer thread notifies the UI thread of a vsync tick.
 pub const WM_APP_TICK: u32 = 0x8001;
 
-/// Auto-quit message for the CI smoke test; wndproc maps it to `PostQuitMessage(0)`.
-pub const WM_APP_QUIT_TIMER: u32 = 0x8002;
-
 /// Posted from the `ForegroundHook` callback (which runs on the OS hook thread)
 /// so the UI thread runs `SetWindowPos(HWND_TOPMOST)` on a foreground change.
-pub const WM_APP_REASSERT_TOPMOST: u32 = 0x8003;
+pub const WM_APP_REASSERT_TOPMOST: u32 = 0x8002;
 
 #[cfg(test)]
 mod tests {
@@ -42,16 +39,6 @@ mod tests {
     }
 
     #[test]
-    fn wm_app_quit_timer_is_inside_wm_app_band() {
-        const WM_APP: u32 = 0x8000;
-        const WM_APP_END: u32 = 0xBFFF;
-        assert!(
-            (WM_APP..=WM_APP_END).contains(&WM_APP_QUIT_TIMER),
-            "WM_APP_QUIT_TIMER = {WM_APP_QUIT_TIMER:#x} outside [{WM_APP:#x}, {WM_APP_END:#x}]"
-        );
-    }
-
-    #[test]
     fn wm_app_reassert_topmost_is_inside_wm_app_band() {
         const WM_APP: u32 = 0x8000;
         const WM_APP_END: u32 = 0xBFFF;
@@ -63,8 +50,6 @@ mod tests {
 
     #[test]
     fn wm_app_messages_are_distinct() {
-        assert_ne!(WM_APP_TICK, WM_APP_QUIT_TIMER);
         assert_ne!(WM_APP_TICK, WM_APP_REASSERT_TOPMOST);
-        assert_ne!(WM_APP_QUIT_TIMER, WM_APP_REASSERT_TOPMOST);
     }
 }

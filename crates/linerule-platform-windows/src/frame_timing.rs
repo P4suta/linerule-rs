@@ -4,7 +4,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::VecDeque;
 use std::time::Duration;
 
 use linerule_core::HudTelemetry;
@@ -16,7 +15,9 @@ const WINDOW_CAPACITY: usize = 256;
 #[derive(Debug)]
 pub struct FrameTimingTracker {
     /// Fixed-window samples of per-tick elapsed time.
-    samples: VecDeque<Duration>,
+    samples: [Duration; WINDOW_CAPACITY],
+    sample_count: usize,
+    next_sample: usize,
     /// Monotonic count of over-budget ticks.
     frames_dropped: u64,
     /// Monotonic count of failed composition commits.
@@ -29,7 +30,9 @@ impl FrameTimingTracker {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            samples: VecDeque::new(),
+            samples: [Duration::ZERO; WINDOW_CAPACITY],
+            sample_count: 0,
+            next_sample: 0,
             frames_dropped: 0,
             commit_timeouts: 0,
             _phantom: (),
@@ -39,17 +42,15 @@ impl FrameTimingTracker {
     /// Append one tick's elapsed time; bump drop counter if over budget.
     /// Caller decides `over_budget`; this module does not know the budget.
     pub fn record_tick(&mut self, elapsed: Duration, over_budget: bool) {
-        if self.samples.len() >= WINDOW_CAPACITY {
-            self.samples.pop_front();
-        }
-        self.samples.push_back(elapsed);
+        self.samples[self.next_sample] = elapsed;
+        self.next_sample = (self.next_sample + 1) % WINDOW_CAPACITY;
+        self.sample_count = self.sample_count.saturating_add(1).min(WINDOW_CAPACITY);
         if over_budget {
             self.frames_dropped = self.frames_dropped.saturating_add(1);
         }
     }
 
-    /// Record one composition commit failure/timeout. No callers yet: WinRT
-    /// auto-commits via the DispatcherQueue, so telemetry stays 0.
+    /// Record one composition commit failure or timeout.
     pub fn record_timeout(&mut self) {
         self.commit_timeouts = self.commit_timeouts.saturating_add(1);
     }
@@ -58,10 +59,16 @@ impl FrameTimingTracker {
     #[must_use]
     pub fn snapshot(&self) -> HudTelemetry {
         HudTelemetry {
-            tick_p99_ms: p99_ms(&self.samples),
+            tick_p99_ms: p99_ms(&self.samples, self.sample_count),
             frames_dropped: self.frames_dropped,
             commit_timeouts: self.commit_timeouts,
         }
+    }
+
+    /// Number of recent ticks contributing to the percentile window.
+    #[must_use]
+    pub fn sample_count(&self) -> usize {
+        self.sample_count
     }
 }
 
@@ -73,13 +80,14 @@ impl Default for FrameTimingTracker {
 
 /// 99th percentile of the window's samples in ms (f32); 0.0 if empty.
 /// Index is `((n - 1) * 99) / 100`.
-fn p99_ms(samples: &VecDeque<Duration>) -> f32 {
-    if samples.is_empty() {
+fn p99_ms(samples: &[Duration; WINDOW_CAPACITY], sample_count: usize) -> f32 {
+    if sample_count == 0 {
         return 0.0;
     }
-    let mut copy: Vec<Duration> = samples.iter().copied().collect();
-    copy.sort_unstable();
-    let n = copy.len();
+    let mut copy = [Duration::ZERO; WINDOW_CAPACITY];
+    copy[..sample_count].copy_from_slice(&samples[..sample_count]);
+    copy[..sample_count].sort_unstable();
+    let n = sample_count;
     let idx = ((n - 1) * 99) / 100;
     copy[idx].as_secs_f32() * 1000.0
 }
@@ -98,6 +106,7 @@ mod tests {
         let t = FrameTimingTracker::new();
         let s = t.snapshot();
         assert_eq!(s.tick_p99_ms, 0.0);
+        assert_eq!(t.sample_count(), 0);
         assert_eq!(s.frames_dropped, 0);
         assert_eq!(s.commit_timeouts, 0);
     }
@@ -107,6 +116,7 @@ mod tests {
         let mut t = FrameTimingTracker::new();
         t.record_tick(ms(7), false);
         assert!((t.snapshot().tick_p99_ms - 7.0).abs() < 0.001);
+        assert_eq!(t.sample_count(), 1);
     }
 
     #[test]

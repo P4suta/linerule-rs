@@ -15,7 +15,7 @@ pub fn smooth(linear: f32) -> f32 {
 
 /// CIE L\* curve (cube-root above toe, linear below) in `[0, 1]`; NaN/negatives map to `0`.
 #[must_use]
-pub fn l_star(linear: f32) -> f32 {
+pub(crate) fn l_star(linear: f32) -> f32 {
     const TOE: f32 = 0.008_856;
     const LINEAR_SLOPE: f32 = 9.032_962;
 
@@ -32,6 +32,7 @@ pub fn l_star(linear: f32) -> f32 {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

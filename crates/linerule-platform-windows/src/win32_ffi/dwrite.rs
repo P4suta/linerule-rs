@@ -8,7 +8,7 @@
     reason = "FFI boundary; DWrite/D2D COM APIs are all unsafe in the windows crate."
 )]
 
-use linerule_core::Rgba;
+use linerule_core::{HudFrame, Rgba};
 use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::{
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ROUNDED_RECT, ID2D1DeviceContext, ID2D1SolidColorBrush,
@@ -78,59 +78,41 @@ pub fn create_text_format(
     Ok(format)
 }
 
-/// One row's draw instruction for `draw_hud_rows` (borrows for one HUD frame).
-pub struct HudDrawRow<'a> {
-    /// Surface-local draw rect (logical px, from the surface origin).
-    pub rect: D2D_RECT_F,
-    /// Text to draw.
-    pub text: &'a str,
-    /// Text format to apply (from `create_text_format` for HudFontKey + font_size).
-    pub format: &'a IDWriteTextFormat,
-    /// Text color (straight alpha).
-    pub color: Rgba,
-}
-
-/// One non-text fill rect (divider etc.) draw instruction.
-pub struct HudDrawRule {
-    /// Surface-local fill rect (logical px, from the surface origin).
-    pub rect: D2D_RECT_F,
-    /// Fill color (straight alpha).
-    pub color: Rgba,
-}
-
 /// Draws transparent clear + rounded panel fill + rule fills + text rows on a
 /// `dc` whose drawing session is already open (caller owns begin/end), applying
 /// surface tile `offset` via `SetTransform`.
 ///
-/// Background is a rounded fill of `panel` (not a full-surface `Clear`) so the
-/// area outside the corners stays transparent. `opacity` (0.0–1.0) bakes into
-/// the alpha of background, rules, and every row color.
+/// The caller-owned format and UTF-16 buffers are reused across frames, so a
+/// steady-size HUD refresh does not allocate temporary vectors.
 ///
 /// # Errors
-/// When brush creation fails.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one draw call per HUD frame; the args mirror the HudFrame fields \
-              and a grouping struct would just restate them"
-)]
-pub fn draw_hud_rows(
+/// When the format count does not match the rows or brush creation fails.
+pub fn draw_hud_frame(
     dc: &ID2D1DeviceContext,
     offset: windows::Win32::Foundation::POINT,
-    background: Rgba,
-    panel: D2D_RECT_F,
-    corner_radius: f32,
-    opacity: f32,
-    rules: &[HudDrawRule],
-    rows: &[HudDrawRow<'_>],
+    frame: &HudFrame,
+    formats: &[IDWriteTextFormat],
+    scratch_utf16: &mut Vec<u16>,
 ) -> Result<()> {
-    let opacity = opacity.clamp(0.0, 1.0);
+    if formats.len() != frame.rows.len() {
+        return Err(PlatformError::Invariant {
+            operation: "draw_hud_frame format/row length mismatch",
+        });
+    }
+    let opacity = frame.opacity.clamp(0.0, 1.0);
     let transparent = D2D1_COLOR_F {
         r: 0.0,
         g: 0.0,
         b: 0.0,
         a: 0.0,
     };
-    let bg = color_to_premultiplied_f(scale_alpha(background, opacity));
+    let background = color_to_premultiplied_f(scale_alpha(frame.background, opacity));
+    let panel = D2D_RECT_F {
+        left: 0.0,
+        top: 0.0,
+        right: frame.panel_width,
+        bottom: frame.panel_height,
+    };
     // SAFETY: caller passes dc with its drawing session already open.
     unsafe {
         #[allow(
@@ -147,22 +129,22 @@ pub fn draw_hud_rows(
         });
         dc.Clear(Some(&transparent));
 
-        let bg_brush: ID2D1SolidColorBrush =
-            dc.CreateSolidColorBrush(&bg, None)
-                .map_err(|e| PlatformError::BadHr {
-                    operation: "ID2D1DeviceContext::CreateSolidColorBrush (HUD bg)",
-                    hr: e.code().0,
-                })?;
+        let background_brush: ID2D1SolidColorBrush = dc
+            .CreateSolidColorBrush(&background, None)
+            .map_err(|e| PlatformError::BadHr {
+                operation: "ID2D1DeviceContext::CreateSolidColorBrush (HUD bg)",
+                hr: e.code().0,
+            })?;
         dc.FillRoundedRectangle(
             &D2D1_ROUNDED_RECT {
                 rect: panel,
-                radiusX: corner_radius,
-                radiusY: corner_radius,
+                radiusX: frame.corner_radius,
+                radiusY: frame.corner_radius,
             },
-            &bg_brush,
+            &background_brush,
         );
 
-        for rule in rules {
+        for rule in &frame.rules {
             let rule_color = color_to_premultiplied_f(scale_alpha(rule.color, opacity));
             let brush: ID2D1SolidColorBrush =
                 dc.CreateSolidColorBrush(&rule_color, None)
@@ -170,10 +152,20 @@ pub fn draw_hud_rows(
                         operation: "ID2D1DeviceContext::CreateSolidColorBrush (HUD rule)",
                         hr: e.code().0,
                     })?;
-            dc.FillRectangle(&rule.rect, &brush);
+            let left = rule.left - frame.panel_left;
+            let top = rule.top - frame.panel_top;
+            dc.FillRectangle(
+                &D2D_RECT_F {
+                    left,
+                    top,
+                    right: left + rule.width,
+                    bottom: top + rule.height,
+                },
+                &brush,
+            );
         }
 
-        for row in rows {
+        for (row, format) in frame.rows.iter().zip(formats) {
             let brush_color = color_to_premultiplied_f(scale_alpha(row.color, opacity));
             let brush: ID2D1SolidColorBrush = dc
                 .CreateSolidColorBrush(&brush_color, None)
@@ -181,11 +173,20 @@ pub fn draw_hud_rows(
                     operation: "ID2D1DeviceContext::CreateSolidColorBrush (HUD)",
                     hr: e.code().0,
                 })?;
-            let wide: Vec<u16> = row.text.encode_utf16().collect();
+            scratch_utf16.clear();
+            scratch_utf16.extend(row.text.encode_utf16());
+            let left = row.origin_x - frame.panel_left;
+            let top = row.origin_y - frame.panel_top;
+            let rect = D2D_RECT_F {
+                left,
+                top,
+                right: frame.panel_width,
+                bottom: top + row.font_size * 1.5,
+            };
             dc.DrawText(
-                &wide,
-                row.format,
-                &row.rect,
+                scratch_utf16,
+                format,
+                &rect,
                 &brush,
                 D2D1_DRAW_TEXT_OPTIONS_NONE,
                 DWRITE_MEASURING_MODE_NATURAL,

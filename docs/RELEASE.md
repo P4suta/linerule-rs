@@ -1,85 +1,64 @@
-# リリース運用 — release-please を GitHub App で駆動
+# Release
 
-`release-please.yml` は Conventional Commits からリリースPR・タグ・CHANGELOG を生成する。
-認証は **GitHub App のインストールトークン**で行う（`GITHUB_TOKEN` ではない）。
+This is the only release runbook. Stable releases target Windows 11 x64 and
+ARM64 and are blocked unless every automated gate and hardware evidence item
+passes.
 
-## なぜ GitHub App か（`GITHUB_TOKEN` を使わない理由）
+## Required assets
 
-`GITHUB_TOKEN` が作成・push したイベントは**他のワークフローを連鎖起動しない**（GitHub の無限ループ
-防止仕様）。この repo では次の2点で致命的になる:
+```text
+linerule.msixbundle
+linerule.appinstaller
+linerule-portable-x64.zip
+linerule-portable-arm64.zip
+linerule-sbom.cdx.json
+linerule-source.spdx
+SHA256SUMS.txt
+```
 
-- **リリースPRに CI が走らない** → `ci-required` ルールセット（ADR-0019）の必須チェックが永久に
-  埋まらず**マージ不能**。
-- **タグ push が `release-assets.yml` を起動しない** → 署名付きアセットが publish されない。
+Nightly contains unsigned x64/ARM64 Portable files and a bundle with the separate
+`P4suta.linerule.Nightly` identity. Stable App Installer assets use
+`releases/latest/download/...` names.
 
-App のインストールトークンは独立した actor なので、その PR は CI を起動し、その tag は release-assets
-を起動する。旧構成は `gh workflow run` の明示ディスパッチで後者だけ回避していたが、前者（CI）は
-解決できなかった。App 化で両方解消する。
+## One-time secrets
 
-## セットアップ（一度だけ）
+The `release-please` environment contains
+`RELEASE_PLEASE_CLIENT_ID` and `RELEASE_PLEASE_APP_PRIVATE_KEY`.
+The approval-protected `release` environment contains the SSL.com eSigner
+values `ES_USERNAME`, `ES_PASSWORD`, `CREDENTIAL_ID`, and `ES_TOTP_SECRET`.
 
-### A. GitHub App を作成
+The GitHub App needs Contents and Pull requests read/write access. Its token is
+required so release PR and tag events trigger downstream workflows.
 
-1. <https://github.com/settings/apps> → **New GitHub App**。
-   - **Name**: 例 `linerule-release-bot`（任意・グローバル一意）
-   - **Homepage URL**: repo URL で可
-   - **Webhook**: Active のチェックを**外す**
-   - **Repository permissions**:
-     - **Contents**: Read and write（bump コミット・タグ push）
-     - **Pull requests**: Read and write（リリースPR の作成/更新・`autorelease` ラベル張替）
-     - 他は No access（Metadata: Read は自動）
-   - **Where can this app be installed**: Only on this account
-2. 作成後の画面で **Client ID** を控える（App ID ではなく Client ID を使う）。
-3. **Private keys** → **Generate a private key** → ダウンロードした `.pem` を保管。
+## Cut a release
 
-### B. App を repo にインストール
+1. Merge the release-please PR after `ci-required` succeeds.
+2. On the resulting tag commit, dispatch `hardware-validation.yml` from an
+   interactive self-hosted Windows 11 x64 and ARM64 runner pair labeled
+   `linerule-hardware`. Both refuse fewer than two monitors or identical
+   effective DPI values.
+3. Run or rerun `release-assets.yml` for the tag, then review its native ARM64,
+   UIA, install/update, GPU/WARP, mixed-DPI, and High Contrast evidence.
+4. Approve the `release` environment.
+5. The workflow requires both `ci-required` and `hardware-required`, runs the
+   mise-pinned release check, signs each PE, builds and
+   signs the MSIX bundle, verifies both signatures, generates SBOMs and
+   checksums, uploads everything to a draft, adds provenance, and only then
+   publishes the immutable release.
 
-4. App 設定の **Install App** → 自アカウントにインストール → **Only select repositories** で
-   `linerule-rs` を選択。
+Publishing without valid PE and bundle signatures is forbidden. To test cloud
+signing, dispatch the workflow with `tag=main` and `publish=false`; do not create
+throwaway immutable tags.
 
-### C. シークレットを登録
+## Verify an asset
 
-5. **`release-please` 環境**に2つ登録する（repo レベルではなく environment スコープ。
-   `.pem` は中身全体を貼り付け）:
+```powershell
+Get-AuthenticodeSignature .\linerule.exe
+Get-AuthenticodeSignature .\linerule.msixbundle
+Get-FileHash -Algorithm SHA256 .\linerule.msixbundle
+mise exec aqua:cli/cli -- gh attestation verify .\linerule.msixbundle --repo P4suta/linerule-rs
+```
 
-   ```bash
-   gh secret set RELEASE_PLEASE_CLIENT_ID --env release-please --repo P4suta/linerule-rs         # 値: Client ID（Iv1.xxxx 形式）
-   gh secret set RELEASE_PLEASE_APP_PRIVATE_KEY --env release-please --repo P4suta/linerule-rs < path/to/app.private-key.pem
-   ```
-
-   | Secret 名 | 値 |
-   |---|---|
-   | `RELEASE_PLEASE_CLIENT_ID` | GitHub App の Client ID（`create-github-app-token` は app-id ではなく client-id で認証）|
-   | `RELEASE_PLEASE_APP_PRIVATE_KEY` | 生成した秘密鍵（`.pem` 全体、BEGIN/END 行含む）|
-
-   - `release-please` 環境には**必須レビュアーを付けない**。署名用の `release` 環境
-     （承認ゲート付き）とは分離する。付けると release-please が毎 push で承認待ちになる。
-   - environment スコープの secret は `release-please.yml` の job に `environment:
-     release-please` 宣言があって初めて読める（両者はセット）。
-   - 過去に repo レベルへ同名 secret を登録済みなら**削除する**
-     （`gh secret delete RELEASE_PLEASE_CLIENT_ID --repo P4suta/linerule-rs` 等）。旧
-     `RELEASE_PLEASE_APP_ID` を登録済みなら不要になるので削除してよい。
-
-## リリースの流れ（セットアップ後）
-
-1. `main` に `feat:`/`fix:` 等がマージされる → release-please が **リリースPR**（version bump +
-   CHANGELOG）を開く/更新する。App 作成なので**この PR で CI が走る**。同 run で
-   `Cargo.lock` を新バージョンに同期するコミット（Contents API 経由の署名付き）も PR に載る。
-2. リリースPR をマージ → 同 run で `autorelease` ラベルをリコンサイルし、`vX.Y.Z` タグを **App
-   トークンで push** → タグが `release-assets.yml` を起動。
-3. release-assets が `release` 環境の**承認待ち**で停止 → 承認 → 署名付き EXE + SBOM +
-   SHA256SUMS + attestation で **publish**（[SIGNING.md](SIGNING.md) / [SUPPLY_CHAIN.md](SUPPLY_CHAIN.md)）。
-
-## 補足
-
-- `skip-github-release: true`（`release-please-config.json`）は immutable releases（ADR-0014）対応の
-  draft→publish フローを release-assets 側に任せるため。副作用でリリースPRの `autorelease: pending`
-  ラベルが `tagged` に進まないので、`release-please.yml` の「reconcile autorelease label」ステップが
-  毎 run で張り替えて queue 詰まりを防ぐ。
-- `release-type: simple` は `Cargo.toml` の version しかバンプせず `Cargo.lock` を触らないため、
-  リリースPR ブランチ上で `cargo update --workspace` を実行して lock のメンバー版を同期する。
-  `require-signed-commits` ルールセットが bot の未署名コミットを弾くので、`git push` ではなく
-  **Contents API（`gh api PUT`）** でコミットする（API 経由は GitHub が署名する）。これが無いと
-  リリースPR の `--locked` CI と release-assets ビルドが「lock file out of date」で落ちる。
-- 手動で再評価したいときは `gh workflow run release-please.yml`（`workflow_dispatch`）。
-- App トークンは run ごとに発行・失効する短命トークン。PAT のような長期保管トークンは使わない。
+Both signature statuses must be `Valid`, checksums must match
+`SHA256SUMS.txt`, and the attestation must resolve to the expected tag and
+workflow.

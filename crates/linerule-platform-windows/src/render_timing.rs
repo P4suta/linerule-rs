@@ -10,9 +10,12 @@ use crate::win32_ffi;
 /// OS reports 0/1 (remote desktop / generic display driver).
 #[must_use]
 pub fn refresh_rate_hz() -> u32 {
-    win32_ffi::enum_display_settings_current()
-        .map(|dm| dm.dmDisplayFrequency)
-        .ok()
-        .filter(|&hz| hz > 1)
-        .unwrap_or(60)
+    match win32_ffi::enum_display_settings_current() {
+        Ok(mode) if mode.dmDisplayFrequency > 1 => mode.dmDisplayFrequency,
+        Ok(_) => 60,
+        Err(error) => {
+            tracing::warn!(%error, "display refresh query failed; using 60 Hz");
+            60
+        },
+    }
 }

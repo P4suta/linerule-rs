@@ -7,7 +7,7 @@
 )]
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use linerule_core::{Mode, OverlayConfig, OverlaySample, Point, ScreenRect, frame};
+use linerule_core::{Mode, OverlayConfig, OverlaySample, Point, ScreenRect, Thickness, frame};
 use std::hint::black_box;
 
 const fn monitor() -> ScreenRect<linerule_core::Logical> {
@@ -57,7 +57,7 @@ fn bench_frame(c: &mut Criterion) {
     group.bench_function("horizontal_mid_fade", |b| {
         let mid = OverlaySample {
             master: 128,
-            thickness_px: 64,
+            thickness: Thickness::try_new(64).map_or(Thickness::DEFAULT, |value| value),
             mask_alpha: 0x90,
             style_mix: 128,
         };

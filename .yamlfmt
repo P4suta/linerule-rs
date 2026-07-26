@@ -1,6 +1,8 @@
 # yamlfmt: YAML formatter configuration.
 # https://github.com/google/yamlfmt/blob/main/docs/config-file.md
 
+line_ending: lf
+
 formatter:
   type: basic
   indent: 2
@@ -8,17 +10,5 @@ formatter:
   scan_folded_as_literal: true
   trim_trailing_whitespace: true
   eof_newline: true
-  line_ending: lf
   pad_line_comments: 1
   max_line_length: 0
-
-include:
-  - "**/*.yml"
-  - "**/*.yaml"
-
-exclude:
-  - "target/**"
-  - "artifacts/**"
-  - "node_modules/**"
-  - ".xwin-cache/**"
-  - ".sccache/**"

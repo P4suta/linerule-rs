@@ -30,7 +30,7 @@ use windows_numerics::Vector2;
 use std::cell::OnceCell;
 
 use crate::error::{PlatformError, Result};
-use crate::win32_ffi::graphics::{self, D2dStack};
+use crate::win32_ffi::graphics::{self, D2dStack, GraphicsBackend};
 
 thread_local! {
     /// UI-thread controller driving WinRT Composition commits. Only one per
@@ -60,8 +60,9 @@ fn ensure_dispatcher_queue() -> Result<()> {
                 hr: e.code().0,
             }
         })?;
-        let _ = cell.set(controller);
-        Ok(())
+        cell.set(controller).map_err(|_| PlatformError::Invariant {
+            operation: "dispatcher queue initialized twice",
+        })
     })
 }
 
@@ -71,11 +72,9 @@ pub struct WinrtPipeline {
     /// WinRT compositor; creates visuals / brushes / surfaces.
     pub compositor: Compositor,
     /// Desktop window target bound to the overlay HWND. Detached on Drop.
-    #[allow(dead_code, reason = "owner tying the target lifetime to the pipeline")]
-    target: DesktopWindowTarget,
+    _target: DesktopWindowTarget,
     /// Root container visual; direct children are only overlay_root and hud_root.
-    #[allow(dead_code, reason = "owner tying the root lifetime to the pipeline")]
-    root: ContainerVisual,
+    _root: ContainerVisual,
     /// Intermediate visual for the overlay slit (dim + indicator).
     pub overlay_root: ContainerVisual,
     /// Intermediate visual for the HUD panel; in front of overlay_root.
@@ -83,18 +82,17 @@ pub struct WinrtPipeline {
     /// Graphics device that creates the HUD's D2D drawing surface.
     pub graphics_device: CompositionGraphicsDevice,
     /// Shared D2D stack; kept alive because `graphics_device` etc. reference it.
-    #[allow(
-        dead_code,
-        reason = "keeps the D2D device set alive for the pipeline lifetime"
-    )]
-    stack: D2dStack,
+    _stack: D2dStack,
 }
 
 /// Attaches the WinRT composition tree to the overlay HWND.
 ///
 /// # Errors
 /// When DispatcherQueue / Compositor / interop / D2D stack creation fails.
-pub fn create_winrt_pipeline(hwnd: HWND) -> Result<WinrtPipeline> {
+pub fn create_winrt_pipeline(
+    hwnd: HWND,
+    graphics_backend: GraphicsBackend,
+) -> Result<WinrtPipeline> {
     // DispatcherQueue, established once on the UI thread (drained by GetMessage).
     ensure_dispatcher_queue()?;
 
@@ -153,7 +151,7 @@ pub fn create_winrt_pipeline(hwnd: HWND) -> Result<WinrtPipeline> {
         })?;
 
     // HUD graphics device (bridges the D2D device to WinRT).
-    let stack = graphics::create_d2d_stack()?;
+    let stack = graphics::create_d2d_stack(graphics_backend)?;
     let comp_interop: ICompositorInterop = compositor.cast().map_err(|e| PlatformError::BadHr {
         operation: "Compositor::cast<ICompositorInterop>",
         hr: e.code().0,
@@ -169,12 +167,12 @@ pub fn create_winrt_pipeline(hwnd: HWND) -> Result<WinrtPipeline> {
 
     Ok(WinrtPipeline {
         compositor,
-        target,
-        root,
+        _target: target,
+        _root: root,
         overlay_root,
         hud_root,
         graphics_device,
-        stack,
+        _stack: stack,
     })
 }
 

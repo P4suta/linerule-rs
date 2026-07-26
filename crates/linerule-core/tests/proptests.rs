@@ -8,11 +8,10 @@
     reason = "integration-test file; constrained generators make None unreachable"
 )]
 
-use linerule_core::input::chord::{ChordSpec, Direction, KeyCode, Letter, Modifiers};
-use linerule_core::input::win32_vk::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, chord_to_win32};
 use linerule_core::{
-    ActiveMode, Mode, Opacity, OverlayAction, RejectReason, State, Thickness, input::chord,
-    state::reduce,
+    ActiveMode, ChordSpec, Direction, KeyCode, Letter, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN,
+    Mode, Modifiers, Opacity, OverlayAction, RejectReason, State, Thickness, chord_to_win32,
+    parse_chord, reduce,
 };
 use proptest::prelude::*;
 
@@ -43,23 +42,23 @@ proptest! {
     #[test]
     fn cycle_mode_has_period_two(mode in any_mode()) {
         let s = State { mode, ..State::DEFAULT };
-        let (a, _) = reduce::apply(s, OverlayAction::CycleMode);
-        let (b, _) = reduce::apply(a, OverlayAction::CycleMode);
+        let (a, _) = reduce(s, OverlayAction::CycleMode);
+        let (b, _) = reduce(a, OverlayAction::CycleMode);
         prop_assert_eq!(b.mode, mode);
     }
 
     /// `ToggleOnOff` twice is identity on the full state.
     #[test]
     fn toggle_on_off_twice_is_identity(state in any_state()) {
-        let (a, _) = reduce::apply(state, OverlayAction::ToggleOnOff);
-        let (b, _) = reduce::apply(a, OverlayAction::ToggleOnOff);
+        let (a, _) = reduce(state, OverlayAction::ToggleOnOff);
+        let (b, _) = reduce(a, OverlayAction::ToggleOnOff);
         prop_assert_eq!(b, state);
     }
 
     /// Every action preserves the active-mode/`last_active` invariant.
     #[test]
     fn invariant_preserved_by_every_action(state in any_state(), action in any_action()) {
-        let (next, _) = reduce::apply(state, action);
+        let (next, _) = reduce(state, action);
         if let Some(active) = next.mode.active() {
             prop_assert_eq!(next.last_active, active);
         }
@@ -69,7 +68,7 @@ proptest! {
     #[test]
     fn bump_thickness_is_rejected_in_off_mode(delta in -1024_i32..1024) {
         let s = State { mode: Mode::Off, ..State::DEFAULT };
-        let (next, d) = reduce::apply(s, OverlayAction::BumpThickness(delta));
+        let (next, d) = reduce(s, OverlayAction::BumpThickness(delta));
         prop_assert_eq!(next, s);
         prop_assert!(!d.is_any());
         prop_assert_eq!(d.rejected, Some(RejectReason::AdjustWhileOff));
@@ -89,7 +88,7 @@ proptest! {
             2 => OverlayAction::CycleEffect,
             _ => OverlayAction::CycleMode,
         };
-        let (next, d) = reduce::apply(s, action);
+        let (next, d) = reduce(s, action);
         prop_assert_eq!(next, s);
         prop_assert_eq!(d.rejected, Some(RejectReason::AdjustWhileOff));
     }
@@ -100,14 +99,14 @@ proptest! {
         if matches!(state.mode, Mode::Off) {
             return Ok(());
         }
-        let (_, d) = reduce::apply(state, action);
+        let (_, d) = reduce(state, action);
         prop_assert_eq!(d.rejected, None);
     }
 
     /// A rejection never changes state.
     #[test]
     fn rejected_implies_state_unchanged(state in any_state(), action in any_action()) {
-        let (next, d) = reduce::apply(state, action);
+        let (next, d) = reduce(state, action);
         if d.rejected.is_some() {
             prop_assert_eq!(next, state, "rejected action must leave state untouched");
             prop_assert!(!d.is_any(), "rejection and state delta are mutually exclusive");
@@ -120,7 +119,7 @@ proptest! {
         if matches!(state.mode, Mode::Off) {
             return Ok(());
         }
-        let (next, _) = reduce::apply(state, OverlayAction::BumpThickness(delta));
+        let (next, _) = reduce(state, OverlayAction::BumpThickness(delta));
         prop_assert_eq!(next.mode, state.mode);
         prop_assert_eq!(next.last_active, state.last_active);
         prop_assert_eq!(next.config.opacity, state.config.opacity);
@@ -132,10 +131,10 @@ proptest! {
     fn flip_then_toggle_restores_the_flipped_axis(start in any_active_mode()) {
         let s = State::with_mode(Mode::from(start));
         // Flip, toggle off, toggle on: restored mode is the flipped axis.
-        let (flipped, _) = reduce::apply(s, OverlayAction::CycleMode);
-        let (off, _) = reduce::apply(flipped, OverlayAction::ToggleOnOff);
+        let (flipped, _) = reduce(s, OverlayAction::CycleMode);
+        let (off, _) = reduce(flipped, OverlayAction::ToggleOnOff);
         prop_assert_eq!(off.mode, Mode::Off);
-        let (restored, _) = reduce::apply(off, OverlayAction::ToggleOnOff);
+        let (restored, _) = reduce(off, OverlayAction::ToggleOnOff);
         prop_assert_eq!(restored.mode, flipped.mode);
     }
 
@@ -205,7 +204,7 @@ proptest! {
         x in 0_i32..1920,
         y in 100_i32..980,
     ) {
-        use linerule_core::{frame, render::Geometry, OverlayConfig, OverlaySample, ScreenRect, Point};
+        use linerule_core::{frame, Geometry, OverlayConfig, OverlaySample, ScreenRect, Point};
         let monitor = ScreenRect::new(Point::new(0, 0), 1920, 1080);
         let config = OverlayConfig::DEFAULT;
         let f = frame(
@@ -215,7 +214,7 @@ proptest! {
             monitor,
             OverlaySample::settled(config),
         );
-        let any_full_width = f.layers().iter().any(|l| match l.geometry {
+        let any_full_width = f.layers().any(|l| match l.geometry {
             Geometry::Rect(r) => r.left() == 0 && r.right() == 1920,
         });
         prop_assert!(any_full_width, "horizontal mode at ({x},{y}) lacks a full-width band");
@@ -227,7 +226,7 @@ proptest! {
         state in any_state(),
         action in any_action(),
     ) {
-        let (next, d) = reduce::apply(state, action);
+        let (next, d) = reduce(state, action);
         if !d.is_any() {
             prop_assert_eq!(next, state, "delta said nothing changed but state did");
         }
@@ -278,9 +277,9 @@ fn chord_parser_round_trips_on_known_chords() {
         "Ctrl+Shift+A",
     ];
     for input in cases {
-        let parsed = chord::parse(input).expect(input);
+        let parsed = parse_chord(input).expect(input);
         let printed = parsed.display();
-        let reparsed = chord::parse(&printed).expect(&printed);
+        let reparsed = parse_chord(&printed).expect(&printed);
         assert_eq!(parsed, reparsed, "round-trip failed for {input}");
     }
 }

@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: linerule-rs contributors <https://github.com/P4suta/linerule-rs>
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+self-hosted-runner:
+  labels:
+    - linerule-hardware

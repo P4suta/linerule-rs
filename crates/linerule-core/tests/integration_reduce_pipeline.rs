@@ -1,14 +1,14 @@
 //! Integration: reducer + frame builder composed across multi-step action sequences.
 
 use linerule_core::{
-    Mode, OverlayAction, OverlaySample, Point, ScreenRect, State, SurroundEffect, frame,
-    state::reduce,
+    Command, Engine, Mode, OverlayAction, OverlaySample, Point, Preferences, ScreenRect, State,
+    SurroundEffect, TapStepConfig, frame, reduce,
 };
 
 fn run(actions: &[OverlayAction]) -> State {
     let mut s = State::DEFAULT;
     for &a in actions {
-        let (next, _) = reduce::apply(s, a);
+        let (next, _) = reduce(s, a);
         s = next;
     }
     s
@@ -95,8 +95,8 @@ fn bump_thickness_accumulates_with_repeated_application() {
         mode: Mode::Horizontal,
         ..State::DEFAULT
     };
-    let (after_one, _) = reduce::apply(start, OverlayAction::BumpThickness(8));
-    let (after_two, _) = reduce::apply(after_one, OverlayAction::BumpThickness(8));
+    let (after_one, _) = reduce(start, OverlayAction::BumpThickness(8));
+    let (after_two, _) = reduce(after_one, OverlayAction::BumpThickness(8));
     assert!(
         after_two.config.thickness.get() > after_one.config.thickness.get(),
         "second bump should keep growing (or saturate); got {} ≤ {}",
@@ -129,18 +129,18 @@ fn cycle_effect_walks_surround_then_returns_when_mode_is_active() {
         ..State::DEFAULT
     };
     assert_eq!(start.config.effect, SurroundEffect::DimBlack);
-    let (after_one, _) = reduce::apply(start, OverlayAction::CycleEffect);
+    let (after_one, _) = reduce(start, OverlayAction::CycleEffect);
     assert_eq!(after_one.config.effect, SurroundEffect::WhiteWash);
-    let (after_two, _) = reduce::apply(after_one, OverlayAction::CycleEffect);
+    let (after_two, _) = reduce(after_one, OverlayAction::CycleEffect);
     assert_eq!(after_two.config.effect, SurroundEffect::Blur);
-    let (after_three, _) = reduce::apply(after_two, OverlayAction::CycleEffect);
+    let (after_three, _) = reduce(after_two, OverlayAction::CycleEffect);
     assert_eq!(after_three.config.effect, SurroundEffect::DimBlack);
 }
 
 #[test]
 fn cycle_effect_is_inert_in_off_mode() {
     let before = State::DEFAULT; // mode Off
-    let (after, delta) = reduce::apply(before, OverlayAction::CycleEffect);
+    let (after, delta) = reduce(before, OverlayAction::CycleEffect);
     assert_eq!(before, after);
     assert!(!delta.is_any());
 }
@@ -149,7 +149,18 @@ fn cycle_effect_is_inert_in_off_mode() {
 fn quit_action_is_observable_via_state_unchanged() {
     // Quit is a one-shot signal emitted by the tick pipeline; reducer stays pure.
     let before = State::DEFAULT;
-    let (after, delta) = reduce::apply(before, OverlayAction::Quit);
+    let (after, delta) = reduce(before, OverlayAction::Quit);
     assert_eq!(before, after);
     assert!(!delta.is_any());
+}
+
+#[test]
+fn engine_boundary_starts_off_and_applies_user_commands() {
+    let preferences = Preferences::default();
+    let mut engine = Engine::from_preferences(&preferences);
+    assert_eq!(engine.state().mode, Mode::Off);
+
+    let delta = engine.apply(Command::ToggleOnOff, TapStepConfig::DEFAULT);
+    assert_eq!(delta.mode, Some(Mode::Horizontal));
+    assert_eq!(engine.state().mode, Mode::Horizontal);
 }

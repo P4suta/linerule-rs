@@ -1,37 +1,63 @@
-# Native (Docker-less) dev toolchain. Mirrors the Dockerfile's tools for hosts
-# without Docker: `mise install`, then `just doctor-native` to verify.
-# The Rust toolchain itself is owned by rust-toolchain.toml.
+# Complete developer and release toolchain. Install exactly this environment
+# with `mise install`; local and CI commands consume this one manifest.
 
 [tools]
+# Compiler, standard components, and native Windows release targets.
+rust = { version = "1.97.1", profile = "minimal", components = [
+    "rustfmt",
+    "clippy",
+    "rust-src",
+    "llvm-tools",
+], targets = [
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+] }
+
 # Task runner, git hooks, and the format/lint tools the recipes shell out to.
-just = "latest"
-lefthook = "latest"
-taplo = "latest"
-biome = "latest"
-yamlfmt = "0.13.0"    # pinned to match the Dockerfile (format stability)
-actionlint = "latest"
-typos = "latest"
-jq = "latest"
+just = "1.54.0"
+lefthook = "2.1.9"
+taplo = "0.10.0"
+biome = "2.5.0"
+yamlfmt = "0.13.0"
+actionlint = "1.7.12"
+typos = "1.48.0"
+jq = "1.8.2"
+"pipx:reuse" = { version = "6.2.0", extras = "charset-normalizer" }
+dotnet = "10.0.302"
+"dotnet:CycloneDX" = "6.2.0"
+cyclonedx = "0.33.1"
+node = "24.18.0"
+python = "3.14.6"
+"npm:@microsoft/winappcli" = { version = "0.5.0", npm_args = "--ignore-scripts=true" }
+"aqua:cli/cli" = "2.95.0"
 
 # Lets the cargo: backend fetch prebuilt binaries instead of compiling.
-cargo-binstall = "latest"
+cargo-binstall = "1.20.0"
 
 # Cargo subcommands via the cargo: backend (no mise registry short names exist).
-"cargo:cargo-nextest" = "latest"
-"cargo:cargo-deny" = "latest"
-"cargo:cargo-audit" = "latest"
-"cargo:cargo-llvm-cov" = "latest"
-"cargo:cargo-machete" = "latest"
-"cargo:cargo-sort" = "latest"
-"cargo:cargo-rdme" = "latest"
-"cargo:cargo-modules" = "latest"
-"cargo:cargo-depgraph" = "latest"
+"cargo:cargo-nextest" = "0.9.140"
+"cargo:cargo-xwin" = "0.22.0"
+"cargo:cargo-deny" = "0.20.2"
+"cargo:cargo-audit" = "0.22.2"
+"cargo:cargo-llvm-cov" = "0.8.7"
+"cargo:cargo-machete" = "0.9.2"
+"cargo:cargo-mutants" = "27.0.0"
+"cargo:cargo-sort" = "2.1.4"
+"cargo:cargo-sbom" = "0.10.0"
 
 # Conventional-Commits linter for the lefthook commit-msg hook — the local guard
 # that keeps release-please's version + CHANGELOG derivation fed with well-formed
 # commits.
-"cargo:committed" = "1"
+"cargo:committed" = "1.1.11"
+
+[settings]
+lockfile = true
 
 [settings.cargo]
 # Use cargo-binstall (prebuilt binaries) for cargo: backend tools, not source builds.
 binstall = true
+
+[settings.npm]
+# The Microsoft CLI is low-volume enough to trip aube's popularity heuristic.
+# npm still enforces the registry integrity lock; lifecycle scripts stay disabled.
+package_manager = "npm"

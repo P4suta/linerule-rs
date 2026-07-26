@@ -9,19 +9,25 @@ use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use linerule_core::{
-    AnimConfig, OverlayAction, Point,
-    input::tick::{TickInput, TickWorld, step},
+    ActionBatch, AnimConfig, OverlayAction, Point, TickInput, TickWorld, tick as step,
 };
 use std::hint::black_box;
 
 const REFRESH: Duration = Duration::from_secs(2);
 const ANIM: AnimConfig = AnimConfig::DEFAULT;
 
-const fn make_input(actions: Vec<OverlayAction>) -> TickInput {
+fn make_input(actions: Vec<OverlayAction>) -> TickInput {
+    let mut drained_hotkeys = ActionBatch::EMPTY;
+    for action in actions {
+        assert!(
+            drained_hotkeys.try_push(action).is_ok(),
+            "benchmark input exceeds the fixed action batch"
+        );
+    }
     TickInput {
         now_ms: 1_000,
         polled_cursor: Some(Point::new(960, 540)),
-        drained_hotkeys: actions,
+        drained_hotkeys,
     }
 }
 

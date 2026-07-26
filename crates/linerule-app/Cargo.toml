@@ -14,11 +14,11 @@ name = "linerule"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = { workspace = true }
 clap = { workspace = true }
 linerule-core = { path = "../linerule-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
@@ -27,10 +27,7 @@ uuid = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 linerule-platform-windows = { path = "../linerule-platform-windows" }
-
-[target.'cfg(windows)'.dependencies.windows]
-workspace = true
-features = ["Win32_Foundation", "Win32_System_Console"]
+windows = { workspace = true, features = ["Storage", "Storage_Search"] }
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = { workspace = true }
@@ -40,7 +37,6 @@ assert_cmd = { workspace = true }
 insta = { workspace = true }
 predicates = { workspace = true }
 serde_json = { workspace = true }
-tempfile = { workspace = true }
 tracing-test = { workspace = true }
 
 [lints]

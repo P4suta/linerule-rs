@@ -7,20 +7,29 @@
 #![forbid(unsafe_code)]
 #![cfg(windows)]
 
-use linerule_core::{BlurAmount, Brush, Geometry, Logical, Rgba, ScreenRect};
+use linerule_core::{
+    BlurAmount, Brush, Geometry, Logical, Rgba, ScreenRect, is_device_lost_hresult,
+};
 use windows::UI::Color;
 use windows::UI::Composition::{CompositionColorBrush, SpriteVisual, VisualCollection};
 use windows_numerics::{Vector2, Vector3};
 
-use crate::error::{Result, map_hr};
-use crate::win32_ffi::blur_effect::{BlurConfig, create_backdrop_blur_brush};
+use crate::error::{PlatformError, Result, map_hr};
+use crate::win32_ffi::blur_effect::create_backdrop_blur_brush;
 use crate::win32_ffi::composition::{WinrtPipeline, create_winrt_pipeline};
+use crate::win32_ffi::graphics::GraphicsBackend;
 
 /// Pooled sprite contents. `Blur` keeps `amount` because the sigma is baked
 /// into the brush; a change forces a pool rebuild (kind-signature match).
 enum SpriteKind {
     Solid(CompositionColorBrush),
-    Blur { amount: BlurAmount },
+    Blur {
+        amount: BlurAmount,
+    },
+    FallbackDim {
+        brush: CompositionColorBrush,
+        amount: BlurAmount,
+    },
 }
 
 /// One layer's `SpriteVisual` and brush state; remembers the last rect/brush to
@@ -36,7 +45,9 @@ impl PooledSprite {
     /// This sprite's blur sigma, or `None` for `Solid`.
     const fn blur_amount(&self) -> Option<BlurAmount> {
         match self.kind {
-            SpriteKind::Blur { amount, .. } => Some(amount),
+            SpriteKind::Blur { amount, .. } | SpriteKind::FallbackDim { amount, .. } => {
+                Some(amount)
+            },
             SpriteKind::Solid(_) => None,
         }
     }
@@ -46,8 +57,6 @@ impl PooledSprite {
 pub struct WinrtCompositionRenderer {
     pipeline: WinrtPipeline,
     layers: Vec<PooledSprite>,
-    /// Blur post-process tuning, read from env once here (not per rebuild).
-    blur: BlurConfig,
 }
 
 impl WinrtCompositionRenderer {
@@ -55,12 +64,14 @@ impl WinrtCompositionRenderer {
     ///
     /// # Errors
     /// When building the WinRT pipeline fails.
-    pub fn new(hwnd: windows::Win32::Foundation::HWND) -> Result<Self> {
-        let pipeline = create_winrt_pipeline(hwnd)?;
+    pub fn new(
+        hwnd: windows::Win32::Foundation::HWND,
+        graphics_backend: GraphicsBackend,
+    ) -> Result<Self> {
+        let pipeline = create_winrt_pipeline(hwnd, graphics_backend)?;
         Ok(Self {
             pipeline,
             layers: Vec::new(),
-            blur: BlurConfig::from_env(),
         })
     }
 
@@ -71,6 +82,14 @@ impl WinrtCompositionRenderer {
         &self.pipeline
     }
 
+    /// Whether Backdrop Blur was unavailable and the renderer substituted Dim.
+    #[must_use]
+    pub fn uses_blur_fallback(&self) -> bool {
+        self.layers
+            .iter()
+            .any(|sprite| matches!(sprite.kind, SpriteKind::FallbackDim { .. }))
+    }
+
     /// Apply an `OverlayFrame` to the visual tree. WinRT auto-commits.
     ///
     /// # Errors
@@ -79,21 +98,16 @@ impl WinrtCompositionRenderer {
         // Rebuild on brush-kind signature change; per-slot swaps would break
         // z-order. Blur sigma is baked into the brush, so it is part of the
         // signature and forces a rebuild too.
-        let want_kinds: Vec<Option<BlurAmount>> = frame
-            .layers()
-            .iter()
-            .map(|l| match l.brush {
-                Brush::Blur { amount, .. } => Some(amount),
-                Brush::Solid(_) => None,
-            })
-            .collect();
-        let cur_kinds: Vec<Option<BlurAmount>> =
-            self.layers.iter().map(PooledSprite::blur_amount).collect();
-        if want_kinds != cur_kinds {
-            self.rebuild_pool(&want_kinds)?;
+        let signature_changed = frame.layer_count() != self.layers.len()
+            || frame
+                .layers()
+                .zip(&self.layers)
+                .any(|(layer, sprite)| desired_blur(layer.brush) != sprite.blur_amount());
+        if signature_changed {
+            self.rebuild_pool(frame)?;
         }
 
-        for (i, layer) in frame.layers().iter().enumerate() {
+        for (i, layer) in frame.layers().enumerate() {
             let Geometry::Rect(rect) = layer.geometry;
             let pooled = &mut self.layers[i];
             if pooled.last_brush != Some(layer.brush) {
@@ -122,18 +136,18 @@ impl WinrtCompositionRenderer {
             .map_err(map_hr("ContainerVisual::Children"))
     }
 
-    /// Tear down the pool and rebuild it to match `want_kinds` (`Some` = blur,
-    /// `None` = solid). Sprites are `InsertAtTop`ped in index order, so z-order
-    /// follows index order (last is frontmost).
-    fn rebuild_pool(&mut self, want_kinds: &[Option<BlurAmount>]) -> Result<()> {
+    /// Tear down the pool and rebuild it to match `frame`. Sprites are
+    /// `InsertAtTop`ped in index order, so z-order follows index order (last is
+    /// frontmost).
+    fn rebuild_pool(&mut self, frame: &linerule_core::OverlayFrame) -> Result<()> {
         let children = self.overlay_children()?;
         for popped in self.layers.drain(..) {
             children
                 .Remove(&popped.visual)
                 .map_err(map_hr("VisualCollection::Remove"))?;
         }
-        for &want in want_kinds {
-            let slot = self.create_sprite(want)?;
+        for layer in frame.layers() {
+            let slot = self.create_sprite(desired_blur(layer.brush))?;
             children
                 .InsertAtTop(&slot.visual)
                 .map_err(map_hr("VisualCollection::InsertAtTop"))?;
@@ -152,12 +166,28 @@ impl WinrtCompositionRenderer {
 
         let kind = if let Some(amount) = want {
             // Sigma in logical px; blur brush goes directly on the visual (no veil).
-            let blur_brush =
-                create_backdrop_blur_brush(compositor, amount.to_std_dev(), &self.blur)?;
-            visual
-                .SetBrush(&blur_brush)
-                .map_err(map_hr("SpriteVisual::SetBrush (blur)"))?;
-            SpriteKind::Blur { amount }
+            match create_backdrop_blur_brush(compositor, amount.to_std_dev()) {
+                Ok(blur_brush) => {
+                    visual
+                        .SetBrush(&blur_brush)
+                        .map_err(map_hr("SpriteVisual::SetBrush (blur)"))?;
+                    SpriteKind::Blur { amount }
+                },
+                Err(error) if !is_device_lost_error(&error) => {
+                    tracing::warn!(
+                        %error,
+                        "Backdrop Blur unavailable; substituting Dim for this session"
+                    );
+                    let brush = compositor
+                        .CreateColorBrush()
+                        .map_err(map_hr("Compositor::CreateColorBrush (blur fallback)"))?;
+                    visual
+                        .SetBrush(&brush)
+                        .map_err(map_hr("SpriteVisual::SetBrush (blur fallback)"))?;
+                    SpriteKind::FallbackDim { brush, amount }
+                },
+                Err(error) => return Err(error),
+            }
         } else {
             let brush = compositor
                 .CreateColorBrush()
@@ -177,6 +207,13 @@ impl WinrtCompositionRenderer {
     }
 }
 
+const fn desired_blur(brush: Brush) -> Option<BlurAmount> {
+    match brush {
+        Brush::Blur { amount, .. } => Some(amount),
+        Brush::Solid(_) => None,
+    }
+}
+
 fn apply_brush_color(visual: &SpriteVisual, kind: &SpriteKind, brush: Brush) -> Result<()> {
     match (kind, brush) {
         // Solid sprites bake all alpha into the brush color; visual opacity untouched.
@@ -187,13 +224,30 @@ fn apply_brush_color(visual: &SpriteVisual, kind: &SpriteKind, brush: Brush) -> 
         // visual level so show/hide fades never rebuild the pool. Perceptual
         // curve matches the Solid envelope (`composite_alpha` in linerule-core).
         (SpriteKind::Blur { .. }, Brush::Blur { opacity, .. }) => visual
-            .SetOpacity(linerule_core::color::perceptual::smooth(
-                f32::from(opacity) / 255.0,
-            ))
+            .SetOpacity(linerule_core::perceptual_smooth(f32::from(opacity) / 255.0))
             .map_err(map_hr("SpriteVisual::SetOpacity (blur)")),
+        (SpriteKind::FallbackDim { brush, .. }, Brush::Blur { opacity, .. }) => brush
+            .SetColor(rgba_to_color(Rgba::new(
+                0,
+                0,
+                0,
+                fallback_dim_alpha(opacity),
+            )))
+            .map_err(map_hr("CompositionColorBrush::SetColor (blur fallback)")),
         // Other combinations unreachable (pool signature matches frame).
         _ => Ok(()),
     }
+}
+
+fn fallback_dim_alpha(opacity: u8) -> u8 {
+    u8::try_from(u16::from(opacity) * 160 / 255).unwrap_or(160)
+}
+
+fn is_device_lost_error(error: &PlatformError) -> bool {
+    matches!(
+        error,
+        PlatformError::BadHr { hr, .. } if is_device_lost_hresult(*hr)
+    )
 }
 
 /// Map straight-alpha `Rgba` to WinRT `Color` (straight ARGB).
@@ -226,5 +280,57 @@ fn rect_size(rect: ScreenRect<Logical>) -> Vector2 {
     Vector2 {
         X: rect.width as f32,
         Y: rect.height as f32,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use linerule_core::Point;
+
+    #[test]
+    fn desired_blur_distinguishes_solid_and_blur_signatures() {
+        assert_eq!(desired_blur(Brush::Solid(Rgba::DEFAULT_MASK)), None);
+        assert_eq!(
+            desired_blur(Brush::Blur {
+                amount: BlurAmount::DEFAULT,
+                opacity: 77,
+            }),
+            Some(BlurAmount::DEFAULT)
+        );
+    }
+
+    #[test]
+    fn blur_fallback_alpha_preserves_endpoints_and_scales_linearly() {
+        assert_eq!(fallback_dim_alpha(0), 0);
+        assert_eq!(fallback_dim_alpha(128), 80);
+        assert_eq!(fallback_dim_alpha(u8::MAX), 160);
+    }
+
+    #[test]
+    fn device_lost_filter_accepts_only_documented_hresult_values() {
+        for hr in [0x887A_0005_u32, 0x887A_0006, 0x887A_0007, 0x8899_000C] {
+            assert!(is_device_lost_error(&PlatformError::BadHr {
+                operation: "fixture",
+                hr: i32::from_ne_bytes(hr.to_ne_bytes()),
+            }));
+        }
+        assert!(!is_device_lost_error(&PlatformError::BadHr {
+            operation: "fixture",
+            hr: -1,
+        }));
+        assert!(!is_device_lost_error(&PlatformError::AlreadyRunning));
+    }
+
+    #[test]
+    fn rgba_and_rectangle_helpers_preserve_channels_and_geometry() {
+        let color = rgba_to_color(Rgba::new(1, 2, 3, 4));
+        assert_eq!((color.R, color.G, color.B, color.A), (1, 2, 3, 4));
+
+        let rectangle = ScreenRect::new(Point::new(-20, 30), 640, 480);
+        let offset = rect_offset(rectangle);
+        let size = rect_size(rectangle);
+        assert_eq!((offset.X, offset.Y, offset.Z), (-20.0, 30.0, 0.0));
+        assert_eq!((size.X, size.Y), (640.0, 480.0));
     }
 }

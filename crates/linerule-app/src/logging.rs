@@ -1,34 +1,77 @@
 //! tracing subscriber setup. `LINERULE_LOG` controls per-subsystem levels.
-//! Logs go next to the exe (portable layout): stderr (human) plus
-//! `<exe dir>/events.jsonl.YYYY-MM-DD` (JSON Lines).
+//! Logs go to the selected data layout: stderr (human) plus daily JSON Lines.
 
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::time::Duration;
+use std::{env, ffi::OsString};
 
-use anyhow::{Context, Result};
+use thiserror::Error;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_appender::rolling;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// Initialize tracing. Hold the returned `WorkerGuard` for the life of `main`
-/// (dropping it flushes the background writer).
+use crate::event_ring::{EventRing, RingBufferLayer};
+use crate::storage::StorageError;
+use crate::storage::{DataPaths, prune_files};
+
+/// Typed failures while installing the process logging pipeline.
+#[derive(Debug, Error)]
+pub(crate) enum LoggingError {
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+    #[error("cannot open the bounded daily JSON log: {0}")]
+    OpenAppender(#[from] tracing_appender::rolling::InitError),
+    #[error("cannot install the tracing subscriber: {0}")]
+    InstallSubscriber(#[from] tracing_subscriber::util::TryInitError),
+    #[error("LINERULE_LOG is not valid Unicode")]
+    NonUnicodeFilter,
+    #[error("invalid LINERULE_LOG value `{value}`: {source}")]
+    InvalidFilter {
+        value: String,
+        source: tracing_subscriber::filter::ParseError,
+    },
+}
+
+/// Owned logging resources. Dropping this value flushes the file writer.
+pub(crate) struct LoggingSession {
+    _guard: WorkerGuard,
+    ring: EventRing,
+}
+
+impl LoggingSession {
+    pub(crate) fn event_ring(&self) -> EventRing {
+        self.ring.clone()
+    }
+}
+
+/// Initialize tracing for one application session.
 ///
 /// # Errors
-/// Exe path unresolvable, log dir uncreatable, or file appender init fails.
-pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
-    let log_dir = data_dir().context("resolving log dir next to linerule.exe")?;
-    std::fs::create_dir_all(&log_dir)
-        .with_context(|| format!("creating log dir {}", log_dir.display()))?;
+/// Data-directory creation, retention, or global subscriber installation fails.
+pub(crate) fn init(
+    human_readable_stderr: bool,
+    paths: &DataPaths,
+) -> Result<LoggingSession, LoggingError> {
+    paths.ensure_directories()?;
+    prune_files(
+        &paths.logs,
+        "events.jsonl",
+        Some(Duration::from_hours(168)),
+        usize::MAX,
+    )?;
 
-    let file_appender = rolling::daily(&log_dir, "events.jsonl");
+    let file_appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("events.jsonl")
+        .max_log_files(7)
+        .build(&paths.logs)?;
     let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
+    let ring = EventRing::new();
 
-    let env_filter = EnvFilter::try_from_env("LINERULE_LOG").unwrap_or_else(|_| {
-        EnvFilter::new("info,wnd_proc=info,heartbeat=info,cursor_tracker=info")
-    });
+    let env_filter = configured_filter()?;
 
     let file_layer = tracing_subscriber::fmt::layer()
         .json()
@@ -40,72 +83,61 @@ pub(crate) fn init(human_readable_stderr: bool) -> Result<WorkerGuard> {
         .with(env_filter)
         // Ring buffer supplying pre-panic events to the crash dump JSON.
         // env_filter is shared, so dropped events never reach the ring.
-        .with(crate::event_ring::RingBufferLayer)
+        .with(RingBufferLayer::new(ring.clone()))
         .with(file_layer);
 
     if human_readable_stderr {
         let stderr_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
             .with_writer(std::io::stderr);
-        registry.with(stderr_layer).init();
+        registry.with(stderr_layer).try_init()?;
     } else {
-        registry.init();
+        registry.try_init()?;
     }
 
-    Ok(guard)
+    Ok(LoggingSession {
+        _guard: guard,
+        ring,
+    })
 }
 
-/// Directory of the running exe; holds `events.jsonl.*` and `crash-*.json`.
-///
-/// # Errors
-/// `current_exe()` fails or the exe path has no parent.
-pub(crate) fn data_dir() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("std::env::current_exe failed")?;
-    let dir = exe
-        .parent()
-        .context("current_exe path has no parent directory")?
-        .to_path_buf();
-    Ok(dir)
+fn configured_filter() -> Result<EnvFilter, LoggingError> {
+    parse_filter(env::var_os("LINERULE_LOG"))
+}
+
+fn parse_filter(value: Option<OsString>) -> Result<EnvFilter, LoggingError> {
+    let Some(value) = value else {
+        return Ok(EnvFilter::new("info,wnd_proc=info,cursor_tracker=info"));
+    };
+    let value = value
+        .into_string()
+        .map_err(|_| LoggingError::NonUnicodeFilter)?;
+    EnvFilter::try_new(&value).map_err(|source| LoggingError::InvalidFilter { value, source })
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    //! `init()` installs a global subscriber, so it's untested here (would
-    //! corrupt sibling tests). Covers `data_dir()` and `EnvFilter` parsing.
+    //! `init()` installs a global subscriber, so unit tests cover only the
+    //! filter construction. Path and retention behavior lives in `storage`.
 
     use super::*;
 
     #[test]
-    fn data_dir_matches_current_exe_parent() {
-        let p = data_dir().expect("current_exe resolves under cargo nextest");
-        let expected = std::env::current_exe()
-            .expect("current_exe resolves under cargo nextest")
-            .parent()
-            .expect("test runner exe has a parent dir")
-            .to_path_buf();
-        assert_eq!(
-            p, expected,
-            "data_dir must return current_exe()'s parent, got {p:?} vs {expected:?}"
-        );
-    }
-
-    #[test]
-    fn data_dir_is_absolute() {
-        let p = data_dir().expect("current_exe resolves");
-        assert!(p.is_absolute(), "data dir must be absolute, got {p:?}");
-    }
-
-    #[test]
     fn env_filter_parses_default_directive_used_by_init() {
-        // Exact fallback string `init()` uses; a drift here would panic.
-        let _ = EnvFilter::new("info,wnd_proc=info,heartbeat=info,cursor_tracker=info");
+        parse_filter(None).expect("default filter");
     }
 
     #[test]
-    fn env_filter_rejects_obviously_bad_input() {
-        // EnvFilter accepts arbitrary target names; just ensure no panic.
-        let bad = "this-is-not-a-level";
-        let parsed = EnvFilter::try_new(bad);
-        let _ = parsed;
+    fn env_filter_accepts_an_injected_directive() {
+        parse_filter(Some("linerule_core=trace".into())).expect("valid filter");
+    }
+
+    #[test]
+    fn env_filter_rejects_invalid_input() {
+        assert!(matches!(
+            parse_filter(Some("linerule_core=not-a-level".into())),
+            Err(LoggingError::InvalidFilter { .. })
+        ));
     }
 }

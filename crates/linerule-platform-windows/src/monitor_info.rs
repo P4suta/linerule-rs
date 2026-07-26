@@ -1,5 +1,4 @@
-//! Monitor bounds: primary monitor for startup, nearest-to-point for per-tick
-//! active-monitor resolution (cursor following on multi-monitor setups).
+//! Monitor bounds for startup and cursor-following multi-monitor behavior.
 
 #![forbid(unsafe_code)]
 
@@ -8,36 +7,8 @@ use linerule_core::{Logical, Point, ScreenRect};
 use crate::error::Result;
 use crate::win32_ffi;
 
-/// Primary monitor bounds in logical pixels, via `MonitorFromPoint` +
-/// `GetMonitorInfoW`.
-///
-/// # Errors
-/// When `GetMonitorInfoW` fails.
-pub fn primary_bounds() -> Result<ScreenRect<Logical>> {
-    let hmonitor = win32_ffi::primary_monitor();
-    let info = win32_ffi::get_monitor_info(hmonitor)?;
-    let rect = rect_from_monitorinfo(&info);
-    tracing::debug!(
-        target: "MonitorInfo",
-        width = rect.width,
-        height = rect.height,
-        left = rect.left(),
-        top = rect.top(),
-        "primary monitor bounds"
-    );
-    Ok(rect)
-}
-
-/// Virtual screen bounds covering all monitors. Used at startup so the overlay
-/// can draw slits across monitor boundaries.
-///
-/// # Errors
-/// Never fails; `Result` kept for signature stability.
-#[allow(
-    clippy::unnecessary_wraps,
-    reason = "Result kept for a future EnumDisplayMonitors-based version"
-)]
-pub fn virtual_screen_bounds() -> Result<ScreenRect<Logical>> {
+/// Virtual screen bounds covering all monitors.
+pub fn virtual_screen_bounds() -> ScreenRect<Logical> {
     let (left, top, width, height) = win32_ffi::virtual_screen_metrics();
     let w = u32::try_from(width.max(0)).unwrap_or(0);
     let h = u32::try_from(height.max(0)).unwrap_or(0);
@@ -50,7 +21,7 @@ pub fn virtual_screen_bounds() -> Result<ScreenRect<Logical>> {
         height = h,
         "virtual screen bounds"
     );
-    Ok(rect)
+    rect
 }
 
 /// Bounds of the monitor containing `p`, or the nearest one if `p` is outside

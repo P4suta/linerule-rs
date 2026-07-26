@@ -14,39 +14,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
-use linerule_core::input::tick::TickWorld;
 use linerule_core::{
-    AnimConfig, ChordError, HotkeyMap, HudConfig, HudNotification, Logical, NotificationClass,
-    OverlayAction, Point, ScreenRect,
+    ActionBatch, AnimConfig, HotkeyBindings, HudConfig, HudNotification, Logical,
+    NotificationClass, OverlayAction, Point, ScreenRect, TickWorld,
 };
 use tracing::Span;
 use windows::Win32::Foundation::HWND;
 
+use crate::error::{PlatformError, Result};
 use crate::winrt_composition_renderer::WinrtCompositionRenderer;
 use crate::winrt_hud_renderer::WinrtHudRenderer;
-
-/// A failed hotkey registration, retained for the HUD conflict list.
-#[derive(Debug, Clone)]
-pub struct HotkeyConflict {
-    /// Chord string from user config (e.g. `"Ctrl+Alt+R"`).
-    pub spec: &'static str,
-    /// Action this chord was bound to.
-    pub action: OverlayAction,
-    /// Why registration failed.
-    pub reason: HotkeyFailure,
-}
-
-/// Reason a hotkey registration failed.
-#[derive(Debug, Clone)]
-pub enum HotkeyFailure {
-    /// Chord string failed to parse.
-    ChordParse(ChordError),
-    /// `RegisterHotKey` failed (usually `ERROR_HOTKEY_ALREADY_REGISTERED`).
-    RegisterHotKey {
-        /// HRESULT / GetLastError at failure (informational).
-        hresult: i32,
-    },
-}
 
 /// Overlay + HUD renderers. `hud` declared first so it Drops (releasing COM)
 /// before `overlay`, whose WinRT pipeline it borrows.
@@ -55,8 +32,7 @@ struct Renderers {
     overlay: RefCell<Option<WinrtCompositionRenderer>>,
 }
 
-/// Hotkey subsystem state: action channel, id→action lookup, display chord
-/// map, and registration-conflict list.
+/// Hotkey subsystem state: action channel, id→action lookup, and display map.
 struct Hotkeys {
     /// `WM_HOTKEY` sends actions here; `Sender::send` takes `&self`.
     sender: Sender<OverlayAction>,
@@ -65,9 +41,7 @@ struct Hotkeys {
     /// hotkey id → action, filled once by `register_hotkeys`, then read-only.
     id_to_action: RefCell<HashMap<i32, OverlayAction>>,
     /// Chord display strings for the HUD hotkey-help rows.
-    display_map: RefCell<HotkeyMap>,
-    /// Chords whose registration / parse failed, shown as persistent HUD warnings.
-    conflicts: RefCell<Vec<HotkeyConflict>>,
+    display_map: RefCell<HotkeyBindings>,
 }
 
 /// WndProc instance state. Field declaration order is Drop order.
@@ -95,8 +69,13 @@ pub struct OverlayWndState {
     notifications: RefCell<Vec<HudNotification>>,
     /// HUD telemetry tracker (p99 / drops / commit timeouts).
     frame_timing: RefCell<crate::frame_timing::FrameTimingTracker>,
-    /// Consecutive device-lost failures; reset on success, Quit at 3.
+    /// Consecutive device-lost failures; reset on success, drawing disabled at 3.
     device_lost_count: Cell<u8>,
+    /// Tracks cursor-poll availability so a locked session logs only state
+    /// transitions instead of one warning per render tick.
+    cursor_poll_available: Cell<bool>,
+    /// Demand-driven pacer control, installed after the HWND is created.
+    render_clock: OnceCell<crate::render_clock::RenderClockControl>,
     /// Overlay HWND, set once after `CreateWindowExW`; reused by device-lost
     /// rebuild.
     hwnd: OnceCell<HWND>,
@@ -106,6 +85,7 @@ pub struct OverlayWndState {
 
 impl OverlayWndState {
     /// New instance state initialized with `TickWorld::INITIAL` (mode = Off).
+    #[cfg(test)]
     #[must_use]
     pub fn new(
         log_span: Span,
@@ -122,8 +102,8 @@ impl OverlayWndState {
         )
     }
 
-    /// New instance state initialized with an explicit `TickWorld`, used to
-    /// override the startup mode (e.g. `--initial-mode`).
+    /// New instance state initialized with an explicit caller-owned
+    /// `TickWorld`.
     #[must_use]
     pub fn new_with_initial_world(
         log_span: Span,
@@ -146,8 +126,7 @@ impl OverlayWndState {
                 sender,
                 inbox,
                 id_to_action: RefCell::new(HashMap::new()),
-                display_map: RefCell::new(HotkeyMap::DEFAULT),
-                conflicts: RefCell::new(Vec::new()),
+                display_map: RefCell::new(HotkeyBindings::default()),
             },
             monitor: RefCell::new(monitor),
             hud_panel_rect: Cell::new(initial_hud_panel_rect(&hud_config, monitor)),
@@ -156,6 +135,8 @@ impl OverlayWndState {
             notifications: RefCell::new(Vec::new()),
             frame_timing: RefCell::new(crate::frame_timing::FrameTimingTracker::new()),
             device_lost_count: Cell::new(0),
+            cursor_poll_available: Cell::new(true),
+            render_clock: OnceCell::new(),
             hwnd: OnceCell::new(),
             start_time: Instant::now(),
         }
@@ -189,6 +170,15 @@ impl OverlayWndState {
         let mut q = self.notifications.borrow_mut();
         q.retain(|n| now < n.until_ms);
         q.clone()
+    }
+
+    /// Whether any toast is still live, without cloning the queue on each
+    /// render tick.
+    pub fn has_live_notifications(&self) -> bool {
+        let now = self.now_ms();
+        let mut q = self.notifications.borrow_mut();
+        q.retain(|notification| now < notification.until_ms);
+        !q.is_empty()
     }
 
     /// This HWND's tracing span.
@@ -228,6 +218,12 @@ impl OverlayWndState {
         *self.renderers.hud.borrow_mut() = Some(renderer);
     }
 
+    /// Release both graphics pipelines while leaving controller services alive.
+    pub fn disable_renderers(&self) {
+        *self.renderers.hud.borrow_mut() = None;
+        *self.renderers.overlay.borrow_mut() = None;
+    }
+
     /// Mutable access to the HUD renderer.
     pub fn hud_renderer(&self) -> &RefCell<Option<WinrtHudRenderer>> {
         &self.renderers.hud
@@ -259,6 +255,7 @@ impl OverlayWndState {
     ///
     /// Each id must be unique; a duplicate trips `debug_assert!` in debug and
     /// is last-write-wins in release.
+    #[cfg(test)]
     pub fn record_hotkey(&self, id: i32, action: OverlayAction) {
         let prev = self.hotkeys.id_to_action.borrow_mut().insert(id, action);
         debug_assert!(
@@ -273,21 +270,20 @@ impl OverlayWndState {
         self.hotkeys.id_to_action.borrow().keys().copied().collect()
     }
 
-    /// Record a failed hotkey registration.
-    pub fn record_hotkey_conflict(&self, conflict: HotkeyConflict) {
-        self.hotkeys.conflicts.borrow_mut().push(conflict);
-    }
-
-    /// The hotkey conflict list.
-    pub fn hotkey_conflicts(&self) -> Vec<HotkeyConflict> {
-        self.hotkeys.conflicts.borrow().clone()
-    }
-
     /// Drain queued actions from the inbox channel.
-    pub fn drain_hotkeys(&self) -> Vec<OverlayAction> {
-        let mut out = Vec::new();
-        while let Ok(a) = self.hotkeys.inbox.try_recv() {
-            out.push(a);
+    pub fn drain_hotkeys(&self) -> ActionBatch {
+        let mut out = ActionBatch::EMPTY;
+        for _ in 0..ActionBatch::CAPACITY {
+            let Ok(action) = self.hotkeys.inbox.try_recv() else {
+                break;
+            };
+            if let Err(action) = out.try_push(action) {
+                tracing::error!("action batch capacity invariant violated");
+                if self.hotkeys.sender.send(action).is_err() {
+                    tracing::error!("hotkey channel disconnected while restoring queued action");
+                }
+                break;
+            }
         }
         out
     }
@@ -326,15 +322,23 @@ impl OverlayWndState {
         self.hud_panel_rect.set(rect);
     }
 
-    /// Store the chord map shown in the HUD hotkey-help rows.
-    pub fn record_hotkeys(&self, hotkeys: HotkeyMap) {
+    /// Atomically replace the displayed bindings and ID/action lookup after a
+    /// complete platform registration transaction succeeds.
+    pub fn replace_hotkeys(
+        &self,
+        hotkeys: HotkeyBindings,
+        mappings: impl IntoIterator<Item = (i32, OverlayAction)>,
+    ) {
         *self.hotkeys.display_map.borrow_mut() = hotkeys;
+        let mut actions = self.hotkeys.id_to_action.borrow_mut();
+        actions.clear();
+        actions.extend(mappings);
     }
 
     /// The chord map for the HUD hotkey-help rows.
     #[must_use]
-    pub fn hotkeys(&self) -> HotkeyMap {
-        *self.hotkeys.display_map.borrow()
+    pub fn hotkeys(&self) -> HotkeyBindings {
+        self.hotkeys.display_map.borrow().clone()
     }
 
     /// Milliseconds since process start; the `now_ms` for `tick::step`.
@@ -350,15 +354,53 @@ impl OverlayWndState {
         &self.device_lost_count
     }
 
-    /// Set the overlay HWND once; ignored if already set (`OnceCell::set`).
-    pub fn set_hwnd(&self, hwnd: HWND) {
-        let _ = self.hwnd.set(hwnd);
+    /// Record a cursor-poll availability transition.
+    ///
+    /// Returns `true` only when the availability changed, allowing the caller
+    /// to emit one warning/recovery record without silently discarding the
+    /// underlying typed error.
+    pub fn set_cursor_poll_available(&self, available: bool) -> bool {
+        self.cursor_poll_available.replace(available) != available
+    }
+
+    /// Set the overlay HWND exactly once.
+    pub fn set_hwnd(&self, hwnd: HWND) -> Result<()> {
+        self.hwnd.set(hwnd).map_err(|_| PlatformError::Invariant {
+            operation: "OverlayWndState::set_hwnd called twice",
+        })
     }
 
     /// The overlay HWND, if set. Used to rebuild the renderer on device-lost.
     #[must_use]
     pub fn hwnd(&self) -> Option<HWND> {
         self.hwnd.get().copied()
+    }
+
+    pub fn install_render_clock(
+        &self,
+        control: crate::render_clock::RenderClockControl,
+    ) -> Result<()> {
+        self.render_clock
+            .set(control)
+            .map_err(|_| PlatformError::Invariant {
+                operation: "OverlayWndState::install_render_clock called twice",
+            })
+    }
+
+    pub fn request_tick(&self, hwnd: HWND) {
+        if let Some(control) = self.render_clock.get() {
+            control.request_tick(hwnd);
+        }
+    }
+
+    pub fn complete_tick(&self, hotkey_backlog: bool) {
+        let now = self.now_ms();
+        let keep_running = hotkey_backlog
+            || self.tick_world_snapshot().needs_continuous_ticks(now)
+            || self.has_live_notifications();
+        if let Some(control) = self.render_clock.get() {
+            control.complete_tick(keep_running);
+        }
     }
 }
 
@@ -480,8 +522,24 @@ mod tests {
             .send(OverlayAction::Quit)
             .expect("sender alive");
         let drained = s.drain_hotkeys();
-        assert_eq!(drained, vec![OverlayAction::CycleMode, OverlayAction::Quit]);
+        assert_eq!(
+            drained.as_slice(),
+            [OverlayAction::CycleMode, OverlayAction::Quit]
+        );
         assert!(s.drain_hotkeys().is_empty());
+    }
+
+    #[test]
+    fn full_hotkey_batch_leaves_the_remainder_for_the_next_tick() {
+        let s = fresh_state();
+        for _ in 0..=ActionBatch::CAPACITY {
+            s.hotkey_sender()
+                .send(OverlayAction::CycleMode)
+                .expect("sender alive");
+        }
+        let first = s.drain_hotkeys();
+        assert!(first.is_full());
+        assert_eq!(s.drain_hotkeys().len(), 1);
     }
 
     #[test]
@@ -506,30 +564,13 @@ mod tests {
         assert_eq!(s.tick_world_snapshot().frame_seq, 42);
     }
 
-    #[test]
-    fn record_hotkey_conflict_is_observable() {
-        let s = fresh_state();
-        s.record_hotkey_conflict(HotkeyConflict {
-            spec: "Ctrl+Alt+Bogus",
-            action: OverlayAction::Quit,
-            reason: HotkeyFailure::ChordParse(ChordError::Empty),
-        });
-        let conflicts = s.hotkey_conflicts();
-        assert_eq!(conflicts.len(), 1);
-        assert_eq!(conflicts[0].spec, "Ctrl+Alt+Bogus");
-        assert_eq!(conflicts[0].action, OverlayAction::Quit);
-        assert!(matches!(
-            conflicts[0].reason,
-            HotkeyFailure::ChordParse(ChordError::Empty)
-        ));
-    }
-
     /// Same `(class, message)` refreshes lifetime instead of stacking.
     #[test]
     fn push_notification_dedups_same_class_and_message() {
         let s = fresh_state();
         s.push_notification(NotificationClass::Info, "Overlay is off".to_string(), 3_000);
         s.push_notification(NotificationClass::Info, "Overlay is off".to_string(), 3_000);
+        assert!(s.has_live_notifications());
         assert_eq!(
             s.live_notifications().len(),
             1,
@@ -557,5 +598,14 @@ mod tests {
         let b = s.now_ms();
         assert!(a >= 0, "elapsed should be non-negative: {a}");
         assert!(b >= a, "elapsed should be monotonic: {a} -> {b}");
+    }
+
+    #[test]
+    fn cursor_poll_availability_reports_only_transitions() {
+        let state = fresh_state();
+        assert!(!state.set_cursor_poll_available(true));
+        assert!(state.set_cursor_poll_available(false));
+        assert!(!state.set_cursor_poll_available(false));
+        assert!(state.set_cursor_poll_available(true));
     }
 }

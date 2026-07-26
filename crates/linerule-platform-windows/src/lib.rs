@@ -4,6 +4,10 @@
 
 #![cfg(windows)]
 #![deny(unsafe_op_in_unsafe_fn)]
+#![allow(
+    unreachable_pub,
+    reason = "implementation modules are private; their public-looking items are visible only inside this crate"
+)]
 // pedantic/nursery exempted crate-wide for this thin Win32/COM/D3D wrapper layer,
 // matching xtask's `clippy-windows-deny-list` (-A on Windows target). `clippy::all`
 // and `disallowed_*` stay enforced.
@@ -13,32 +17,25 @@
     reason = "pedantic/nursery intentionally exempted for Win32/COM layer (same policy as clippy-windows-deny-list)"
 )]
 
-pub mod auto_quit;
-pub mod cursor_tracker;
-pub mod error;
-pub mod ex_style_snapshot;
-pub mod foreground_hook;
-pub mod frame_timing;
-pub mod messages;
-pub mod monitor_info;
-pub mod overlay_state;
-pub mod overlay_window;
-pub mod render_clock;
-pub mod render_timing;
-pub mod renderer_backend;
-pub mod win32_ffi;
-pub mod window_class;
-pub mod windows_app;
-pub mod winrt_composition_renderer;
-pub mod winrt_hud_renderer;
-pub mod wndproc;
+mod cursor_tracker;
+mod desktop_runtime;
+mod error;
+mod ex_style_snapshot;
+mod foreground_hook;
+mod frame_timing;
+mod messages;
+mod monitor_info;
+mod overlay_state;
+mod overlay_window;
+mod render_clock;
+mod render_timing;
+mod renderer_backend;
+mod settings_host;
+mod win32_ffi;
+mod window_class;
+mod winrt_composition_renderer;
+mod winrt_hud_renderer;
+mod wndproc;
 
-pub use auto_quit::AutoQuitTimer;
-pub use error::{PlatformError, Result};
-pub use foreground_hook::ForegroundHook;
-pub use overlay_state::{HotkeyConflict, HotkeyFailure, OverlayWndState};
-pub use overlay_window::OverlayWindow;
-pub use render_clock::RenderClock;
-pub use win32_ffi::input::send_chord;
-pub use win32_ffi::set_dpi_aware;
-pub use windows_app::run_message_pump;
+pub use desktop_runtime::{DesktopRuntime, LaunchIntent, RuntimeOptions};
+pub use error::PlatformError;

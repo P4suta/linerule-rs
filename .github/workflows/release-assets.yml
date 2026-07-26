@@ -1,34 +1,3 @@
-# On tag push (`vX.Y.Z`): build Windows EXE + CycloneDX SBOM, sign with
-# Authenticode (SSL.com eSigner, non-blocking), generate SHA256SUMS, create a
-# DRAFT GitHub Release, upload assets, keyless attestation (build provenance +
-# SBOM), then publish.
-#
-# Immutable releases (GA 2025-10-28) reject post-publish asset adds with 422.
-# Draft releases stay mutable, so "upload everything while draft, then publish
-# (draft=false)" is the only supported automation path. See ADR-0014
-# (supersedes ADR-0010).
-#
-# A published release must be signed: without secrets (ES_USERNAME /
-# CREDENTIAL_ID) a `publish=true` run hard-fails at the irreversible boundary
-# rather than shipping unsigned. A `publish=false` smoke test still builds
-# unsigned (nothing is published). Setup and rationale: docs/SIGNING.md and
-# ADR-0017. Verify provenance:
-# `gh attestation verify <exe> --repo P4suta/linerule-rs`.
-#
-# Trigger:
-#   - push: tags: ["v*"]              # tags pushed by release-please with
-#                                     # `skip-github-release: true` (always publish)
-#   - workflow_dispatch               # manual retry / signing smoke test
-#       inputs.tag                    #   ref to (re)build; `main` for a smoke test
-#       inputs.publish (default true) #   false = build+sign+verify only; creates no
-#                                     #   Release/tag/attestation. Safe smoke test
-#                                     #   that verifies signing without touching
-#                                     #   immutable releases.
-#
-# release-please.yml handles CHANGELOG / version bump / tag push; this workflow
-# owns the GitHub Release (draft → publish). Wired via
-# `skip-github-release: true` in release-please-config.json.
-
 name: release-assets
 
 on:
@@ -37,98 +6,240 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to (re)build assets for (e.g. v0.4.1), or `main` for a signing smoke test"
+        description: "Tag or ref to build"
         required: true
       publish:
-        description: "Publish a GitHub Release (false = build+sign+verify only; safe under immutable releases)"
+        description: "Publish the immutable release"
         required: false
         default: true
         type: boolean
 
-# Least privilege at the top level; the job below requests only the write scopes
-# it needs (job-scoped writes are preferred over a broad top-level grant).
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: short
+  CARGO_NET_LOCKED: "true"
 
 jobs:
-  build-and-release:
-    name: build EXE + SBOM, sign, draft release, attest, publish
-    runs-on: windows-latest
-    timeout-minutes: 30
-    # Gated behind the `release` Environment: required-reviewer approval +
-    # ref restricted to `main`/`v*` before a release goes public.
-    environment: release
+  release-gate:
+    name: verify required CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      contents: write # gh release create / upload / edit
-      id-token: write # OIDC token for keyless Sigstore signing (attestations)
-      attestations: write # write build-provenance + SBOM attestations
-    env:
-      # Build the shipped binary from the committed Cargo.lock, never a silent
-      # re-resolve (the cargo-sbom install step passes its own --locked).
-      CARGO_NET_LOCKED: "true"
-      # secrets.* can't be referenced in `if:`, so hoist to an env bool and gate
-      # the signing steps on env.HAVE_SIGNING.
-      HAVE_SIGNING: ${{ secrets.ES_USERNAME != '' && secrets.CREDENTIAL_ID != '' }}
-      # tag push always publishes; workflow_dispatch follows inputs.publish
-      # (publish=false = build+sign+verify only, no Release; signing smoke test).
-      PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+      checks: read
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
-
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-
-      # Stamp the binary as a clean stable `X.Y.Z`. Without this, linerule-app's
-      # build.rs defaults to the `-dev+g<sha>` lane and the shipped EXE would
-      # self-report a dev version (== the release tag, since release-please syncs
-      # [workspace.package].version via extra-files). See ADR-0018.
-      - name: stamp stable version
+          persist-credentials: false
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: aqua:cli/cli
+          cache: true
+      - name: require active repository rulesets
+        if: github.event_name != 'workflow_dispatch' || inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
-        run: echo "LINERULE_VERSION=$(cargo xtask version --channel stable)" >> "$GITHUB_ENV"
-
-      - name: cargo build --release (shipping profile, panic=abort, strip=symbols)
-        run: cargo build --release -p linerule-app
-
-      - name: install cargo-sbom (CycloneDX generator)
-        shell: pwsh
-        run: cargo install cargo-sbom --locked --version "^0.10"
-
-      - name: generate SBOM (CycloneDX 1.6 JSON)
-        shell: pwsh
         run: |-
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # Single-binary distribution (ADR-0011), so scope to linerule-app's
-          # dependency closure. CycloneDX 1.6 JSON is accepted by GitHub
-          # Dependency Submission and SBOM scanners generally.
-          cargo sbom --output-format=cyclone_dx_json_1_6 --cargo-package linerule-app `
-            > "linerule-${tag}-sbom.cdx.json"
+          ruleset_id() {
+            local name="$1"
+            mise exec aqua:cli/cli -- gh api \
+              "repos/${GITHUB_REPOSITORY}/rulesets?per_page=100" \
+              --jq "map(select(.name == \"${name}\" and .enforcement == \"active\")) | if length == 1 then .[0].id else empty end"
+          }
+          require_rule() {
+            local id="$1"
+            local rule="$2"
+            local count
+            count="$(
+              mise exec aqua:cli/cli -- gh api \
+                "repos/${GITHUB_REPOSITORY}/rulesets/${id}" \
+                --jq "[.rules[] | select(.type == \"${rule}\")] | length"
+            )"
+            if [ "$count" != "1" ]; then
+              echo "::error::active ruleset ${id} does not enforce ${rule}"
+              exit 1
+            fi
+          }
 
-      - name: rename EXE with tag
+          default_id="$(ruleset_id protect-default-branch)"
+          release_id="$(ruleset_id protect-release-tags)"
+          signed_id="$(ruleset_id require-signed-commits)"
+          for pair in \
+            "protect-default-branch:${default_id}" \
+            "protect-release-tags:${release_id}" \
+            "require-signed-commits:${signed_id}"; do
+            if [ -z "${pair#*:}" ]; then
+              echo "::error::required active ruleset is missing: ${pair%%:*}"
+              exit 1
+            fi
+          done
+          for rule in deletion non_fast_forward required_linear_history \
+            pull_request required_status_checks; do
+            require_rule "$default_id" "$rule"
+          done
+          for rule in deletion non_fast_forward update; do
+            require_rule "$release_id" "$rule"
+          done
+          require_rule "$signed_id" required_signatures
+          context_count="$(
+            mise exec aqua:cli/cli -- gh api \
+              "repos/${GITHUB_REPOSITORY}/rulesets/${default_id}" \
+              --jq '[.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[] | select(.context == "ci-required")] | length'
+          )"
+          if [ "$context_count" != "1" ]; then
+            echo "::error::protect-default-branch does not require ci-required"
+            exit 1
+          fi
+      - name: require successful CI and Windows 11 hardware evidence for publishing
+        if: github.event_name != 'workflow_dispatch' || inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |-
+          commit="$(git rev-parse HEAD)"
+          for required in ci-required hardware-required; do
+            conclusion="$(
+              mise exec aqua:cli/cli -- gh api \
+                "repos/${GITHUB_REPOSITORY}/commits/${commit}/check-runs?per_page=100" \
+                --jq ".check_runs | map(select(.name == \"${required}\")) | sort_by(.completed_at) | last | .conclusion // \"\""
+            )"
+            if [ "$conclusion" != "success" ]; then
+              echo "::error::${required} for ${commit} is '${conclusion:-missing}', not success"
+              exit 1
+            fi
+          done
+
+  build:
+    name: native build (${{ matrix.arch }})
+    needs: release-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: x64
+            runtime: win-x64
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            platform: ARM64
+            runtime: win-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust dotnet
+          cache: true
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: stamp stable version
         shell: pwsh
         run: |
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          Copy-Item target/release/linerule.exe "linerule-${tag}-win-x64.exe"
-
-      # Authenticode signing (non-blocking). The only first-party PE is
-      # `linerule.exe`, so stage that one file, batch_sign it, copy back from
-      # signed/, and hard-verify. eSigner is a cloud HSM (no key on the runner;
-      # unattended auth via TOTP secret). Gated only on env.HAVE_SIGNING, not
-      # env.PUBLISH, so sign+verify also runs in a publish=false smoke test.
-      - name: stage binary for signing
-        if: env.HAVE_SIGNING == 'true'
+          $version = mise exec rust --command "cargo xtask version --channel stable"
+          if ($LASTEXITCODE -ne 0) { throw "version stamp failed" }
+          "LINERULE_VERSION=$version" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: build Rust executable
+        run: >-
+          mise exec rust --command
+          'cargo build --locked --release -p linerule-app
+          --target ${{ matrix.target }}'
+      - name: publish self-contained Fluent settings executable
         shell: pwsh
-        run: |-
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          New-Item -ItemType Directory -Force sign-stage | Out-Null
-          New-Item -ItemType Directory -Force signed | Out-Null
-          Copy-Item "linerule-${tag}-win-x64.exe" sign-stage/
+        run: |
+          $project = "ui/linerule-settings/Linerule.Settings.csproj"
+          mise exec dotnet --command "dotnet restore $project --locked-mode -p:Platform=${{ matrix.platform }} -p:RuntimeIdentifier=${{ matrix.runtime }}"
+          if ($LASTEXITCODE -ne 0) { throw "WinUI restore failed" }
+          mise exec dotnet --command "dotnet publish $project --no-restore -c Release -p:Platform=${{ matrix.platform }} -r ${{ matrix.runtime }} --self-contained true -p:Version=$env:LINERULE_VERSION -p:PublishDir=$PWD/settings-publish/"
+          if ($LASTEXITCODE -ne 0) { throw "WinUI publish failed" }
+          if (-not (Test-Path settings-publish/linerule-settings.exe -PathType Leaf)) {
+            throw "WinUI single-file executable was not published"
+          }
+      - name: stage architecture payload
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release-artifact/settings | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/linerule.exe release-artifact/
+          Copy-Item settings-publish/linerule-settings.exe release-artifact/settings/
+      - name: smoke CLI
+        shell: pwsh
+        run: |
+          $exe = "release-artifact/linerule.exe"
+          & $exe version
+          if ($LASTEXITCODE -ne 0) { throw "version smoke failed" }
+          & $exe diagnostics
+          if ($LASTEXITCODE -ne 0) { throw "diagnostics smoke failed" }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-binary-${{ matrix.arch }}
+          path: release-artifact
+          if-no-files-found: error
 
-      - name: sign staged binary (SSL.com eSigner)
+  package:
+    name: sign, package, verify, attest, publish
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+      HAVE_SIGNING: ${{ secrets.ES_USERNAME != '' && secrets.CREDENTIAL_ID != '' && secrets.MSIX_PUBLISHER != '' }}
+      PACKAGE_PUBLISHER: ${{ secrets.MSIX_PUBLISHER || 'CN=linerule Development' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: rust dotnet cyclonedx python cargo:cargo-sbom pipx:reuse aqua:cli/cli
+          cache: true
+      - name: Install exact CycloneDX .NET tool
+        run: mise install dotnet:CycloneDX
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-binary-*
+          path: binaries
+      - name: resolve version and stage PEs
+        shell: pwsh
+        run: |
+          $metadata = mise exec rust --command (
+            "cargo metadata --locked --no-deps --format-version 1"
+          ) | ConvertFrom-Json
+          $versions = @($metadata.packages |
+            Where-Object { $_.name -in @("linerule-app", "linerule-core",
+              "linerule-platform-windows", "xtask") } |
+            Select-Object -ExpandProperty version -Unique)
+          if ($versions.Count -ne 1) { throw "workspace versions differ" }
+          "RELEASE_VERSION=$($versions[0])" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Path sign-pe | Out-Null
+          Copy-Item binaries/release-binary-x64/linerule.exe sign-pe/linerule-x64.exe
+          Copy-Item binaries/release-binary-arm64/linerule.exe sign-pe/linerule-arm64.exe
+          Copy-Item binaries/release-binary-x64/settings/linerule-settings.exe sign-pe/linerule-settings-x64.exe
+          Copy-Item binaries/release-binary-arm64/settings/linerule-settings.exe sign-pe/linerule-settings-arm64.exe
+      - name: require signing inputs before publish
+        if: env.PUBLISH == 'true' && env.HAVE_SIGNING != 'true'
+        shell: pwsh
+        run: throw "Publishing requires eSigner credentials and MSIX_PUBLISHER"
+      - name: sign PEs
         if: env.HAVE_SIGNING == 'true'
         uses: SSLcom/esigner-codesign@cf5f6c1d38ad10f47e3ed9aca873f429b1a8d85b # v1.3.2
         with:
@@ -137,126 +248,274 @@ jobs:
           password: ${{ secrets.ES_PASSWORD }}
           credential_id: ${{ secrets.CREDENTIAL_ID }}
           totp_secret: ${{ secrets.ES_TOTP_SECRET }}
-          dir_path: ${{ github.workspace }}\sign-stage
-          # batch_sign ignores `override`; without an explicit output_path the
-          # copy-back picks up the unsigned original and Verify reports "NotSigned".
-          output_path: ${{ github.workspace }}\signed
+          dir_path: ${{ github.workspace }}\sign-pe
+          output_path: ${{ github.workspace }}\signed-pe
           environment_name: PROD
-          # Pass SSL.com's pre-signing malware scan inline; without it hash
-          # submission fails with "hash needs to be scanned first".
           malware_block: "true"
-
-      - name: copy signed binary back
-        if: env.HAVE_SIGNING == 'true'
+      - name: select and verify final PEs
         shell: pwsh
-        run: |-
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          Copy-Item "signed/linerule-${tag}-win-x64.exe" "linerule-${tag}-win-x64.exe" -Force
-
-      # Fail unless Valid, so we never ship unsigned after requesting signing.
-      - name: verify signature
-        if: env.HAVE_SIGNING == 'true'
-        shell: pwsh
-        run: |-
-          $ErrorActionPreference = 'Stop'
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          $sig = Get-AuthenticodeSignature "linerule-${tag}-win-x64.exe"
-          if ($sig.Status -ne 'Valid') {
-            throw "Authenticode check failed for linerule-${tag}-win-x64.exe - status: $($sig.Status)"
-          }
-          Write-Host "signed: linerule-${tag}-win-x64.exe - $($sig.SignerCertificate.Subject)"
-
-      # publish=false smoke test with no signing secrets: build-only, just warn.
-      - name: warn if unsigned (smoke test only)
-        if: env.HAVE_SIGNING != 'true' && env.PUBLISH != 'true'
-        run: echo "::warning::Signing secrets absent - built UNSIGNED (smoke test, nothing published). See docs/SIGNING.md to enable."
-
-      # Gate at the irreversible boundary: a real publish must ship signed. If the
-      # signing secrets were absent nothing above signed the binary - fail HERE,
-      # before any Release/attestation, rather than publishing unsigned. ADR-0017.
-      - name: require a signature before publishing
-        if: env.PUBLISH == 'true' && env.HAVE_SIGNING != 'true'
-        run: |-
-          echo "::error::Refusing to publish an UNSIGNED release. Set the signing secrets (ES_USERNAME / CREDENTIAL_ID). See docs/SIGNING.md."
-          exit 1
-
-      # SHA256SUMS.txt (exe + sbom). For `sha256sum -c` compatibility: lowercase
-      # hex, bare filenames, LF newlines (use WriteAllText; Out-File emits CRLF).
-      - name: generate SHA256SUMS.txt
-        if: env.PUBLISH == 'true'
-        shell: pwsh
-        run: |-
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          $files = @("linerule-${tag}-win-x64.exe", "linerule-${tag}-sbom.cdx.json")
-          $lines = foreach ($f in $files) {
-            $hash = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
-            "$hash  $f"
-          }
-          [System.IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", ($lines -join "`n") + "`n")
-          Get-Content SHA256SUMS.txt
-
-      - name: create draft release (or reuse existing draft)
-        if: env.PUBLISH == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
-        run: |-
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # Reuse a leftover draft (prior run failed just before publish, or
-          # workflow_dispatch retry); otherwise create one. `--generate-notes`
-          # auto-builds release notes from the PR title list. Different format
-          # from release-please's changelog, but the core info (PR number +
-          # title) is the same.
-          $existing = gh release view $tag --json isDraft --jq '.isDraft' 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --draft --title "$tag" --generate-notes
-          } elseif ($existing -ne "true") {
-            Write-Error "release $tag already exists and is PUBLISHED — cannot attach assets to immutable release. Delete it manually first or pick a new tag."
-            exit 1
+        run: |
+          if ($env:HAVE_SIGNING -eq "true") {
+            Copy-Item signed-pe/linerule-x64.exe sign-pe/linerule-x64.exe -Force
+            Copy-Item signed-pe/linerule-arm64.exe sign-pe/linerule-arm64.exe -Force
+            Copy-Item signed-pe/linerule-settings-x64.exe sign-pe/linerule-settings-x64.exe -Force
+            Copy-Item signed-pe/linerule-settings-arm64.exe sign-pe/linerule-settings-arm64.exe -Force
+            foreach ($file in Get-ChildItem sign-pe/*.exe) {
+              $signature = Get-AuthenticodeSignature $file
+              if ($signature.Status -ne "Valid") {
+                throw "Invalid signature on $($file.Name): $($signature.Status)"
+              }
+            }
           } else {
-            Write-Host "reusing existing draft release $tag"
+            Write-Warning "Unsigned package smoke run; nothing may be published"
           }
-
-      - name: upload assets to draft release
+          Copy-Item sign-pe/linerule-settings-x64.exe binaries/release-binary-x64/settings/linerule-settings.exe -Force
+          Copy-Item sign-pe/linerule-settings-arm64.exe binaries/release-binary-arm64/settings/linerule-settings.exe -Force
+      - name: restore pinned Windows SDK packaging tools
+        shell: pwsh
+        run: |
+          mise exec dotnet --command "dotnet restore ui/linerule-settings/Linerule.Settings.csproj --locked-mode -p:Platform=x64 -p:RuntimeIdentifier=win-x64"
+          if ($LASTEXITCODE -ne 0) { throw "WinUI locked restore failed" }
+      - name: build portable ZIPs and MSIX bundle
+        shell: pwsh
+        run: |
+          ./packaging/package.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -Publisher $env:PACKAGE_PUBLISHER `
+            -X64Exe sign-pe/linerule-x64.exe `
+            -Arm64Exe sign-pe/linerule-arm64.exe `
+            -X64SettingsExe binaries/release-binary-x64/settings/linerule-settings.exe `
+            -Arm64SettingsExe binaries/release-binary-arm64/settings/linerule-settings.exe `
+            -OutputDirectory dist
+      - name: build lower-version MSIX update fixture
+        shell: pwsh
+        run: |
+          ./packaging/package.ps1 `
+            -Version 0.0.1 `
+            -Publisher $env:PACKAGE_PUBLISHER `
+            -X64Exe sign-pe/linerule-x64.exe `
+            -Arm64Exe sign-pe/linerule-arm64.exe `
+            -X64SettingsExe binaries/release-binary-x64/settings/linerule-settings.exe `
+            -Arm64SettingsExe binaries/release-binary-arm64/settings/linerule-settings.exe `
+            -OutputDirectory install-test-old
+      - name: stage MSIX bundle for signing
+        if: env.HAVE_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path sign-bundle | Out-Null
+          Copy-Item dist/linerule.msixbundle sign-bundle/
+          Copy-Item install-test-old/linerule.msixbundle `
+            sign-bundle/linerule-old.msixbundle
+      - name: sign MSIX bundle
+        if: env.HAVE_SIGNING == 'true'
+        uses: SSLcom/esigner-codesign@cf5f6c1d38ad10f47e3ed9aca873f429b1a8d85b # v1.3.2
+        with:
+          command: batch_sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          dir_path: ${{ github.workspace }}\sign-bundle
+          output_path: ${{ github.workspace }}\signed-bundle
+          environment_name: PROD
+          malware_block: "true"
+      - name: select and verify final bundle
+        shell: pwsh
+        run: |
+          if ($env:HAVE_SIGNING -eq "true") {
+            Copy-Item signed-bundle/linerule.msixbundle `
+              dist/linerule.msixbundle -Force
+            Copy-Item signed-bundle/linerule-old.msixbundle `
+              install-test-old/linerule.msixbundle -Force
+            foreach ($bundle in @(
+              "dist/linerule.msixbundle",
+              "install-test-old/linerule.msixbundle"
+            )) {
+              $signature = Get-AuthenticodeSignature $bundle
+              if ($signature.Status -ne "Valid") {
+                throw "Invalid MSIX bundle signature on $bundle`: $($signature.Status)"
+              }
+            }
+          }
+      - name: generate SBOM and source SPDX
+        shell: pwsh
+        run: |
+          mise exec rust cargo:cargo-sbom dotnet dotnet:CycloneDX cyclonedx `
+            --command (
+              "powershell.exe -NoProfile -ExecutionPolicy Bypass " +
+              "-File tools/New-Sbom.ps1 " +
+              "-OutputFile dist/linerule-sbom.cdx.json"
+            )
+          if ($LASTEXITCODE -ne 0) { throw "merged SBOM generation failed" }
+          mise exec pipx:reuse --command "reuse lint"
+          if ($LASTEXITCODE -ne 0) { throw "reuse lint failed" }
+          mise exec pipx:reuse --command "reuse spdx --output dist/linerule-source.spdx"
+      - name: generate checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            "linerule.msixbundle",
+            "linerule.appinstaller",
+            "linerule-portable-x64.zip",
+            "linerule-portable-arm64.zip",
+            "linerule-sbom.cdx.json",
+            "linerule-source.spdx"
+          )
+          $lines = foreach ($name in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 "dist/$name").Hash.ToLower()
+            "$hash  $name"
+          }
+          [System.IO.File]::WriteAllText(
+            "$PWD/dist/SHA256SUMS.txt", ($lines -join "`n") + "`n",
+            [System.Text.UTF8Encoding]::new($false))
+      - name: fail-closed release validation
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $arguments = "cargo xtask release-check --artifacts dist"
+          if ($env:PUBLISH -eq "true") {
+            $arguments += " --expected-tag $tag"
+          }
+          if ($env:HAVE_SIGNING -ne "true") {
+            $arguments += " --allow-unsigned"
+          }
+          mise exec rust --command $arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "release-check failed with exit code $LASTEXITCODE"
+          }
+      - name: installed update, repair, uninstall, and Portable isolation
+        if: env.HAVE_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          ./packaging/Test-Packages.ps1 `
+            -PreviousBundlePath install-test-old/linerule.msixbundle `
+            -PreviousAppInstallerPath install-test-old/linerule.appinstaller `
+            -BundlePath dist/linerule.msixbundle `
+            -AppInstallerPath dist/linerule.appinstaller `
+            -PortableZip dist/linerule-portable-x64.zip `
+            -RequireSignature
+      - name: stage native package evidence
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force `
+            -Path target/release-evidence/dist | Out-Null
+          New-Item -ItemType Directory -Force `
+            -Path target/release-evidence/install-test-old | Out-Null
+          if (Test-Path -LiteralPath dist -PathType Container) {
+            Copy-Item dist/* target/release-evidence/dist/
+          }
+          if (Test-Path -LiteralPath (
+            "install-test-old/linerule.msixbundle"
+          ) -PathType Leaf) {
+            Copy-Item install-test-old/linerule.msixbundle `
+              target/release-evidence/install-test-old/
+          }
+          if (Test-Path -LiteralPath (
+            "install-test-old/linerule.appinstaller"
+          ) -PathType Leaf) {
+            Copy-Item install-test-old/linerule.appinstaller `
+              target/release-evidence/install-test-old/
+          }
+      - name: upload release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: stable-release-assets
+          path: target/release-evidence
+          if-no-files-found: error
+      - name: create or reuse draft release
         if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
-        run: |-
+        run: |
           $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # `--clobber` makes re-uploads idempotent (manual retry).
-          gh release upload $tag `
-            "linerule-${tag}-win-x64.exe" `
-            "linerule-${tag}-sbom.cdx.json" `
-            "SHA256SUMS.txt" `
-            --clobber
-
-      # build provenance + SBOM attestation (keyless / OIDC, no stored secrets),
-      # over the signed final bytes. Verify:
-      # `gh attestation verify linerule-vX.Y.Z-win-x64.exe --repo P4suta/linerule-rs`.
-      - name: attest build provenance
+          $draft = & mise exec "aqua:cli/cli" -- gh release view $tag `
+            --json isDraft --jq ".isDraft" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            & mise exec "aqua:cli/cli" -- gh release create $tag `
+              --draft --title $tag --generate-notes
+          } elseif ($draft -ne "true") {
+            throw "Release $tag is already published and immutable"
+          }
+      - name: upload complete draft
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          & mise exec "aqua:cli/cli" -- gh release upload $tag dist/* --clobber
+      - name: attest release assets
         if: env.PUBLISH == 'true'
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
-            linerule-${{ github.event.inputs.tag || github.ref_name }}-win-x64.exe
-            SHA256SUMS.txt
-
-      # actions/attest-sbom is deprecated in favor of the generic actions/attest
-      # (same inputs). https://github.com/actions/attest-sbom
+            dist/linerule.msixbundle
+            dist/linerule.appinstaller
+            dist/linerule-portable-x64.zip
+            dist/linerule-portable-arm64.zip
+            dist/linerule-sbom.cdx.json
+            dist/linerule-source.spdx
+            dist/SHA256SUMS.txt
       - name: attest SBOM
         if: env.PUBLISH == 'true'
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
-          subject-path: linerule-${{ github.event.inputs.tag || github.ref_name }}-win-x64.exe
-          sbom-path: linerule-${{ github.event.inputs.tag || github.ref_name }}-sbom.cdx.json
+          subject-path: dist/linerule.msixbundle
+          sbom-path: dist/linerule-sbom.cdx.json
 
-      - name: publish release (draft → public, locks immutable)
-        if: env.PUBLISH == 'true'
+  arm64-package-lifecycle:
+    name: signed package lifecycle (Windows 11 ARM64)
+    needs: package
+    if: github.event_name != 'workflow_dispatch' || inputs.publish
+    runs-on: windows-11-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: stable-release-assets
+          path: release-evidence
+      - name: install, update, repair, uninstall, and verify Portable isolation
+        shell: pwsh
+        run: |
+          ./packaging/Test-Packages.ps1 `
+            -PreviousBundlePath release-evidence/install-test-old/linerule.msixbundle `
+            -PreviousAppInstallerPath release-evidence/install-test-old/linerule.appinstaller `
+            -BundlePath release-evidence/dist/linerule.msixbundle `
+            -AppInstallerPath release-evidence/dist/linerule.appinstaller `
+            -PortableZip release-evidence/dist/linerule-portable-arm64.zip `
+            -RequireSignature
+
+  publish:
+    name: publish immutable release
+    needs: [package, arm64-package-lifecycle]
+    if: github.event_name != 'workflow_dispatch' || inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          version: 2026.7.13
+          install_args: aqua:cli/cli
+          cache: true
+      - name: publish verified draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
+        shell: bash
         run: |-
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          # Immutable lock applies here; later asset adds are rejected with 422.
-          gh release edit $tag --draft=false --latest
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          mise exec aqua:cli/cli -- gh release edit "$tag" --draft=false --latest

@@ -1,6 +1,6 @@
 version: 2
 
-# Dependabot is the only allowed scheduled job. Bumps Cargo crates weekly
+# Dependabot owns scheduled dependency updates. It bumps Cargo crates weekly
 # and pins GitHub Actions to fresh SHAs.
 #
 # Every entry pins commit-message.prefix to "build(deps)" so the
@@ -32,13 +32,6 @@ updates:
           - "windows-*"
 
   - package-ecosystem: github-actions
-    directory: "/"
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "build(deps)"
-  - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly

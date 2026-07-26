@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Linerule.Settings (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Linerule.Settings (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

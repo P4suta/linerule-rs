@@ -1,7 +1,8 @@
-//! Integration: assert `UserConfig::DEFAULT` values are sensible (not just that they compile).
+//! Integration: assert internal policy defaults are sensible.
 
 use linerule_core::{
-    HudConfig, InputConfig, OverlayConfig, RenderConfig, SurroundEffect, UserConfig,
+    BlurAmount, CoreError, HudConfig, Opacity, OverlayConfig, RenderConfig, SurroundEffect,
+    TapStepConfig, Thickness,
 };
 
 #[test]
@@ -57,45 +58,29 @@ fn default_render_fallback_refresh_is_reasonable() {
 }
 
 #[test]
-fn default_repeat_timings_are_non_zero() {
-    let r = InputConfig::DEFAULT.repeat;
-    assert!(!r.initial_delay.is_zero(), "initial_delay must be non-zero");
-    assert!(
-        !r.long_press_threshold.is_zero(),
-        "long_press_threshold must be non-zero"
-    );
-    assert!(!r.release_poll.is_zero(), "release_poll must be non-zero");
-    assert!(
-        !r.slow_repeat_interval.is_zero(),
-        "slow_repeat_interval must be non-zero"
-    );
-}
-
-#[test]
-fn default_long_press_threshold_exceeds_release_poll() {
-    // AwaitRelease long-press undo needs threshold > polling tick.
-    let r = InputConfig::DEFAULT.repeat;
-    assert!(
-        r.long_press_threshold > r.release_poll,
-        "long_press_threshold ({:?}) must exceed release_poll ({:?})",
-        r.long_press_threshold,
-        r.release_poll
-    );
-}
-
-#[test]
 fn default_tap_steps_are_non_zero_and_positive() {
-    let t = InputConfig::DEFAULT.tap_step;
+    let t = TapStepConfig::DEFAULT;
     assert!(t.thickness > 0, "tap_step.thickness must be positive");
     assert!(t.opacity > 0, "tap_step.opacity must be positive");
 }
 
 #[test]
-fn user_config_default_is_internally_consistent() {
-    // Guard against drift: aggregate sub-defaults must match individual sub-defaults.
-    let u = UserConfig::DEFAULT;
-    assert_eq!(u.overlay, OverlayConfig::DEFAULT);
-    assert_eq!(u.input, InputConfig::DEFAULT);
-    assert_eq!(u.render, RenderConfig::DEFAULT);
-    assert_eq!(u.hud, HudConfig::DEFAULT);
+fn invalid_scalar_boundaries_return_typed_errors() {
+    assert!(matches!(
+        Opacity::try_new(0),
+        Err(CoreError::Opacity { given: 0 })
+    ));
+    assert!(matches!(
+        Thickness::try_new(0),
+        Err(CoreError::Thickness { given: 0 })
+    ));
+    assert!(matches!(
+        Thickness::try_new(2_049),
+        Err(CoreError::Thickness { given: 2_049 })
+    ));
+    assert!(matches!(
+        BlurAmount::try_new(0),
+        Err(CoreError::Blur { given: 0 })
+    ));
+    assert_eq!(BlurAmount::try_new(1).map(BlurAmount::get), Ok(1));
 }
