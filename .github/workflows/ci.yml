@@ -476,8 +476,10 @@ jobs:
       - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
         with:
           version: 2026.7.13
-          install_args: rust dotnet dotnet:CycloneDX cyclonedx cargo:cargo-sbom
+          install_args: rust dotnet cyclonedx cargo:cargo-sbom
           cache: true
+      - name: Install exact CycloneDX .NET tool
+        run: mise install dotnet:CycloneDX
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Generate and validate Rust, WinUI x64, and WinUI ARM64 dependencies
         shell: pwsh

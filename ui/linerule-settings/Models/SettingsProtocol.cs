@@ -20,12 +20,6 @@ public sealed record SettingsResponse(
 
 public static class SettingsProtocol
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = false,
-        WriteIndented = true,
-    };
-
     public static (SettingsRequest Request, string? ResponsePath) ReadLaunch(string[] args)
     {
         string? requestPath = null;
@@ -52,9 +46,9 @@ public static class SettingsProtocol
         }
 
         requestPath = ValidateProtocolPath(requestPath, mustExist: true);
-        var request = JsonSerializer.Deserialize<SettingsRequest>(
+        var request = JsonSerializer.Deserialize(
             File.ReadAllText(requestPath),
-            JsonOptions);
+            SettingsJsonContext.Default.SettingsRequest);
         if (request?.Hotkeys is null)
         {
             throw new JsonException("Settings request must contain a hotkeys object.");
@@ -66,7 +60,9 @@ public static class SettingsProtocol
     {
         path = ValidateProtocolPath(path, mustExist: false);
         var temporary = $"{path}.tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(response, JsonOptions));
+        File.WriteAllText(
+            temporary,
+            JsonSerializer.Serialize(response, SettingsJsonContext.Default.SettingsResponse));
         File.Move(temporary, path, true);
     }
 
@@ -88,4 +84,13 @@ public static class SettingsProtocol
         }
         return fullPath;
     }
+}
+
+[JsonSourceGenerationOptions(
+    PropertyNameCaseInsensitive = false,
+    WriteIndented = true)]
+[JsonSerializable(typeof(SettingsRequest))]
+[JsonSerializable(typeof(SettingsResponse))]
+internal sealed partial class SettingsJsonContext : JsonSerializerContext
+{
 }
