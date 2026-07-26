@@ -11,9 +11,14 @@ namespace Linerule.Settings;
 
 public sealed partial class MainPage : Page
 {
-    private const int FocusRetryCount = 8;
+    private const int FocusRetryCount = 20;
+    private static readonly TimeSpan FocusRetryInterval =
+        TimeSpan.FromMilliseconds(100);
 
     public MainPageViewModel ViewModel { get; } = new(App.Request);
+
+    private DispatcherTimer? _focusTimer;
+    private int _focusAttemptsRemaining;
 
     public MainPage()
     {
@@ -24,24 +29,40 @@ public sealed partial class MainPage : Page
     {
         if (ViewModel.HighlightedAutomationId is { } automationId)
         {
-            TryFocusShortcut(automationId, FocusRetryCount);
+            if (TryFocusShortcut(automationId) || _focusTimer is not null)
+            {
+                return;
+            }
+            _focusAttemptsRemaining = FocusRetryCount;
+            _focusTimer = new DispatcherTimer
+            {
+                Interval = FocusRetryInterval,
+            };
+            _focusTimer.Tick += FocusTimer_Tick;
+            _focusTimer.Start();
         }
     }
 
-    private void TryFocusShortcut(string automationId, int attemptsRemaining)
+    private void FocusTimer_Tick(object? sender, object e)
     {
-        if (FindByAutomationId(this, automationId) is { } element
-            && element.Focus(FocusState.Programmatic))
+        _focusAttemptsRemaining--;
+        if (ViewModel.HighlightedAutomationId is { } automationId
+            && !TryFocusShortcut(automationId)
+            && _focusAttemptsRemaining > 0)
         {
             return;
         }
-        if (attemptsRemaining > 0)
+        if (_focusTimer is { } timer)
         {
-            DispatcherQueue.TryEnqueue(
-                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
-                () => TryFocusShortcut(automationId, attemptsRemaining - 1));
+            timer.Stop();
+            timer.Tick -= FocusTimer_Tick;
+            _focusTimer = null;
         }
     }
+
+    private bool TryFocusShortcut(string automationId) =>
+        FindByAutomationId(this, automationId) is { } element
+        && element.Focus(FocusState.Keyboard);
 
     private void ShortcutButton_Click(object sender, RoutedEventArgs e)
     {
