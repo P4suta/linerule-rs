@@ -59,7 +59,6 @@
                                     AutomationProperties.Name="{x:Bind AccessibleName, Mode=OneWay}"
                                     Click="ShortcutButton_Click"
                                     Content="{x:Bind DisplayChord, Mode=OneWay}"
-                                    Loaded="ShortcutButton_Loaded"
                                     PreviewKeyDown="ShortcutButton_PreviewKeyDown"
                                     Tag="{x:Bind Mode=OneTime}" />
                             </controls:SettingsCard>

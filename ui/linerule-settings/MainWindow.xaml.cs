@@ -17,7 +17,18 @@ public sealed partial class MainWindow : Window
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
 
+        Activated += MainWindow_Activated;
         RootPage.Loaded += RootPage_Loaded;
+    }
+
+    private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
+    {
+        if (args.WindowActivationState == WindowActivationState.Deactivated)
+        {
+            return;
+        }
+        Activated -= MainWindow_Activated;
+        RootPage.FocusHighlightedShortcut();
     }
 
     private void RootPage_Loaded(object sender, RoutedEventArgs e)

@@ -82,9 +82,6 @@ public static class LineruleHighContrastApi
         uint parameter,
         ref HighContrast value,
         uint flags);
-
-    [DllImport("kernel32.dll")]
-    public static extern IntPtr LocalFree(IntPtr memory);
 }
 "@
 
@@ -101,23 +98,16 @@ function Get-HighContrastSnapshot {
             [System.Runtime.InteropServices.Marshal]::GetLastWin32Error())
     }
 
-    try {
-        $scheme = if ($value.DefaultScheme -eq [IntPtr]::Zero) {
-            ""
-        } else {
-            [System.Runtime.InteropServices.Marshal]::PtrToStringUni(
-                $value.DefaultScheme)
-        }
-        return [pscustomobject]@{
-            Flags = $value.Flags
-            Scheme = $scheme
-        }
+    $scheme = if ($value.DefaultScheme -eq [IntPtr]::Zero) {
+        ""
     }
-    finally {
-        if ($value.DefaultScheme -ne [IntPtr]::Zero) {
-            [LineruleHighContrastApi]::LocalFree($value.DefaultScheme) |
-                Out-Null
-        }
+    else {
+        [System.Runtime.InteropServices.Marshal]::PtrToStringUni(
+            $value.DefaultScheme)
+    }
+    return [pscustomobject]@{
+        Flags = $value.Flags
+        Scheme = $scheme
     }
 }
 

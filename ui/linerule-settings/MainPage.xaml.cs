@@ -11,6 +11,8 @@ namespace Linerule.Settings;
 
 public sealed partial class MainPage : Page
 {
+    private const int FocusRetryCount = 8;
+
     public MainPageViewModel ViewModel { get; } = new(App.Request);
 
     public MainPage()
@@ -18,12 +20,26 @@ public sealed partial class MainPage : Page
         InitializeComponent();
     }
 
-    private void ShortcutButton_Loaded(object sender, RoutedEventArgs e)
+    internal void FocusHighlightedShortcut()
     {
-        if (sender is Button { Tag: ShortcutItemViewModel item } button
-            && item.AutomationId == ViewModel.HighlightedAutomationId)
+        if (ViewModel.HighlightedAutomationId is { } automationId)
         {
-            button.Focus(FocusState.Programmatic);
+            TryFocusShortcut(automationId, FocusRetryCount);
+        }
+    }
+
+    private void TryFocusShortcut(string automationId, int attemptsRemaining)
+    {
+        if (FindByAutomationId(this, automationId) is { } element
+            && element.Focus(FocusState.Programmatic))
+        {
+            return;
+        }
+        if (attemptsRemaining > 0)
+        {
+            DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () => TryFocusShortcut(automationId, attemptsRemaining - 1));
         }
     }
 
