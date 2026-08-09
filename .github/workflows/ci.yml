@@ -44,7 +44,7 @@ jobs:
           version: 2026.7.13
           install_args: rust cargo:cargo-nextest
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: cargo build (exclude platform-windows)
         run: mise exec rust --command 'cargo build --workspace --exclude linerule-platform-windows --all-targets'
       - name: cargo nextest (exclude platform-windows)
@@ -83,7 +83,7 @@ jobs:
           version: 2026.7.13
           install_args: rust cargo:cargo-nextest
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: mise exec rust --command 'cargo build --workspace --all-targets --target ${{ matrix.target }}'
       - run: mise exec cargo:cargo-nextest --command 'cargo nextest run --profile ci --workspace --all-targets --target ${{ matrix.target }}'
       - run: mise exec rust --command 'cargo test --doc --workspace --target ${{ matrix.target }}'
@@ -138,7 +138,7 @@ jobs:
           version: 2026.7.13
           install_args: rust dotnet node npm:@microsoft/winappcli
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: enable Developer Mode for WinApp CLI
         shell: pwsh
         run: |
@@ -215,7 +215,7 @@ jobs:
           version: 2026.7.13
           install_args: rust cargo:cargo-xwin
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         # Cache unpacked sysroot so re-runs skip the 25s fetch. cargo-xwin v0.18+
         # stores it under ~/.cache/cargo-xwin/. Bump key on upstream schema change.
@@ -245,7 +245,7 @@ jobs:
           version: 2026.7.13
           install_args: rust
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: mise exec rust --command 'cargo build --release -p linerule-app --target ${{ matrix.target }}'
       # pwsh `& $exe` returns immediately and never sets `$LASTEXITCODE`;
       # `Start-Process -Wait -PassThru` blocks and exposes `ExitCode`.
@@ -318,7 +318,7 @@ jobs:
           version: 2026.7.13
           install_args: rust
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: mise exec rust --command 'cargo clippy --workspace --all-targets --exclude linerule-platform-windows -- -D warnings'
 
   # Gate `cargo doc -D warnings` on every CI trigger.
@@ -334,7 +334,7 @@ jobs:
           version: 2026.7.13
           install_args: rust
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - env:
           RUSTDOCFLAGS: -D warnings
         run: mise exec rust --command 'cargo doc --workspace --no-deps --exclude linerule-platform-windows'
@@ -351,7 +351,7 @@ jobs:
           version: 2026.7.13
           install_args: rust
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: mise exec rust --command 'cargo xtask dep-graph'
 
   policy:
@@ -365,7 +365,7 @@ jobs:
           version: 2026.7.13
           install_args: rust
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: mise exec rust --command 'cargo xtask policy'
 
   spell-check:
@@ -405,7 +405,7 @@ jobs:
           version: 2026.7.13
           install_args: rust cargo:cargo-deny
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: mise exec cargo:cargo-deny --command 'cargo deny check advisories bans licenses sources'
 
   cargo-machete:
@@ -466,7 +466,7 @@ jobs:
           cache: true
       - name: Install exact CycloneDX .NET tool
         run: mise install dotnet:CycloneDX
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Generate and validate Rust, WinUI x64, and WinUI ARM64 dependencies
         shell: pwsh
         run: >-
@@ -494,7 +494,7 @@ jobs:
           version: 2026.7.13
           install_args: rust cargo:cargo-mutants cargo:cargo-nextest python
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Run core mutation tests
         run: mise exec cargo:cargo-mutants cargo:cargo-nextest --command 'cargo mutants -p linerule-core --test-tool nextest --no-shuffle'
       - name: Require every viable mutant to be caught
@@ -527,7 +527,7 @@ jobs:
           version: 2026.7.13
           install_args: rust python
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: criterion-comparison
       - name: Select and stage the comparison commit
@@ -592,7 +592,7 @@ jobs:
           cache: true
       - name: Install pinned nightly coverage toolchain
         run: mise --env coverage install rust
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: cargo llvm-cov (line/function/region gates)
         run: mise exec cargo:cargo-llvm-cov cargo:cargo-nextest --command 'cargo llvm-cov nextest --workspace --exclude linerule-platform-windows --exclude xtask --json --summary-only --output-path coverage-lines.json --fail-under-lines 90 --fail-under-functions 90 --fail-under-regions 90'
       - name: cargo llvm-cov (branch measurement)
@@ -620,7 +620,7 @@ jobs:
           version: 2026.7.13
           install_args: rust cargo:cargo-llvm-cov cargo:cargo-nextest python
           cache: true
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: cargo llvm-cov (non-FFI line gate)
         run: >-
           mise exec cargo:cargo-llvm-cov cargo:cargo-nextest
