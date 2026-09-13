@@ -53,8 +53,8 @@ tracing-test = "0.2"
 uuid = { version = "1", features = ["v4", "fast-rng", "serde"] }
 # Win32 / COM
 windows = "0.62"
-windows-core = "0.62"
-windows-numerics = "0.3"
+windows-core = "0.100"
+windows-numerics = "0.100"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
