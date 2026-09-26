@@ -5,7 +5,7 @@ lives in the notification area, and draws only while the ruler or a short
 status guide is visible.
 
 <!-- x-release-please-start-version -->
-Version 0.6.0 supports Windows 11 build 26100 or newer on x64 and ARM64.
+Version 0.6.1 supports Windows 11 build 26100 or newer on x64 and ARM64.
 <!-- x-release-please-end -->
 
 ## Install

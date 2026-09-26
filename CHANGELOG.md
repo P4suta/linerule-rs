@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.6.1](https://github.com/P4suta/linerule-rs/compare/v0.6.0...v0.6.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* harden release workflow orchestration ([#176](https://github.com/P4suta/linerule-rs/issues/176)) ([3471573](https://github.com/P4suta/linerule-rs/commit/3471573063eb1ec85f72c015e95ef8d75fa88abc))
+
+
+### Build System
+
+* **deps:** Bump actions/attest from 4.2.0 to 4.2.1 ([#179](https://github.com/P4suta/linerule-rs/issues/179)) ([ef85479](https://github.com/P4suta/linerule-rs/commit/ef854795029b59ea7470130d86291e14753cfa94))
+* **deps:** Bump actions/attest from 4.2.1 to 4.2.2 ([#185](https://github.com/P4suta/linerule-rs/issues/185)) ([cdf2d2f](https://github.com/P4suta/linerule-rs/commit/cdf2d2fd1b05e50f87867d6a3de9b3453263923d))
+* **deps:** Bump actions/attest-build-provenance from 4.1.1 to 4.2.2 ([#180](https://github.com/P4suta/linerule-rs/issues/180)) ([a7fdff8](https://github.com/P4suta/linerule-rs/commit/a7fdff86502af213eaebee70789d9dc92c13b053))
+* **deps:** Bump github/codeql-action/upload-sarif from 4.37.3 to 4.37.4 ([#178](https://github.com/P4suta/linerule-rs/issues/178)) ([7c42b60](https://github.com/P4suta/linerule-rs/commit/7c42b608b24e728d60b7a8685374a3cf9301f2d8))
+* **deps:** Bump github/codeql-action/upload-sarif from 4.37.4 to 4.37.6 ([#182](https://github.com/P4suta/linerule-rs/issues/182)) ([19418d7](https://github.com/P4suta/linerule-rs/commit/19418d79d054feccf3f0a8feaa5bad85765128a4))
+* **deps:** Bump github/codeql-action/upload-sarif from 4.37.6 to 4.37.7 ([#189](https://github.com/P4suta/linerule-rs/issues/189)) ([8a4e765](https://github.com/P4suta/linerule-rs/commit/8a4e7654c7961abc05a5da6cd2327eb5fcba47a2))
+* **deps:** Bump jdx/mise-action from 4.2.3 to 4.2.4 ([#184](https://github.com/P4suta/linerule-rs/issues/184)) ([9a4c910](https://github.com/P4suta/linerule-rs/commit/9a4c9102bb4fb2f31ae10ab1bd1b748feec9a192))
+* **deps:** Bump jdx/mise-action from 4.2.4 to 4.2.5 ([#187](https://github.com/P4suta/linerule-rs/issues/187)) ([77ece85](https://github.com/P4suta/linerule-rs/commit/77ece854d52b6def01edcec3011a0c9a63183aaa))
+* **deps:** Bump Swatinem/rust-cache from 2.9.1 to 2.9.2 ([#183](https://github.com/P4suta/linerule-rs/issues/183)) ([7ff55c4](https://github.com/P4suta/linerule-rs/commit/7ff55c45580f72e2f215cd6ff5b13f9882aebf4a))
+* **deps:** Bump uuid from 1.24.0 to 1.24.1 ([#190](https://github.com/P4suta/linerule-rs/issues/190)) ([3f790d1](https://github.com/P4suta/linerule-rs/commit/3f790d1381cfbf98b1fc3881250f165fe6804d86))
+* **deps:** move dependency updates from Dependabot to Renovate ([#202](https://github.com/P4suta/linerule-rs/issues/202)) ([692b4ce](https://github.com/P4suta/linerule-rs/commit/692b4cecbe497c98aeebf8bcccc9ee5c70a2ebbd))
+
+
+### Continuous Integration
+
+* add the required aggregate job ([#205](https://github.com/P4suta/linerule-rs/issues/205)) ([af99773](https://github.com/P4suta/linerule-rs/commit/af99773f54b245261b9be82dd4846d653a8d4b09))
+
 ## [0.6.0](https://github.com/P4suta/linerule-rs/compare/v0.5.0...v0.6.0) (2026-07-26)
 
 
