@@ -165,9 +165,9 @@ impl DesktopShell {
 
 impl Drop for DesktopShell {
     fn drop(&mut self) {
-        if let Err(error) = kill_controller_timer(self.hwnd, PREFERENCES_TIMER_ID) {
-            tracing::warn!(%error, "preferences debounce KillTimer failed");
-        }
+        // The timer is optional, and KillTimer reports false when it was never armed without setting a meaningful last error.
+        // Teardown only needs to ensure that no live timer survives the HWND.
+        let _ = unsafe { KillTimer(Some(self.hwnd), PREFERENCES_TIMER_ID) };
         if self.tray_added
             && let Err(error) = remove_tray(self.hwnd)
         {
