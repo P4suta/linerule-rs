@@ -7,7 +7,6 @@ use std::time::Duration;
 use std::{env, ffi::OsString};
 
 use thiserror::Error;
-use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -35,9 +34,8 @@ pub(crate) enum LoggingError {
     },
 }
 
-/// Owned logging resources. Dropping this value flushes the file writer.
+/// Logging state retained by the application session.
 pub(crate) struct LoggingSession {
-    _guard: WorkerGuard,
     ring: EventRing,
 }
 
@@ -68,16 +66,17 @@ pub(crate) fn init(
         .filename_prefix("events.jsonl")
         .max_log_files(7)
         .build(&paths.logs)?;
-    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
     let ring = EventRing::new();
 
     let env_filter = configured_filter()?;
 
+    // The default filter excludes per-frame traces, so direct file writes stay off the render hot path.
+    // Avoiding the background writer's shutdown handshake also keeps a clean exit inside the application's one-second contract.
     let file_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_target(true)
         .with_thread_names(true)
-        .with_writer(file_writer);
+        .with_writer(file_appender);
 
     let registry = tracing_subscriber::registry()
         .with(env_filter)
@@ -95,10 +94,7 @@ pub(crate) fn init(
         registry.try_init()?;
     }
 
-    Ok(LoggingSession {
-        _guard: guard,
-        ring,
-    })
+    Ok(LoggingSession { ring })
 }
 
 fn configured_filter() -> Result<EnvFilter, LoggingError> {
