@@ -1,8 +1,0 @@
-{
-  "config": "windows",
-  "keys": ["MSIX_PUBLISHER"],
-  "project": "shared-signing",
-  "ref": "refs/heads/main",
-  "repository": "P4suta/linerule-rs",
-  "repository_id": "1234827932"
-}
