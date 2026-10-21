@@ -72,6 +72,7 @@ pub(crate) fn boot(cli: Cli) -> Result<()> {
         writable_store,
         first_gui_launch,
     )?;
+    tracing::info!("application dispatch completed");
     Ok(())
 }
 

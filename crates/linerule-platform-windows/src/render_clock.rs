@@ -98,6 +98,7 @@ impl RenderClock {
 
 impl Drop for RenderClock {
     fn drop(&mut self) {
+        tracing::info!("stopping render-clock owner");
         self.shared.stop.store(true, Ordering::Release);
         self.shared.wake.notify_all();
         if let Some(handle) = self.handle.take()
@@ -105,6 +106,7 @@ impl Drop for RenderClock {
         {
             tracing::error!(?error, "render-clock thread panicked during shutdown");
         }
+        tracing::info!("render-clock owner stopped");
     }
 }
 

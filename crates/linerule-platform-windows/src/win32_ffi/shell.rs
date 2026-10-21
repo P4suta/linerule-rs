@@ -165,6 +165,7 @@ impl DesktopShell {
 
 impl Drop for DesktopShell {
     fn drop(&mut self) {
+        tracing::info!("releasing controller timer and tray");
         // The timer is optional, and KillTimer reports false when it was never armed without setting a meaningful last error.
         // Teardown only needs to ensure that no live timer survives the HWND.
         let _ = kill_controller_timer(self.hwnd, PREFERENCES_TIMER_ID);
@@ -173,10 +174,12 @@ impl Drop for DesktopShell {
         {
             tracing::warn!(%error, "tray icon removal failed");
         }
+        tracing::info!("destroying controller window");
         // SAFETY: hwnd is owned by this shell and destroyed on its UI thread.
         if let Err(error) = unsafe { DestroyWindow(self.hwnd) } {
             tracing::warn!(%error, "controller DestroyWindow failed");
         }
+        tracing::info!("controller window cleanup completed");
     }
 }
 

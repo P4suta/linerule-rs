@@ -288,6 +288,7 @@ impl DesktopRuntime {
         if updated != persisted {
             persist_preferences(options.persist.as_deref(), &updated)?;
         }
+        tracing::info!("runtime state persisted; releasing native owners");
         Ok(updated)
     }
 

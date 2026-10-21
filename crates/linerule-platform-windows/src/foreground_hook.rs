@@ -41,10 +41,12 @@ impl ForegroundHook {
 #[cfg(target_os = "windows")]
 impl Drop for ForegroundHook {
     fn drop(&mut self) {
+        tracing::info!("removing foreground hook");
         if !self.hook.0.is_null()
             && let Err(e) = accessibility::unhook_win_event(self.hook)
         {
             tracing::warn!(error = %e, "UnhookWinEvent failed during ForegroundHook::drop");
         }
+        tracing::info!("foreground hook cleanup completed");
     }
 }
