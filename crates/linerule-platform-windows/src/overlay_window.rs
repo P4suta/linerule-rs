@@ -269,6 +269,7 @@ impl OverlayWindow {
 
 impl Drop for OverlayWindow {
     fn drop(&mut self) {
+        tracing::info!("releasing overlay hotkeys");
         // Unregister hotkeys while the HWND is still alive.
         let ids = win32_ffi::with_userdata(self.hwnd, OverlayWndState::registered_hotkey_ids)
             .unwrap_or_default();
@@ -279,9 +280,11 @@ impl Drop for OverlayWindow {
         }
         // `DestroyWindow` fires WM_NCDESTROY, whose FFI callback clears the
         // userdata slot and reclaims the `Box<OverlayWndState>` in place.
+        tracing::info!("destroying overlay window");
         if let Err(e) = win32_ffi::destroy_window(self.hwnd) {
             tracing::warn!(error = %e, "DestroyWindow failed during OverlayWindow::drop");
         }
+        tracing::info!("overlay window cleanup completed");
     }
 }
 
