@@ -12,6 +12,8 @@ use crate::foreground_hook::ForegroundHook;
 use crate::overlay_window::OverlayWindow;
 use crate::render_clock::RenderClock;
 
+const STARTUP_NOTICE_LIFETIME_MS: i64 = 10_000;
+
 type PersistenceFn = dyn Fn(&Preferences) -> std::result::Result<(), String> + 'static;
 type PersistenceCallback = Box<PersistenceFn>;
 
@@ -154,7 +156,11 @@ impl DesktopRuntime {
             None
         };
         if let Some(notice) = options.startup_notice {
-            overlay.push_notification(NotificationClass::Warn, notice, 10_000)?;
+            overlay.push_notification(
+                NotificationClass::Warn,
+                notice,
+                STARTUP_NOTICE_LIFETIME_MS,
+            )?;
         }
         if let Some(error) = startup_registration_error.as_ref() {
             if let Err(settings_error) = shell.show_settings_error(error) {
