@@ -219,8 +219,8 @@ jobs:
       attestations: write
     env:
       PUBLISH: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
-      HAVE_SIGNING: ${{ secrets.ES_USERNAME != '' && secrets.CREDENTIAL_ID != '' && secrets.MSIX_PUBLISHER != '' }}
-      PACKAGE_PUBLISHER: ${{ secrets.MSIX_PUBLISHER || 'CN=linerule Development' }}
+      HAVE_SIGNING: ${{ vars.DOPPLER_SIGN_WINDOWS_IDENTITY_ID != '' && vars.MSIX_PUBLISHER != '' }}
+      PACKAGE_PUBLISHER: ${{ vars.MSIX_PUBLISHER || 'CN=linerule Development' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -259,15 +259,40 @@ jobs:
         if: env.PUBLISH == 'true' && env.HAVE_SIGNING != 'true'
         shell: pwsh
         run: throw "Publishing requires eSigner credentials and MSIX_PUBLISHER"
+      - name: Fetch sign_windows credentials
+        id: doppler_sign_windows_7
+        if: "env.HAVE_SIGNING == 'true'"
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ vars.DOPPLER_SIGN_WINDOWS_IDENTITY_ID }}
+          doppler-project: linerule-rs
+          doppler-config: sign_windows
+          inject-env-vars: false
+      - name: Reject missing or unresolved sign_windows credentials
+        if: >-
+          ${{ steps.doppler_sign_windows_7.outcome == 'success' && (
+          steps.doppler_sign_windows_7.outputs.SSLDOTCOM_CREDENTIAL_ID == '' ||
+          startsWith(steps.doppler_sign_windows_7.outputs.SSLDOTCOM_CREDENTIAL_ID, '${') ||
+          steps.doppler_sign_windows_7.outputs.SSLDOTCOM_PASSWORD == '' ||
+          startsWith(steps.doppler_sign_windows_7.outputs.SSLDOTCOM_PASSWORD, '${') ||
+          steps.doppler_sign_windows_7.outputs.SSLDOTCOM_TOTP_SECRET == '' ||
+          startsWith(steps.doppler_sign_windows_7.outputs.SSLDOTCOM_TOTP_SECRET, '${') ||
+          steps.doppler_sign_windows_7.outputs.SSLDOTCOM_USERNAME == '' ||
+          startsWith(steps.doppler_sign_windows_7.outputs.SSLDOTCOM_USERNAME, '${')
+          ) }}
+        shell: bash
+        run: exit 1
+
       - name: sign PEs
         if: env.HAVE_SIGNING == 'true'
         uses: SSLcom/esigner-codesign@cf5f6c1d38ad10f47e3ed9aca873f429b1a8d85b # v1.3.2
         with:
           command: batch_sign
-          username: ${{ secrets.ES_USERNAME }}
-          password: ${{ secrets.ES_PASSWORD }}
-          credential_id: ${{ secrets.CREDENTIAL_ID }}
-          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          username: ${{ steps.doppler_sign_windows_7.outputs.SSLDOTCOM_USERNAME }}
+          password: ${{ steps.doppler_sign_windows_7.outputs.SSLDOTCOM_PASSWORD }}
+          credential_id: ${{ steps.doppler_sign_windows_7.outputs.SSLDOTCOM_CREDENTIAL_ID }}
+          totp_secret: ${{ steps.doppler_sign_windows_7.outputs.SSLDOTCOM_TOTP_SECRET }}
           dir_path: ${{ github.workspace }}\sign-pe
           output_path: ${{ github.workspace }}\signed-pe
           environment_name: PROD
@@ -326,15 +351,40 @@ jobs:
           Copy-Item dist/linerule.msixbundle sign-bundle/
           Copy-Item install-test-old/linerule.msixbundle `
             sign-bundle/linerule-old.msixbundle
+      - name: Fetch sign_windows credentials
+        id: doppler_sign_windows_13
+        if: "env.HAVE_SIGNING == 'true'"
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ vars.DOPPLER_SIGN_WINDOWS_IDENTITY_ID }}
+          doppler-project: linerule-rs
+          doppler-config: sign_windows
+          inject-env-vars: false
+      - name: Reject missing or unresolved sign_windows credentials
+        if: >-
+          ${{ steps.doppler_sign_windows_13.outcome == 'success' && (
+          steps.doppler_sign_windows_13.outputs.SSLDOTCOM_CREDENTIAL_ID == '' ||
+          startsWith(steps.doppler_sign_windows_13.outputs.SSLDOTCOM_CREDENTIAL_ID, '${') ||
+          steps.doppler_sign_windows_13.outputs.SSLDOTCOM_PASSWORD == '' ||
+          startsWith(steps.doppler_sign_windows_13.outputs.SSLDOTCOM_PASSWORD, '${') ||
+          steps.doppler_sign_windows_13.outputs.SSLDOTCOM_TOTP_SECRET == '' ||
+          startsWith(steps.doppler_sign_windows_13.outputs.SSLDOTCOM_TOTP_SECRET, '${') ||
+          steps.doppler_sign_windows_13.outputs.SSLDOTCOM_USERNAME == '' ||
+          startsWith(steps.doppler_sign_windows_13.outputs.SSLDOTCOM_USERNAME, '${')
+          ) }}
+        shell: bash
+        run: exit 1
+
       - name: sign MSIX bundle
         if: env.HAVE_SIGNING == 'true'
         uses: SSLcom/esigner-codesign@cf5f6c1d38ad10f47e3ed9aca873f429b1a8d85b # v1.3.2
         with:
           command: batch_sign
-          username: ${{ secrets.ES_USERNAME }}
-          password: ${{ secrets.ES_PASSWORD }}
-          credential_id: ${{ secrets.CREDENTIAL_ID }}
-          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          username: ${{ steps.doppler_sign_windows_13.outputs.SSLDOTCOM_USERNAME }}
+          password: ${{ steps.doppler_sign_windows_13.outputs.SSLDOTCOM_PASSWORD }}
+          credential_id: ${{ steps.doppler_sign_windows_13.outputs.SSLDOTCOM_CREDENTIAL_ID }}
+          totp_secret: ${{ steps.doppler_sign_windows_13.outputs.SSLDOTCOM_TOTP_SECRET }}
           dir_path: ${{ github.workspace }}\sign-bundle
           output_path: ${{ github.workspace }}\signed-bundle
           environment_name: PROD

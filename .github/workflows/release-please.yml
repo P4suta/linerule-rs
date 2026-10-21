@@ -29,6 +29,9 @@ concurrency:
 
 jobs:
   release-please:
+    permissions:
+      contents: read
+      id-token: write
     name: release please
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -44,11 +47,31 @@ jobs:
           version: 2026.7.13
           install_args: rust jq aqua:cli/cli
           cache: true
+      - name: Fetch automation credentials
+        id: doppler_automation_2
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ vars.DOPPLER_AUTOMATION_IDENTITY_ID }}
+          doppler-project: linerule-rs
+          doppler-config: automation
+          inject-env-vars: false
+      - name: Reject missing or unresolved automation credentials
+        if: >-
+          ${{ steps.doppler_automation_2.outcome == 'success' && (
+          steps.doppler_automation_2.outputs.GITHUB_APP_CLIENT_ID == '' ||
+          startsWith(steps.doppler_automation_2.outputs.GITHUB_APP_CLIENT_ID, '${') ||
+          steps.doppler_automation_2.outputs.GITHUB_APP_PRIVATE_KEY == '' ||
+          startsWith(steps.doppler_automation_2.outputs.GITHUB_APP_PRIVATE_KEY, '${')
+          ) }}
+        shell: bash
+        run: exit 1
+
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: app-token
         with:
-          client-id: ${{ secrets.RELEASE_PLEASE_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          client-id: ${{ steps.doppler_automation_2.outputs.GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ steps.doppler_automation_2.outputs.GITHUB_APP_PRIVATE_KEY }}
 
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: rp
