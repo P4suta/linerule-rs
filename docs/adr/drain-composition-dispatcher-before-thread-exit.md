@@ -34,4 +34,5 @@ Reconsider if Composition moves to a dedicated thread or another component owns 
 
 Require queued-work, shutdown-callback, failure-path, and native process-exit checks.
 Queued-work, shutdown-callback, and failure-path checks pass on Windows.
-The hosted process-exit check and owner acceptance remain pending.
+The hosted one-second process-exit check passes.
+Owner acceptance remains pending.
