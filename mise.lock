@@ -189,24 +189,24 @@ version = "6.2.0"
 backend = "dotnet:CycloneDX"
 
 [[tools.java]]
-version = "microsoft-21.0.13.0.2"
+version = "microsoft-25.0.5.0.2"
 backend = "core:java"
 
 [tools.java."platforms.linux-x64"]
-checksum = "sha256:5bf17d27de3fe9d102981236cdea68482e3b5ef68a44ad21c6439b45d7d34da2"
-url = "https://aka.ms/download-jdk/microsoft-jdk-21.0.13.0.2-linux-x64.tar.gz"
+checksum = "sha256:173e8e4286289335b422b591c88a1f553fc44c701a876a7c8dd29037a598fc14"
+url = "https://aka.ms/download-jdk/microsoft-jdk-25.0.5.0.2-linux-x64.tar.gz"
 
 [tools.java."platforms.macos-arm64"]
-checksum = "sha256:69d9c211fa4c384c0607e6a5870d7052542ec4e3a737e16d05681fa314ce0421"
-url = "https://aka.ms/download-jdk/microsoft-jdk-21.0.13.0.2-macos-aarch64.tar.gz"
+checksum = "sha256:c9cf199844411c8bafd05722d2547538300523a63ff6207a440c71b175ff7873"
+url = "https://aka.ms/download-jdk/microsoft-jdk-25.0.5.0.2-macos-aarch64.tar.gz"
 
 [tools.java."platforms.windows-arm64"]
-checksum = "sha256:9c1f36b1660d97ab228787294433eefaaad3e3e8963bdd3cf975b02171137ecc"
-url = "https://aka.ms/download-jdk/microsoft-jdk-21.0.13.0.2-windows-aarch64.zip"
+checksum = "sha256:f227cc459fbd65a42c1b28123d68e207eb500899c1c78238f21a038cd33688a3"
+url = "https://aka.ms/download-jdk/microsoft-jdk-25.0.5.0.2-windows-aarch64.zip"
 
 [tools.java."platforms.windows-x64"]
-checksum = "sha256:c5706a9cf482ef1a0622a86eea5b13d557b07f04554572af061e2d02b58c0f99"
-url = "https://aka.ms/download-jdk/microsoft-jdk-21.0.13.0.2-windows-x64.zip"
+checksum = "sha256:5da7525c8268a10a66bd76a39f4e9af24d4ebc974d42800a609852c498a68460"
+url = "https://aka.ms/download-jdk/microsoft-jdk-25.0.5.0.2-windows-x64.zip"
 
 [[tools.jq]]
 version = "1.8.2"

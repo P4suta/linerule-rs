@@ -1,5 +1,5 @@
-# Complete developer and release toolchain. Install exactly this environment
-# with `mise install`; local and CI commands consume this one manifest.
+# Complete developer and release toolchain.
+# Install exactly this environment with `mise install`; local and CI commands consume this one manifest.
 
 [tools]
 # Compiler, standard components, and native Windows release targets.
@@ -45,11 +45,9 @@ cargo-binstall = "1.20.0"
 "cargo:cargo-sort" = "2.1.4"
 "cargo:cargo-sbom" = "0.10.0"
 
-# Conventional-Commits linter for the lefthook commit-msg hook — the local guard
-# that keeps release-please's version + CHANGELOG derivation fed with well-formed
-# commits.
+# Conventional-Commits linter for the lefthook commit-msg hook — the local guard that keeps release-please's version + CHANGELOG derivation fed with well-formed commits.
 "cargo:committed" = "1.1.11"
-java = "microsoft-21.0.13.0.2"
+java = "microsoft-25.0.5.0.2"
 powershell = "7.6.9"
 
 [settings]
