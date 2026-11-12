@@ -327,32 +327,32 @@ backend = "pipx:reuse"
 extras = "charset-normalizer"
 
 [[tools.powershell]]
-version = "7.6.9"
+version = "7.7.0"
 backend = "aqua:PowerShell/PowerShell"
 
 [tools.powershell."platforms.linux-x64"]
-checksum = "sha256:1da6d6d6035d651f20e70ddee7c4c15ac6ab8b9fb40ee92240d91263f28a884b"
+checksum = "sha256:c89d9c682d2c403dfe726f3df948e359675235a5bd6fab535776de69729ca0cb"
 checksum_source = "mise-versions"
-url = "https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/powershell-7.6.9-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/675638183"
+url = "https://github.com/PowerShell/PowerShell/releases/download/v7.7.0/powershell-7.7.0-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/732755786"
 
 [tools.powershell."platforms.macos-arm64"]
-checksum = "sha256:a1c7e98ac403da4be5ba75c1c5855af272de7787a91d478c4267466fe58fc1af"
+checksum = "sha256:76449f078f30193fce9cdf6610b77fda14f4224cafcbdf230245ec0dab9ef10d"
 checksum_source = "mise-versions"
-url = "https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/powershell-7.6.9-osx-arm64.tar.gz"
-url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/675638480"
+url = "https://github.com/PowerShell/PowerShell/releases/download/v7.7.0/powershell-7.7.0-osx-arm64.tar.gz"
+url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/732756119"
 
 [tools.powershell."platforms.windows-arm64"]
-checksum = "sha256:2157fb002178e606c2a5532c56647118d90d029742f04d4900a71e3b478c2363"
+checksum = "sha256:5dc7440cd98f0ba786a44d7db9205df5058474fd4db143caf7171e8375f34f75"
 checksum_source = "mise-versions"
-url = "https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/PowerShell-7.6.9-win-arm64.zip"
-url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/675639035"
+url = "https://github.com/PowerShell/PowerShell/releases/download/v7.7.0/PowerShell-7.7.0-win-arm64.zip"
+url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/732756444"
 
 [tools.powershell."platforms.windows-x64"]
-checksum = "sha256:ce7484804c0f0ad4dda10c958e71acdaf7eebfb22505c1b480f89e0e9f1da94d"
+checksum = "sha256:7c74e03b20a75b59715847439d046a6214b1863ee79b187872980f139bb4a05f"
 checksum_source = "mise-versions"
-url = "https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/PowerShell-7.6.9-win-x64.zip"
-url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/675639558"
+url = "https://github.com/PowerShell/PowerShell/releases/download/v7.7.0/PowerShell-7.7.0-win-x64.zip"
+url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/732756791"
 
 [[tools.python]]
 version = "3.14.6"
