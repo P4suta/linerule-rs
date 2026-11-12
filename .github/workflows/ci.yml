@@ -3,8 +3,7 @@
 # Policy:
 #   - No `on: schedule` here; product nightlies and security audits stay isolated.
 #   - Actions SHA-pinned; Dependabot bumps weekly.
-#   - Cross-platform jobs on ubuntu-latest; Windows-native build/test on
-#     windows-latest (platform crate is `#![cfg(windows)]`).
+#   - Cross-platform jobs on ubuntu-latest; Windows-native build/test on windows-latest (platform crate is `#![cfg(windows)]`).
 #   - Coverage reported, not gated at 100%.
 #   - `Swatinem/rust-cache` over raw `actions/cache` for cargo state.
 
@@ -215,8 +214,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # clang backend: single ~283 MB sysroot tarball (~25s) vs clang-cl
-      # streaming ~500 MB of MSVC shards (~7 min).
+      # clang backend: single ~283 MB sysroot tarball (~25s) vs clang-cl streaming ~500 MB of MSVC shards (~7 min).
       XWIN_CROSS_COMPILER: clang
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -229,8 +227,8 @@ jobs:
           cache: true
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        # Cache unpacked sysroot so re-runs skip the 25s fetch. cargo-xwin v0.18+
-        # stores it under ~/.cache/cargo-xwin/. Bump key on upstream schema change.
+        # Cache unpacked sysroot so re-runs skip the 25s fetch.
+        # cargo-xwin v0.18+ stores it under ~/.cache/cargo-xwin/. Bump key on upstream schema change.
         with:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-clang-sysroot-${{ runner.os }}
@@ -266,8 +264,8 @@ jobs:
       # pwsh `& $exe` returns immediately and never sets `$LASTEXITCODE`;
       # `Start-Process -Wait -PassThru` blocks and exposes `ExitCode`.
       - name: smoke - linerule.exe version
-        # Native smoke: built binary must start and respond to subcommands (clap
-        # parse gate). linerule.exe is `windows_subsystem = "windows"` (GUI), so
+        # Native smoke: built binary must start and respond to subcommands (clap parse gate).
+        # linerule.exe is `windows_subsystem = "windows"` (GUI), so
         shell: pwsh
         run: |
           $proc = Start-Process -FilePath "target/$env:CARGO_BUILD_TARGET/release/linerule.exe" `
@@ -603,8 +601,7 @@ jobs:
           --locked --
           --baseline-lenient previous --noplot'
       - name: Reject significant regressions of 10% or more
-        # Off steady-state never calls frame(); its old Vec return ABI is not
-        # comparable to the allocation-free fixed frame returned by 0.6.
+        # Off steady-state never calls frame(); its old Vec return ABI is not comparable to the allocation-free fixed frame returned by 0.6.
         run: >-
           mise exec python --command
           'python tools/check_benchmarks.py
@@ -621,8 +618,8 @@ jobs:
           if-no-files-found: error
 
   coverage:
-    # Required gate. Scope = linerule-core + linerule-app (platform-windows is
-    # `#![cfg(windows)]`, excluded on the Linux runner; ADR-0004).
+    # Required gate.
+    # Scope = linerule-core + linerule-app (platform-windows is `#![cfg(windows)]`, excluded on the Linux runner; ADR-0004).
     name: coverage
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -705,15 +702,13 @@ jobs:
         with:
           fail-on-severity: high
           comment-summary-in-pr: true
-          # Don't render OpenSSF Scorecard annotations: most warnings come from
-          # uncontrolled transitive deps and drown out real findings.
+          # Don't render OpenSSF Scorecard annotations: most warnings come from uncontrolled transitive deps and drown out real findings.
           show-openssf-scorecard: false
 
   conventional-commits:
     name: conventional commits
-    # Validate the PR title (the squash-merge commit subject) as Conventional
-    # Commits. Local commit messages are enforced by committed (committed.toml)
-    # via the lefthook commit-msg hook; this is the authoritative CI gate.
+    # Validate the PR title (the squash-merge commit subject) as Conventional Commits.
+    # Local commit messages are enforced by committed (committed.toml) via the lefthook commit-msg hook; this is the authoritative CI gate.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -724,8 +719,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Single aggregation gate. Only the two PR-only jobs may be skipped, and only
-  # outside pull_request runs. See ADR-0019.
+  # Single aggregation gate.
+  # Only the two PR-only jobs may be skipped, and only outside pull_request runs.
+  # See ADR-0019.
   ci-required:
     name: ci-required
     if: always()
