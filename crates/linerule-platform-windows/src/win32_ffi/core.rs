@@ -1,5 +1,5 @@
-//! FFI boundary: thin safe wrappers over the windows crate's `unsafe` Win32/COM
-//! APIs. Other modules call only the safe functions here.
+//! FFI boundary: thin safe wrappers over the windows crate's `unsafe` Win32/COM APIs.
+//! Other modules call only the safe functions here.
 
 #![allow(
     unsafe_code,
@@ -24,8 +24,7 @@ use crate::overlay_state::OverlayWndState;
 
 // ---- module handle ---------------------------------------------------------
 
-/// Module handle of the current process, for the `hInstance` arg of
-/// `CreateWindowExW` / `RegisterClassExW`.
+/// Module handle of the current process, for the `hInstance` arg of `CreateWindowExW` / `RegisterClassExW`.
 pub fn module_handle() -> Result<HINSTANCE> {
     // SAFETY: standard call; PCWSTR::null() returns the current process HMODULE.
     let h: HMODULE =
@@ -38,7 +37,8 @@ pub fn module_handle() -> Result<HINSTANCE> {
 
 // ---- class registration ----------------------------------------------------
 
-/// Safe wrapper over `RegisterClassExW`. Returns the class atom on success.
+/// Safe wrapper over `RegisterClassExW`.
+/// Returns the class atom on success.
 pub fn register_class(name: PCWSTR, wnd_proc: WNDPROC) -> Result<u16> {
     let h_instance = module_handle()?;
     let wc = WNDCLASSEXW {
@@ -49,7 +49,8 @@ pub fn register_class(name: PCWSTR, wnd_proc: WNDPROC) -> Result<u16> {
         ..Default::default()
     };
 
-    // SAFETY: `wc` fully initialized, pointer args valid. Returns 0 on failure.
+    // SAFETY: `wc` fully initialized, pointer args valid.
+    // SAFETY: Returns 0 on failure.
     let atom = unsafe { RegisterClassExW(&wc) };
     if atom == 0 {
         return Err(last_error("RegisterClassExW"));
@@ -59,8 +60,8 @@ pub fn register_class(name: PCWSTR, wnd_proc: WNDPROC) -> Result<u16> {
 
 // ---- window lifecycle ------------------------------------------------------
 
-/// Safe wrapper over `CreateWindowExW`. A stack-owned `CreatePayload` hands the
-/// boxed state to the synchronous `WM_NCCREATE` callback.
+/// Safe wrapper over `CreateWindowExW`.
+/// A stack-owned `CreatePayload` hands the boxed state to the synchronous `WM_NCCREATE` callback.
 #[allow(
     clippy::too_many_arguments,
     reason = "mirrors the Win32 API argument shape; flat is clearer for callers"
@@ -78,7 +79,8 @@ pub fn create_window(
 ) -> Result<HWND> {
     let h_instance = module_handle()?;
     let mut payload = CreatePayload { state: Some(state) };
-    // SAFETY: all args in valid range. Returns null HWND on failure.
+    // SAFETY: all args in valid range.
+    // SAFETY: Returns null HWND on failure.
     let hwnd = unsafe {
         CreateWindowExW(
             ex_style,
@@ -107,14 +109,14 @@ pub fn create_window(
     Ok(hwnd)
 }
 
-/// Stack-owned handoff used only during the synchronous `CreateWindowExW`
-/// call. `WM_NCCREATE` takes the box; if that message is never delivered the
-/// payload drops it normally.
+/// Stack-owned handoff used only during the synchronous `CreateWindowExW` call.
+/// `WM_NCCREATE` takes the box; if that message is never delivered the payload drops it normally.
 struct CreatePayload {
     state: Option<Box<OverlayWndState>>,
 }
 
-/// Safe wrapper over `DestroyWindow`. May fail (called from Drop) without aborting.
+/// Safe wrapper over `DestroyWindow`.
+/// May fail (called from Drop) without aborting.
 pub fn destroy_window(hwnd: HWND) -> Result<()> {
     // SAFETY: hwnd is a valid HWND owned by OverlayWindow.
     unsafe { DestroyWindow(hwnd) }.map_err(|e| PlatformError::BadHr {
@@ -123,8 +125,8 @@ pub fn destroy_window(hwnd: HWND) -> Result<()> {
     })
 }
 
-/// Repositions the overlay HWND via `SetWindowPos` with `SWP_NOACTIVATE`
-/// (no focus steal) | `SWP_NOZORDER` (preserve WS_EX_TOPMOST). For WM_DPICHANGED.
+/// Repositions the overlay HWND via `SetWindowPos` with `SWP_NOACTIVATE` (no focus steal) | `SWP_NOZORDER` (preserve WS_EX_TOPMOST).
+/// For WM_DPICHANGED.
 ///
 /// # Errors
 /// When `SetWindowPos` fails.
@@ -160,8 +162,7 @@ pub fn rect_from_wm_dpichanged_lparam(lparam: LPARAM) -> windows::Win32::Foundat
 
 /// Safe wrapper over `ShowWindow(hwnd, SW_SHOWNOACTIVATE)`.
 ///
-/// A `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` overlay HWND may not
-/// show without an explicit `ShowWindow`; `SW_SHOWNOACTIVATE` avoids focus steal.
+/// A `WS_EX_LAYERED + WS_EX_NOREDIRECTIONBITMAP + DComp` overlay HWND may not show without an explicit `ShowWindow`; `SW_SHOWNOACTIVATE` avoids focus steal.
 /// The BOOL return only reports prior visibility, not failure, so it is discarded.
 #[allow(
     clippy::disallowed_methods,
@@ -174,8 +175,8 @@ pub fn show_window_noactivate(hwnd: HWND) {
 
 // ---- GWLP_USERDATA (instance state) ----------------------------------------
 
-/// Borrow instance state only for the duration of `f`. The higher-ranked
-/// callback prevents a reference from escaping the HWND-owned lifetime.
+/// Borrow instance state only for the duration of `f`.
+/// The higher-ranked callback prevents a reference from escaping the HWND-owned lifetime.
 pub fn with_userdata<R>(
     hwnd: HWND,
     f: impl for<'state> FnOnce(&'state OverlayWndState) -> R,
@@ -209,20 +210,52 @@ pub fn post_quit(exit_code: i32) {
 /// `None` GetMessageW returned -1 (API error).
 pub fn pump_one() -> Option<bool> {
     let mut msg = MSG::default();
-    // SAFETY: msg is a zero-init out param.
-    let r = unsafe { GetMessageW(&mut msg, None, 0, 0) };
-    match r.0 {
-        0 => Some(false),
-        -1 => None,
-        _ => {
-            // SAFETY: msg was initialized by GetMessageW on success.
-            unsafe {
+    // SAFETY: MSG is owned by this thread and dispatched only after GetMessageW initializes it.
+    unsafe {
+        match GetMessageW(&raw mut msg, None, 0, 0).0 {
+            0 => Some(false),
+            -1 => None,
+            _ => {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
-            }
-            Some(true)
-        },
+                Some(true)
+            },
+        }
     }
+}
+
+pub(crate) enum MessageProgress {
+    Dispatched,
+    Quit,
+    Idle,
+}
+
+pub(crate) fn pump_ready(timeout_ms: u32) -> Result<MessageProgress> {
+    use windows::Win32::Foundation::WAIT_FAILED;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, QS_ALLINPUT,
+        WM_QUIT,
+    };
+
+    let mut message = MSG::default();
+    // SAFETY: the wait borrows no handles and MSG is owned by this thread.
+    // SAFETY: only messages initialized by PeekMessageW are dispatched.
+    unsafe {
+        if MsgWaitForMultipleObjectsEx(None, timeout_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+            == WAIT_FAILED
+        {
+            return Err(last_error("MsgWaitForMultipleObjectsEx"));
+        }
+        if !PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE).as_bool() {
+            return Ok(MessageProgress::Idle);
+        }
+        if message.message == WM_QUIT {
+            return Ok(MessageProgress::Quit);
+        }
+        let _ = TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    Ok(MessageProgress::Dispatched)
 }
 
 // ---- cursor position -------------------------------------------------------
@@ -260,15 +293,11 @@ pub fn virtual_screen_metrics() -> (i32, i32, i32, i32) {
 
 // ---- WndProc entry point ---------------------------------------------------
 
-/// The linerule overlay WndProc. On WM_NCCREATE stores instance state in
-/// `GWLP_USERDATA`; otherwise delegates to `crate::wndproc::dispatch`, absorbing
-/// any panic via `catch_unwind` and falling back to `DefWindowProcW`.
+/// The linerule overlay WndProc.
+/// On WM_NCCREATE stores instance state in `GWLP_USERDATA`; otherwise delegates to `crate::wndproc::dispatch`, absorbing any panic via `catch_unwind` and falling back to `DefWindowProcW`.
 ///
 /// # Safety
-/// Install only as a window class `lpfnWndProc`: `hwnd` must be a valid window of
-/// that class and, for `WM_NCCREATE`, `lparam` must point to a `CREATESTRUCTW`
-/// whose `lpCreateParams` points to the live `CreatePayload` supplied by
-/// [`create_window`].
+/// Install only as a window class `lpfnWndProc`: `hwnd` must be a valid window of that class and, for `WM_NCCREATE`, `lparam` must point to a `CREATESTRUCTW` whose `lpCreateParams` points to the live `CreatePayload` supplied by [`create_window`].
 pub unsafe extern "system" fn overlay_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -296,9 +325,8 @@ pub unsafe extern "system" fn overlay_wnd_proc(
     }
 
     if msg == WM_NCDESTROY {
-        // Let Windows finish default non-client teardown while the state is
-        // still live, then atomically detach and reclaim the Box in this FFI
-        // callback. No safe raw-pointer deallocation API is exposed.
+        // Let Windows finish default non-client teardown while the state is still live, then atomically detach and reclaim the Box in this FFI callback.
+        // No safe raw-pointer deallocation API is exposed.
         let result = def_window_proc(hwnd, msg, wparam, lparam);
         // SAFETY: WM_NCDESTROY is delivered once for this HWND. The slot holds
         // only the Box::into_raw value installed during WM_NCCREATE.
@@ -361,8 +389,8 @@ pub fn last_error(operation: &'static str) -> PlatformError {
 
 // ---- monitor info ----------------------------------------------------------
 
-/// Safe wrapper over `MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST)`. Returns the
-/// nearest monitor to any point (fine if the cursor is off all monitors).
+/// Safe wrapper over `MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST)`.
+/// Returns the nearest monitor to any point (fine if the cursor is off all monitors).
 pub fn monitor_from_point(x: i32, y: i32) -> HMONITOR {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST;

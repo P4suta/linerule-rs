@@ -72,8 +72,8 @@ impl RuntimeOptions {
         self
     }
 
-    /// Install the application-owned atomic preferences writer. The runtime
-    /// invokes it 500 ms after the latest change and synchronously on exit.
+    /// Install the application-owned atomic preferences writer.
+    /// The runtime invokes it 500 ms after the latest change and synchronously on exit.
     #[must_use]
     pub fn with_persistence(
         mut self,
@@ -109,17 +109,29 @@ impl RuntimeOptions {
 pub struct DesktopRuntime;
 
 impl DesktopRuntime {
-    /// Run until the controller receives an exit request, returning values to
-    /// persist on clean shutdown.
+    /// Run until the controller receives an exit request, returning values to persist on clean shutdown.
     ///
     /// # Errors
-    /// Returns a typed platform error for initialization or message-pump
-    /// failures.
+    /// Returns a typed platform error for initialization or message-pump failures.
     pub fn run(intent: LaunchIntent, options: RuntimeOptions) -> Result<Preferences> {
+        let result = Self::run_session(intent, options);
+        match crate::win32_ffi::composition::shutdown_dispatcher_queue() {
+            Ok(()) => result,
+            Err(cleanup) => match result {
+                Ok(_) => Err(cleanup),
+                Err(primary) => {
+                    tracing::error!(%cleanup, "Composition dispatcher cleanup failed after the runtime error");
+                    Err(primary)
+                },
+            },
+        }
+    }
+
+    fn run_session(intent: LaunchIntent, options: RuntimeOptions) -> Result<Preferences> {
         options.preferences.validate()?;
 
-        // Acquire the single-instance owner and expose tray/settings before
-        // touching graphics. A duplicate exits without creating an overlay,
+        // Acquire the single-instance owner and expose tray/settings before touching graphics.
+        // A duplicate exits without creating an overlay,
         // and graphics initialization may degrade without killing controls.
         let shell =
             crate::win32_ffi::shell::DesktopShell::new(options.preferences.hotkeys.clone())?;
