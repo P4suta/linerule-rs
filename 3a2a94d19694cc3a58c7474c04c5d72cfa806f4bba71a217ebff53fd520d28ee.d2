@@ -1,0 +1,50 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 40
+    theme-overrides: {
+      N1: "#000000"
+      N2: "#000000"
+      N3: "#000000"
+      N4: "#FFFFFF"
+      N5: "#FFFFFF"
+      N6: "#FFFFFF"
+      N7: "#FFFFFF"
+      B1: "#000000"
+      B2: "#000000"
+      B3: "#FFFFFF"
+      B4: "#FFFFFF"
+      B5: "#FFFFFF"
+      B6: "#FFFFFF"
+      AA2: "#000000"
+      AA4: "#FFFFFF"
+      AA5: "#FFFFFF"
+      AB4: "#FFFFFF"
+      AB5: "#FFFFFF"
+    }
+  }
+}
+
+direction: down
+title: "Verify the signing helper without credentials" {
+  shape: text
+  near: top-center
+}
+tools: "Pinned Java and PowerShell"
+download: "Jsign download"
+hash: "Expected SHA-256 matches?" {
+  shape: diamond
+}
+verify: "Credential-free version check"
+tests: "Synthetic failure tests\nMalformed seeds and signing failures"
+restore: "Restore the prior environment\nClear temporary secrets"
+refuse: "Refuse the tool"
+tools -> download: "runs the helper"
+download -> hash: "provides downloaded bytes"
+hash -> verify: "matching checksum"
+hash -> refuse: "different checksum"
+tests -> restore: "requires cleanup after errors"
+key: "Rectangles: inputs, checks, or outcomes\nDiamond: required decision\nArrows: labeled control or requirements" {
+  shape: text
+  near: bottom-center
+}
