@@ -1,7 +1,7 @@
 //! Overlay composition host on WinRT `Windows.UI.Composition`.
 //!
-//! Chosen over Win32 DComp (`graphics.rs`) because only WinRT can do backdrop
-//! blur. Absorbs the unsafe WinRT interop / `CreateDispatcherQueueController`;
+//! Chosen over Win32 DComp (`graphics.rs`) because only WinRT can do backdrop blur.
+//! Absorbs the unsafe WinRT interop / `CreateDispatcherQueueController`;
 //! per-frame visual work (safe) lives in the `winrt_*_renderer` modules.
 
 #![allow(
@@ -28,21 +28,26 @@ use windows::core::Interface;
 use windows_numerics::Vector2;
 
 use std::cell::OnceCell;
+use std::time::{Duration, Instant};
 
 use crate::error::{PlatformError, Result};
 use crate::win32_ffi::graphics::{self, D2dStack, GraphicsBackend};
 
+#[cfg(test)]
+mod tests {
+    mod shutdown;
+}
+
 thread_local! {
-    /// UI-thread controller driving WinRT Composition commits. Only one per
-    /// thread (recreation errors), so set once and reused across rebuilds.
+    /// UI-thread controller driving WinRT Composition commits.
+    /// Only one per thread (recreation errors), so set once and reused across rebuilds.
     static DISPATCHER_QUEUE: OnceCell<windows::System::DispatcherQueueController> =
         const { OnceCell::new() };
 }
 
 /// Establishes the DispatcherQueue on this thread once; no-op if already set.
 ///
-/// `DQTAT_COM_STA`: this thread has no COM apartment, so the controller
-/// establishes an STA apartment (required to create a WinRT Compositor).
+/// `DQTAT_COM_STA`: this thread has no COM apartment, so the controller establishes an STA apartment (required to create a WinRT Compositor).
 fn ensure_dispatcher_queue() -> Result<()> {
     DISPATCHER_QUEUE.with(|cell| {
         if cell.get().is_some() {
@@ -66,12 +71,70 @@ fn ensure_dispatcher_queue() -> Result<()> {
     })
 }
 
-/// WinRT composition host holding the `Compositor`, desktop target, shared D2D
-/// stack, and HUD graphics device. Drop releases the WinRT objects.
+pub(crate) fn shutdown_dispatcher_queue() -> Result<()> {
+    use crate::win32_ffi::core::{MessageProgress, pump_ready};
+    use windows::Win32::Foundation::ERROR_TIMEOUT;
+
+    DISPATCHER_QUEUE.with(|cell| {
+        let Some(controller) = cell.get() else {
+            return Ok(());
+        };
+        let started = Instant::now();
+        let action = controller
+            .ShutdownQueueAsync()
+            .map_err(crate::error::map_hr(
+                "DispatcherQueueController::ShutdownQueueAsync",
+            ))?;
+        loop {
+            if started.elapsed() >= Duration::from_millis(750) {
+                return Err(PlatformError::BadHr {
+                    operation: "DispatcherQueue shutdown deadline",
+                    hr: windows::core::HRESULT::from_win32(ERROR_TIMEOUT.0).0,
+                });
+            }
+            match action
+                .Status()
+                .map_err(crate::error::map_hr("IAsyncAction::Status"))?
+                .0
+            {
+                0 => {},
+                1 => {
+                    return action
+                        .GetResults()
+                        .map_err(crate::error::map_hr("DispatcherQueue shutdown"));
+                },
+                2 | 3 => {
+                    action
+                        .GetResults()
+                        .map_err(crate::error::map_hr("DispatcherQueue shutdown"))?;
+                    return Err(PlatformError::Invariant {
+                        operation: "failed dispatcher shutdown returned successful results",
+                    });
+                },
+                _ => {
+                    return Err(PlatformError::Invariant {
+                        operation: "unknown dispatcher shutdown status",
+                    });
+                },
+            }
+            for _ in 0..64 {
+                match pump_ready(0)? {
+                    MessageProgress::Idle => break,
+                    MessageProgress::Dispatched | MessageProgress::Quit => {},
+                }
+            }
+            let _ = pump_ready(10)?;
+        }
+    })
+}
+
+/// WinRT composition host holding the `Compositor`, desktop target, shared D2D stack, and HUD graphics device.
+/// Drop releases the WinRT objects.
 pub struct WinrtPipeline {
     /// WinRT compositor; creates visuals / brushes / surfaces.
     pub compositor: Compositor,
-    /// Desktop window target bound to the overlay HWND. Detached on Drop.
+    /// Desktop window target bound to the overlay HWND.
+    /// Detached on Drop.
     _target: DesktopWindowTarget,
     /// Root container visual; direct children are only overlay_root and hud_root.
     _root: ContainerVisual,
@@ -107,7 +170,8 @@ pub fn create_winrt_pipeline(
             operation: "Compositor::cast<ICompositorDesktopInterop>",
             hr: e.code().0,
         })?;
-    // SAFETY: hwnd is valid (from OverlayWindow). istopmost=true composes on top.
+    // SAFETY: hwnd is valid (from OverlayWindow).
+    // SAFETY: istopmost=true composes on top.
     let target: DesktopWindowTarget = unsafe {
         desktop_interop.CreateDesktopWindowTarget(hwnd, true)
     }
@@ -176,8 +240,7 @@ pub fn create_winrt_pipeline(
     })
 }
 
-/// Creates a `ContainerVisual` covering the whole window
-/// (RelativeSizeAdjustment = 1.0).
+/// Creates a `ContainerVisual` covering the whole window (RelativeSizeAdjustment = 1.0).
 fn create_container(compositor: &Compositor) -> Result<ContainerVisual> {
     let visual = compositor
         .CreateContainerVisual()
@@ -218,8 +281,8 @@ pub fn create_drawing_surface(
         })
 }
 
-/// Begins D2D drawing; pair with `end_surface_draw`. Returned `offset` is the
-/// top-left within the surface tile (apply to the `SetTransform` translation).
+/// Begins D2D drawing; pair with `end_surface_draw`.
+/// Returned `offset` is the top-left within the surface tile (apply to the `SetTransform` translation).
 ///
 /// # Errors
 /// When `BeginDraw` fails.
