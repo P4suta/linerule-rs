@@ -20,8 +20,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write # for coverage / dependency-review comments
-  security-events: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,6 +36,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
@@ -76,27 +76,31 @@ jobs:
             target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
           install_args: rust cargo:cargo-nextest
           cache: true
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: mise exec rust --command 'cargo build --workspace --all-targets --target ${{ matrix.target }}'
-      - run: mise exec cargo:cargo-nextest --command 'cargo nextest run --profile ci --workspace --all-targets --target ${{ matrix.target }}'
-      - run: mise exec rust --command 'cargo test --doc --workspace --target ${{ matrix.target }}'
+      - run: mise exec rust --command 'cargo build --workspace --all-targets'
+      - run: mise exec cargo:cargo-nextest --command 'cargo nextest run --profile ci --workspace --all-targets'
+      - run: mise exec rust --command 'cargo test --doc --workspace'
         # nextest does not run doctests; run them as a separate step.
       - name: cargo test compatibility (parallel)
-        run: mise exec rust --command 'cargo test --workspace --all-targets --target ${{ matrix.target }}'
-      - run: mise exec rust --command 'cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings'
+        run: mise exec rust --command 'cargo test --workspace --all-targets'
+      - run: mise exec rust --command 'cargo clippy --workspace --all-targets -- -D warnings'
       - name: Backdrop Blur pixel and one-second exit gate
         if: matrix.arch == 'x64'
         shell: pwsh
         run: >-
           ./tools/Test-Blur.ps1
-          -Executable target/${{ matrix.target }}/debug/linerule.exe
+          -Executable "target/$env:CARGO_BUILD_TARGET/debug/linerule.exe"
           -OutputDirectory artifacts/blur
       - name: Upload Backdrop Blur evidence
         if: always() && matrix.arch == 'x64'
@@ -131,8 +135,15 @@ jobs:
             runtime: win-arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
+      SETTINGS_PLATFORM: ${{ matrix.platform }}
+      SETTINGS_RUNTIME: ${{ matrix.runtime }}
+      SETTINGS_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -153,17 +164,17 @@ jobs:
         shell: pwsh
         run: >-
           ./ui/linerule-settings/BuildAndRun.ps1
-          -Platform ${{ matrix.platform }}
+          -Platform $env:SETTINGS_PLATFORM
           -Configuration Release
           -SkipRun
       - name: settings UI Automation
         shell: pwsh
         run: >-
           ./ui/linerule-settings/UiTests.ps1
-          -Platform ${{ matrix.platform }}
+          -Platform $env:SETTINGS_PLATFORM
           -Configuration Release
           -SkipBuild
-          -OutputDirectory artifacts/ui-${{ matrix.arch }}
+          -OutputDirectory "artifacts/ui-$env:SETTINGS_ARCH"
       - name: High Contrast settings UI Automation
         if: matrix.arch == 'x64'
         shell: pwsh
@@ -177,15 +188,14 @@ jobs:
       - name: build resident shell for integrated UI Automation
         run: >-
           mise exec rust --command
-          'cargo build --release -p linerule-app
-          --target ${{ matrix.target }}'
+          'cargo build --release -p linerule-app'
       - name: publish distribution settings sidecar
         shell: pwsh
         run: |
           $project = "ui/linerule-settings/Linerule.Settings.csproj"
           mise exec dotnet --command (
             "dotnet publish `"$project`" --no-restore -c Release " +
-            "-p:Platform=${{ matrix.platform }} -r ${{ matrix.runtime }} " +
+            "-p:Platform=$env:SETTINGS_PLATFORM -r $env:SETTINGS_RUNTIME " +
             "--self-contained true " +
             "-p:PublishDir=$PWD/settings-publish/"
           )
@@ -210,6 +220,8 @@ jobs:
       XWIN_CROSS_COMPILER: clang
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -238,15 +250,19 @@ jobs:
             target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
           install_args: rust
           cache: true
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: mise exec rust --command 'cargo build --release -p linerule-app --target ${{ matrix.target }}'
+      - run: mise exec rust --command 'cargo build --release -p linerule-app'
       # pwsh `& $exe` returns immediately and never sets `$LASTEXITCODE`;
       # `Start-Process -Wait -PassThru` blocks and exposes `ExitCode`.
       - name: smoke - linerule.exe version
@@ -254,7 +270,7 @@ jobs:
         # parse gate). linerule.exe is `windows_subsystem = "windows"` (GUI), so
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath "target/${{ matrix.target }}/release/linerule.exe" `
+          $proc = Start-Process -FilePath "target/$env:CARGO_BUILD_TARGET/release/linerule.exe" `
             -ArgumentList "version" -Wait -PassThru -NoNewWindow
           if ($proc.ExitCode -ne 0) {
             Write-Host "::error::linerule.exe version exited with $($proc.ExitCode)"
@@ -263,7 +279,7 @@ jobs:
       - name: smoke - linerule.exe diagnostics
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath "target/${{ matrix.target }}/release/linerule.exe" `
+          $proc = Start-Process -FilePath "target/$env:CARGO_BUILD_TARGET/release/linerule.exe" `
             -ArgumentList "diagnostics" -Wait -PassThru -NoNewWindow
           if ($proc.ExitCode -ne 0) {
             Write-Host "::error::linerule.exe diagnostics exited with $($proc.ExitCode)"
@@ -283,6 +299,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -298,6 +316,8 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -312,6 +332,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
@@ -328,6 +350,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
@@ -345,6 +369,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
@@ -360,6 +386,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -374,6 +402,8 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -387,6 +417,8 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -400,6 +432,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -413,6 +447,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -426,6 +462,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -439,6 +477,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -458,6 +498,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -487,6 +529,8 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
@@ -519,6 +563,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
@@ -583,6 +628,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
@@ -614,6 +661,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
           version: 2026.7.13
@@ -641,12 +690,17 @@ jobs:
           if-no-files-found: error
 
   dependency-review:
+    permissions:
+      contents: read
+      pull-requests: write # Publish the dependency review summary.
     name: dependency review
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
@@ -664,7 +718,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      pull-requests: read
+      pull-requests: read # Read the PR title for the commit format check.
     steps:
       - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
         env:
