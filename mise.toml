@@ -49,6 +49,8 @@ cargo-binstall = "1.20.0"
 # that keeps release-please's version + CHANGELOG derivation fed with well-formed
 # commits.
 "cargo:committed" = "1.1.11"
+java = "microsoft-21.0.13.0.2"
+powershell = "7.6.9"
 
 [settings]
 lockfile = true

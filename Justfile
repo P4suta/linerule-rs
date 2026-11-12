@@ -1,6 +1,6 @@
 # Minimal, shell-independent developer entry points for the mise environment.
 
-set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
+set windows-shell := ["pwsh", "-NoLogo", "-Command"]
 
 export RUSTDOCFLAGS := "-D warnings"
 
@@ -62,6 +62,12 @@ doctest:
 test-cargo:
     mise exec rust --command "cargo test --workspace --all-targets"
 
+test-esigner:
+    mise exec powershell -- pwsh -NoProfile -Command 'Import-Module Pester -RequiredVersion 6.2.0 -ErrorAction Stop; Invoke-Pester -Configuration @{ Run = @{ Path = "tools/Test-ESigner.ps1"; Exit = $true }; Output = @{ Verbosity = "Detailed" } }'
+    mise exec powershell -- pwsh -NoProfile -Command 'Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -ErrorAction Stop; Invoke-ScriptAnalyzer -Path tools/Invoke-ESigner.ps1 -Severity Warning,Error -EnableExit'
+    mise exec powershell -- pwsh -NoProfile -Command 'Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -ErrorAction Stop; Invoke-ScriptAnalyzer -Path tools/Test-ESigner.ps1 -Severity Warning,Error -EnableExit'
+    mise exec powershell java -- pwsh -NoProfile -File tools/Invoke-ESigner.ps1 -VerifyToolOnly
+
 test-windows:
     mise exec cargo:cargo-nextest --command "cargo nextest run --workspace --all-targets --run-ignored all --no-fail-fast"
     mise exec rust --command "cargo test --doc --workspace"
@@ -86,10 +92,10 @@ coverage:
     mise exec python --command "python tools/check_coverage.py target/coverage-branch.json branches 85"
 
 run *args:
-    mise exec rust --command "cargo run -p linerule-app -- {{args}}"
+    mise exec rust --command "cargo run -p linerule-app -- {{ args }}"
 
 run-release *args:
-    mise exec rust --command "cargo run --release -p linerule-app -- {{args}}"
+    mise exec rust --command "cargo run --release -p linerule-app -- {{ args }}"
 
 fmt:
     mise exec rust --command "cargo fmt --all"
@@ -122,10 +128,10 @@ reuse:
     mise exec pipx:reuse --command "reuse spdx --output linerule-source.spdx"
 
 source-spdx output="linerule-source.spdx":
-    mise exec pipx:reuse --command "reuse spdx --output {{output}}"
+    mise exec pipx:reuse --command "reuse spdx --output {{ output }}"
 
 sbom output="dist/linerule-sbom.cdx.json":
-    mise exec rust cargo:cargo-sbom dotnet dotnet:CycloneDX cyclonedx --command "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/New-Sbom.ps1 -OutputFile {{output}}"
+    mise exec rust cargo:cargo-sbom dotnet dotnet:CycloneDX cyclonedx --command "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/New-Sbom.ps1 -OutputFile {{ output }}"
 
 typos:
     mise exec typos --command "typos"
@@ -146,7 +152,7 @@ policy:
     mise exec rust --command "cargo xtask policy"
 
 release-check *args:
-    mise exec rust --command "cargo xtask release-check {{args}}"
+    mise exec rust --command "cargo xtask release-check {{ args }}"
 
 lint:
     mise exec rust cargo:cargo-sort cargo:cargo-deny cargo:cargo-machete taplo biome yamlfmt typos actionlint pipx:reuse --command "cargo xtask lint"
@@ -155,7 +161,7 @@ ci:
     mise exec rust cargo:cargo-nextest cargo:cargo-sort cargo:cargo-deny cargo:cargo-machete taplo biome yamlfmt typos actionlint pipx:reuse --command "cargo xtask ci"
 
 version channel date="":
-    mise exec rust --command "cargo xtask version --channel {{channel}} {{ if date == "" { "" } else { "--date " + date } }}"
+    mise exec rust --command "cargo xtask version --channel {{ channel }} {{ if date == "" { "" } else { "--date " + date } }}"
 
 cross-check:
     mise exec cargo:cargo-xwin --command "cargo xwin check --workspace --all-targets --target x86_64-pc-windows-msvc"
@@ -176,19 +182,19 @@ _hook-cargo-sort:
     mise exec cargo:cargo-sort --command "cargo sort --workspace"
 
 _hook-taplo-fmt *files:
-    mise exec taplo --command "taplo fmt {{files}}"
+    mise exec taplo --command "taplo fmt {{ files }}"
 
 _hook-biome-format *files:
-    mise exec biome --command "biome format --write {{files}}"
+    mise exec biome --command "biome format --write {{ files }}"
 
 _hook-yamlfmt *files:
-    mise exec yamlfmt --command "yamlfmt {{files}}"
+    mise exec yamlfmt --command "yamlfmt {{ files }}"
 
 _hook-typos-fix *files:
-    mise exec typos --command "typos --write-changes {{files}}"
+    mise exec typos --command "typos --write-changes {{ files }}"
 
 _hook-actionlint *files:
-    mise exec actionlint --command "actionlint {{files}}"
+    mise exec actionlint --command "actionlint {{ files }}"
 
 _hook-xtask-dep-graph:
     mise exec rust --command "cargo xtask dep-graph"

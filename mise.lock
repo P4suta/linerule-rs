@@ -158,21 +158,25 @@ backend = "aqua:CycloneDX/cyclonedx-cli"
 
 [tools.cyclonedx."platforms.linux-x64"]
 checksum = "sha256:bfc8b2538da86fe239bc53658bbb63c1c8c510a293c1e6891aa5bea5d3c58746"
+checksum_source = "mise-versions"
 url = "https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-linux-x64"
 url_api = "https://api.github.com/repos/CycloneDX/cyclonedx-cli/releases/assets/487571062"
 
 [tools.cyclonedx."platforms.macos-arm64"]
 checksum = "sha256:750c148780154833f6401f9067d08c5a4c31567b6ee3c26c062c3a95c62d741c"
+checksum_source = "mise-versions"
 url = "https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-osx-arm64"
 url_api = "https://api.github.com/repos/CycloneDX/cyclonedx-cli/releases/assets/487572413"
 
 [tools.cyclonedx."platforms.windows-arm64"]
 checksum = "sha256:49e169fe8dd579e16dc5d31b32cb5c832cebbd1e6d4d317df9d363985fb907a2"
+checksum_source = "mise-versions"
 url = "https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-win-arm64.exe"
 url_api = "https://api.github.com/repos/CycloneDX/cyclonedx-cli/releases/assets/487571647"
 
 [tools.cyclonedx."platforms.windows-x64"]
 checksum = "sha256:9b360974c41a5d612eb026fb5e3bb1fa28e08865f7a4f915665b8bc94bd3bc31"
+checksum_source = "mise-versions"
 url = "https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.33.1/cyclonedx-win-x64.exe"
 url_api = "https://api.github.com/repos/CycloneDX/cyclonedx-cli/releases/assets/487571505"
 
@@ -183,6 +187,26 @@ backend = "core:dotnet"
 [[tools."dotnet:CycloneDX"]]
 version = "6.2.0"
 backend = "dotnet:CycloneDX"
+
+[[tools.java]]
+version = "microsoft-21.0.13.0.2"
+backend = "core:java"
+
+[tools.java."platforms.linux-x64"]
+checksum = "sha256:5bf17d27de3fe9d102981236cdea68482e3b5ef68a44ad21c6439b45d7d34da2"
+url = "https://aka.ms/download-jdk/microsoft-jdk-21.0.13.0.2-linux-x64.tar.gz"
+
+[tools.java."platforms.macos-arm64"]
+checksum = "sha256:69d9c211fa4c384c0607e6a5870d7052542ec4e3a737e16d05681fa314ce0421"
+url = "https://aka.ms/download-jdk/microsoft-jdk-21.0.13.0.2-macos-aarch64.tar.gz"
+
+[tools.java."platforms.windows-arm64"]
+checksum = "sha256:9c1f36b1660d97ab228787294433eefaaad3e3e8963bdd3cf975b02171137ecc"
+url = "https://aka.ms/download-jdk/microsoft-jdk-21.0.13.0.2-windows-aarch64.zip"
+
+[tools.java."platforms.windows-x64"]
+checksum = "sha256:c5706a9cf482ef1a0622a86eea5b13d557b07f04554572af061e2d02b58c0f99"
+url = "https://aka.ms/download-jdk/microsoft-jdk-21.0.13.0.2-windows-x64.zip"
 
 [[tools.jq]]
 version = "1.8.2"
@@ -218,21 +242,25 @@ backend = "aqua:casey/just"
 
 [tools.just."platforms.linux-x64"]
 checksum = "sha256:193e2b04bac8ff3568ff81cf62f8c9db08f8083e16665e28d400dd35bac47ffd"
+checksum_source = "mise-versions"
 url = "https://github.com/casey/just/releases/download/1.54.0/just-1.54.0-x86_64-unknown-linux-musl.tar.gz"
 url_api = "https://api.github.com/repos/casey/just/releases/assets/455265415"
 
 [tools.just."platforms.macos-arm64"]
 checksum = "sha256:a776fc5015491f84580875bc6dad3de59fa4f47a309ccac49d1287cb55f9b599"
+checksum_source = "mise-versions"
 url = "https://github.com/casey/just/releases/download/1.54.0/just-1.54.0-aarch64-apple-darwin.tar.gz"
 url_api = "https://api.github.com/repos/casey/just/releases/assets/455265130"
 
 [tools.just."platforms.windows-arm64"]
 checksum = "sha256:860e21474e956eaa9879d62f68cc24530254eefe14ac108eaf707c0daf56a6d0"
+checksum_source = "mise-versions"
 url = "https://github.com/casey/just/releases/download/1.54.0/just-1.54.0-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/casey/just/releases/assets/455266503"
 
 [tools.just."platforms.windows-x64"]
 checksum = "sha256:860e21474e956eaa9879d62f68cc24530254eefe14ac108eaf707c0daf56a6d0"
+checksum_source = "mise-versions"
 url = "https://github.com/casey/just/releases/download/1.54.0/just-1.54.0-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/casey/just/releases/assets/455266503"
 
@@ -298,6 +326,34 @@ backend = "pipx:reuse"
 [tools."pipx:reuse".options]
 extras = "charset-normalizer"
 
+[[tools.powershell]]
+version = "7.6.9"
+backend = "aqua:PowerShell/PowerShell"
+
+[tools.powershell."platforms.linux-x64"]
+checksum = "sha256:1da6d6d6035d651f20e70ddee7c4c15ac6ab8b9fb40ee92240d91263f28a884b"
+checksum_source = "mise-versions"
+url = "https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/powershell-7.6.9-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/675638183"
+
+[tools.powershell."platforms.macos-arm64"]
+checksum = "sha256:a1c7e98ac403da4be5ba75c1c5855af272de7787a91d478c4267466fe58fc1af"
+checksum_source = "mise-versions"
+url = "https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/powershell-7.6.9-osx-arm64.tar.gz"
+url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/675638480"
+
+[tools.powershell."platforms.windows-arm64"]
+checksum = "sha256:2157fb002178e606c2a5532c56647118d90d029742f04d4900a71e3b478c2363"
+checksum_source = "mise-versions"
+url = "https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/PowerShell-7.6.9-win-arm64.zip"
+url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/675639035"
+
+[tools.powershell."platforms.windows-x64"]
+checksum = "sha256:ce7484804c0f0ad4dda10c958e71acdaf7eebfb22505c1b480f89e0e9f1da94d"
+checksum_source = "mise-versions"
+url = "https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/PowerShell-7.6.9-win-x64.zip"
+url_api = "https://api.github.com/repos/PowerShell/PowerShell/releases/assets/675639558"
+
 [[tools.python]]
 version = "3.14.6"
 backend = "core:python"
@@ -341,6 +397,7 @@ url = "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-linux-x86
 url_api = "https://api.github.com/repos/tamasfe/taplo/releases/assets/257322600"
 
 [tools.taplo."platforms.macos-arm64"]
+checksum = "sha256:713734314c3e71894b9e77513c5349835eefbd52908445a0d73b0c7dc469347d"
 url = "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-darwin-aarch64.gz"
 url_api = "https://api.github.com/repos/tamasfe/taplo/releases/assets/257323110"
 
@@ -360,21 +417,25 @@ backend = "aqua:crate-ci/typos"
 
 [tools.typos."platforms.linux-x64"]
 checksum = "sha256:72a930c9a94fc3914aa56835c5b859c892a797d40c1c42638b98d93f16ff519c"
+checksum_source = "mise-versions"
 url = "https://github.com/crate-ci/typos/releases/download/v1.48.0/typos-v1.48.0-x86_64-unknown-linux-musl.tar.gz"
 url_api = "https://api.github.com/repos/crate-ci/typos/releases/assets/462429902"
 
 [tools.typos."platforms.macos-arm64"]
 checksum = "sha256:7dcaf386ec255995dcbaf629641f961574b7e8785203921115eab75cbf1ca107"
+checksum_source = "mise-versions"
 url = "https://github.com/crate-ci/typos/releases/download/v1.48.0/typos-v1.48.0-aarch64-apple-darwin.tar.gz"
 url_api = "https://api.github.com/repos/crate-ci/typos/releases/assets/462430254"
 
 [tools.typos."platforms.windows-arm64"]
 checksum = "sha256:ce018a2352da7c1b23bd2684019ee279d2080dc063087020e80c1247d11b0743"
+checksum_source = "mise-versions"
 url = "https://github.com/crate-ci/typos/releases/download/v1.48.0/typos-v1.48.0-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/crate-ci/typos/releases/assets/462430871"
 
 [tools.typos."platforms.windows-x64"]
 checksum = "sha256:ce018a2352da7c1b23bd2684019ee279d2080dc063087020e80c1247d11b0743"
+checksum_source = "mise-versions"
 url = "https://github.com/crate-ci/typos/releases/download/v1.48.0/typos-v1.48.0-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/crate-ci/typos/releases/assets/462430871"
 
